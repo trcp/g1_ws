@@ -19,6 +19,8 @@ x-preferences: &preferences
     - ./rosbag:$HOME/colcon_ws/rosbag
     - ./map:$HOME/colcon_ws/map
     - $HOME/cyclonedds_ws/cyclonedds.xml:$HOME/cyclonedds.xml
+    # timezone
+    - /etc/localtime:/etc/localtime:ro
   
 # ---------------------------------------------------------------
 services:
