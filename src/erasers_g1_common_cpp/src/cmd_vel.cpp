@@ -1,175 +1,158 @@
 #include "rclcpp/rclcpp.hpp"
-#include "geometry_msgs/msg/twist.hpp" // Twist メッセージ (cmd_vel)
-#include "g1/g1_loco_client.hpp"       // 提供された G1 Loco Client ヘッダ
-#include "common/ut_errror.hpp"      // エラーハンドリング用
+#include "geometry_msgs/msg/twist.hpp"
+#include "g1/g1_loco_client.hpp"
+#include "common/ut_errror.hpp"
 
 #include <memory>
-#include <functional> // std::bind と std::placeholders
-#include <cmath>      // std::abs
-#include <mutex>      // ウォッチドッグタイマーのためのMutex
-#include <chrono>     // std::chrono::milliseconds
+#include <functional>
+#include <cmath>
+#include <mutex>
+#include <chrono>
+#include <atomic>
 
-/**
- * @brief /g1/cmd_vel を購読し、LocoClient を介して
- * 内部的に /api/sport/request へ歩行指令を送信するノード
- *
- * ★ cmd_vel が途切れた場合に自動停止するウォッチドッグ機能付き
- */
+using namespace std::chrono_literals;
+
 class CmdVelSubscriberNode : public rclcpp::Node {
  public:
   CmdVelSubscriberNode()
       : Node("g1_cmd_vel_subscriber_node"),
-        client_(this),
-        // ★ 修正1: タイムアウトを 500ms (0.5秒) に設定
-        watchdog_timeout_(std::chrono::milliseconds(500)),
-        is_stopped_by_watchdog_(true) // 初期状態は停止
+        client_(this), 
+        last_cmd_vel_received_time_(this->now()),
+        watchdog_timeout_(500ms) // 0.5秒間 cmd_vel が来なければ停止
   {
-    // /g1/cmd_vel トピックのサブスクライバ (移動コマンド)
-    // ★ 修正2: トピック名を "/g1/cmd_vel" に統一
+    // --- 重要: コールバックグループの設定 ---
+    
+    // 1. cmd_vel 受信用 (並列実行許可: Reentrant)
+    callback_group_subscriber_ = this->create_callback_group(
+        rclcpp::CallbackGroupType::Reentrant);
+
+    // 2. 制御ループタイマー用 (排他制御: MutuallyExclusive)
+    // これを独立させることで、API呼び出し中(Wait中)でも、
+    // Nodeのデフォルトグループにある UnitreeClient の受信処理が動けるようにする
+    callback_group_timer_ = this->create_callback_group(
+        rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    // --- サブスクライバーの設定 ---
+    auto sub_opt = rclcpp::SubscriptionOptions();
+    sub_opt.callback_group = callback_group_subscriber_;
+
     cmd_vel_subscription_ = this->create_subscription<geometry_msgs::msg::Twist>(
         "/cmd_vel",
-        10, // QoS
-        std::bind(&CmdVelSubscriberNode::cmdVelCallback, this,
-                  std::placeholders::_1));
+        10,
+        std::bind(&CmdVelSubscriberNode::cmdVelCallback, this, std::placeholders::_1),
+        sub_opt);
 
-    // ★重要: LocoClient を "連続移動モード" に設定
+    // --- タイマーの設定 ---
+    // 第3引数に callback_group_timer_ を指定するのが重要
+    control_timer_ = this->create_wall_timer(
+        50ms, 
+        std::bind(&CmdVelSubscriberNode::controlLoopCallback, this),
+        callback_group_timer_);
+
+    // --- 初期化 ---
+    // 通信確立待ちのため少しスリープ
+    std::this_thread::sleep_for(std::chrono::seconds(1)); 
+    
+    // 連続移動モードに設定
     int32_t ret = client_.SwitchMoveMode(true);
-    if (!handleActionError(ret)) {
-      RCLCPP_ERROR(
-          this->get_logger(),
-          "Failed to set SwitchMoveMode(true). Move commands may not work.");
+    if (ret == 0) {
+      RCLCPP_INFO(this->get_logger(), "SwitchMoveMode set to true.");
     } else {
-      RCLCPP_INFO(this->get_logger(),
-                  "SwitchMoveMode set to true (continuous move).");
+      RCLCPP_ERROR(this->get_logger(), "Failed to set SwitchMoveMode. Ret: %d", ret);
     }
 
-    // --- ウォッチドッグタイマーの初期化 ---
-    last_cmd_vel_received_time_ = this->now();
-    // 100ms ごとにウォッチドッグコールバックを呼び出す
-    watchdog_timer_ = this->create_wall_timer(
-        std::chrono::milliseconds(100),
-        std::bind(&CmdVelSubscriberNode::watchdogCallback, this));
-    // ---
-
-    RCLCPP_INFO(this->get_logger(), "G1 cmd_vel subscriber node started.");
-    // ★ 修正2: ログのトピック名とサブスクライブ名を一致
-    RCLCPP_INFO(this->get_logger(), "Subscribing to /g1/cmd_vel (Twist)");
-    RCLCPP_INFO(this->get_logger(), "Watchdog enabled: Timeout = %.2f s",
-                watchdog_timeout_.seconds());
-    RCLCPP_WARN(
-        this->get_logger(),
-        "Node is in simple forwarding mode. Ensure robot is in a "
-        "walkable state (e.g., via 'start' service) before publishing cmd_vel.");
+    RCLCPP_INFO(this->get_logger(), "G1 cmd_vel node ready. Control Loop: 20Hz");
   }
 
  private:
-  /**
-   * @brief /g1/cmd_vel (Twist) 受信コールバック
-   */
   void cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg) {
-    // --- ウォッチドッグタイマーの更新 ---
-    {
-      // Mutex で排他制御し、時刻とフラグを更新
-      std::lock_guard<std::mutex> lock(time_mutex_);
-      last_cmd_vel_received_time_ = this->now();
-      is_stopped_by_watchdog_ = false; // コマンド受信中はウォッチドッグ停止フラグを解除
-    }
-    // ---
-
-    float vx = msg->linear.x;
-    float vy = msg->linear.y;
-    float omega = msg->angular.z;
-
-    RCLCPP_DEBUG(this->get_logger(),
-                 "Received cmd_vel: [vx: %.2f, vy: %.2f, omega: %.2f]", vx, vy,
-                 omega);
-
-    int32_t ret;
-    // 速度がゼロ近辺なら StopMove() を呼ぶ
-    if (std::abs(vx) < 0.01 && std::abs(vy) < 0.01 && std::abs(omega) < 0.01) {
-      ret = client_.StopMove();
-    } else {
-      // ゼロでなければ Move() を呼ぶ
-      ret = client_.Move(vx, vy, omega);
-    }
-
-    if (!handleActionError(ret)) {
-      RCLCPP_ERROR(this->get_logger(),
-                   "Failed to send Move/StopMove command via /api/sport/request.");
-    }
+    std::lock_guard<std::mutex> lock(cmd_mutex_);
+    target_vx_ = msg->linear.x;
+    target_vy_ = msg->linear.y;
+    target_omega_ = msg->angular.z;
+    last_cmd_vel_received_time_ = this->now();
   }
 
-  /**
-   * @brief ウォッチドッグタイマーのコールバック (100ms ごとに実行)
-   */
-  void watchdogCallback() {
-    std::lock_guard<std::mutex> lock(time_mutex_);
+  void controlLoopCallback() {
+    float vx, vy, omega;
+    bool is_timeout = false;
 
-    // 既にウォッチドッグによって停止されている場合は、何もしない
-    if (is_stopped_by_watchdog_) {
-      return;
+    // 現在時刻と最終受信時刻を比較
+    {
+      std::lock_guard<std::mutex> lock(cmd_mutex_);
+      auto elapsed = this->now() - last_cmd_vel_received_time_;
+      if (elapsed > watchdog_timeout_) {
+        is_timeout = true;
+        vx = 0.0f; vy = 0.0f; omega = 0.0f;
+      } else {
+        vx = target_vx_;
+        vy = target_vy_;
+        omega = target_omega_;
+      }
     }
 
-    // 最後に cmd_vel を受信してからの経過時間を計算
-    auto elapsed = this->now() - last_cmd_vel_received_time_;
+    int32_t ret = 0;
 
-    // 経過時間がタイムアウト値 (500ms) を超えた場合
-    if (elapsed > watchdog_timeout_) {
-      RCLCPP_WARN(this->get_logger(),
-                  "cmd_vel timeout (%.2f s > %.2f s). Stopping robot.",
-                  elapsed.seconds(), watchdog_timeout_.seconds());
-
-      // ロボットを停止させる
-      int32_t ret = client_.StopMove();
-      if (!handleActionError(ret)) {
-        RCLCPP_ERROR(this->get_logger(),
-                     "Watchdog failed to send StopMove command.");
+    if (is_timeout) {
+      // タイムアウト時：まだ停止処理が成功していない場合のみ StopMove を送る
+      if (!is_stopped_) {
+         RCLCPP_WARN(this->get_logger(), "Cmd_vel timeout. Stopping robot.");
+         ret = client_.StopMove();
+         
+         if(ret == 0) {
+             is_stopped_ = true; // 停止成功
+             RCLCPP_INFO(this->get_logger(), "Robot stopped successfully.");
+         } else {
+             // 失敗時はログを出すが、次のループでも再試行される
+             RCLCPP_ERROR(this->get_logger(), "StopMove failed: %d", ret);
+         }
+      }
+    } else {
+      // 通常走行時
+      // 速度がほぼゼロの場合も Move(0,0,0) を送り続ける（SwitchMoveMode=true なので安全）
+      if (std::abs(vx) < 0.01 && std::abs(vy) < 0.01 && std::abs(omega) < 0.01) {
+         ret = client_.Move(0.0, 0.0, 0.0);
+         // Move(0,0,0) が成功すれば停止状態とみなす
+         if (ret == 0) is_stopped_ = true; 
+      } else {
+         ret = client_.Move(vx, vy, omega);
+         is_stopped_ = false;
       }
 
-      // ウォッチドッグによって停止したフラグを立てる
-      // (StopMove を連続で送り続けないようにするため)
-      is_stopped_by_watchdog_ = true;
+      if (ret != 0) {
+        RCLCPP_WARN(this->get_logger(), "Move API Call failed: %d", ret);
+      }
     }
   }
 
-  /**
-   * @brief サンプルコード (loco_client_example.cpp)
-   * からコピーしたエラーハンドリング関数
-   */
-  bool handleActionError(int32_t error_code) {
-    if (error_code == 0) {
-      return true; // 成功
-    }
-    RCLCPP_ERROR(this->get_logger(), "Execute action failed, error code: %d",
-                 error_code);
-    UT_PRINT_ERR(error_code,
-                 unitree::robot::g1::UT_ROBOT_LOCO_ERR_LOCOSTATE_NOT_AVAILABLE);
-    UT_PRINT_ERR(error_code,
-                 unitree::robot::g1::UT_ROBOT_LOCO_ERR_INVALID_FSM_ID);
-    UT_PRINT_ERR(error_code,
-                 unitree::robot::g1::UT_ROBOT_LOCO_ERR_INVALID_TASK_ID);
-    UT_PRINT_ERR(error_code, UT_ROBOT_TASK_TIMEOUT);
-    return false; // 失敗
-  }
-
-  // --- メンバ変数 ---
+  // ROS メンバ
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_subscription_;
-  unitree::robot::g1::LocoClient client_; // Unitree G1 ロコモーションクライアント
+  rclcpp::CallbackGroup::SharedPtr callback_group_subscriber_;
+  rclcpp::CallbackGroup::SharedPtr callback_group_timer_; // ★追加
+  rclcpp::TimerBase::SharedPtr control_timer_;
+  
+  // Unitree Client
+  unitree::robot::g1::LocoClient client_;
 
-  // --- ウォッチドッグ用メンバ変数 ---
-  rclcpp::TimerBase::SharedPtr watchdog_timer_;
+  // 内部変数
+  std::mutex cmd_mutex_;
+  float target_vx_{0.0f};
+  float target_vy_{0.0f};
+  float target_omega_{0.0f};
   rclcpp::Time last_cmd_vel_received_time_;
   rclcpp::Duration watchdog_timeout_;
-  bool is_stopped_by_watchdog_;
-  std::mutex time_mutex_; // last_cmd_vel_received_time_ と
-                          // is_stopped_by_watchdog_ を保護
+  bool is_stopped_{true};
 };
 
-// --- main 関数 ---
 int main(int argc, char* argv[]) {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<CmdVelSubscriberNode>();
-  rclcpp::spin(node);
+
+  // MultiThreadedExecutor が必要
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(node);
+  executor.spin();
+
   rclcpp::shutdown();
   return 0;
 }
