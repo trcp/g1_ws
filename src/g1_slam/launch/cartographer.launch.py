@@ -135,7 +135,7 @@ def generate_launch_description():
         emulate_tty=True,
         arguments=['-d', rviz_path]
     )
-    #ld.add_action(rviz)
+    ld.add_action(rviz)
 
     # map saver
     auto_map_saver = Node(

@@ -71,6 +71,14 @@ def generate_launch_description():
     )
     ld.add_action(map_to_odom)
 
+    base_to_lidar = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        arguments=["0.004", "0", "0.60", "3.140", "3.14", "-0.103", "base_link", "mid360_link"],
+        output="screen"
+    )
+    ld.add_action(base_to_lidar)
+
     # laserscan 発行
     pointcloud_to_laserscan = Node(
         package='pointcloud_to_laserscan',
@@ -95,9 +103,9 @@ def generate_launch_description():
         name='emcl2',
         emulate_tty=True,
         parameters=[localization_params],
-        remappings=[
-            ('/scan', '/scan_reliable')
-        ]
+        #remappings=[
+        #    ('/scan', '/scan_reliable')
+        #]
     )
     ld.add_action(emcl2)
 
