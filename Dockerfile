@@ -52,8 +52,9 @@ RUN sed -i '97c\  auto cloud = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>(
 
 # resolve mapeditor depends
 RUN apt-get update && apt-get install -y \
-     python3-tk \
-     python3-pil.imagetk &&\
+    python3-tk \
+    python3-pil.imagetk \
+    ros-${ROS}-navigation2 ros-${ROS}-nav2-bringup &&\
     rm -rf /var/lib/apt/lists/*
 
 # install pyserial
