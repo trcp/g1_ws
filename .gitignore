@@ -1,4 +1,5 @@
 /src/nakalab_realsense
+/src/rclpy_util
 
 rosbag/*
 !rosbag/.gitkeepe
