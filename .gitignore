@@ -1,6 +1,7 @@
 /src/nakalab_realsense
 /src/rclpy_util
 
+**/__pycache__/**
 rosbag/*
 !rosbag/.gitkeepe
 map/*
