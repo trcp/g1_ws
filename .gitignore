@@ -6,7 +6,7 @@ build/
 install/
 log/
 
-__pycache__
+__pycache__/
 rosbag/*
 !rosbag/.gitkeepe
 map/*
