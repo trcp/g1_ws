@@ -23,7 +23,7 @@ def generate_launch_description():
         description='Use simulation (Gazebo) or rosbag clock if true'
     )
     declare_dlio_config = DeclareLaunchArgument(
-        'dlio_config', default_value=os.path.join(get_package_share_directory('g1_slam'), 'param', 'dlio_config.yaml'),
+        'dlio_config', default_value=os.path.join(get_package_share_directory('g1_slam'), 'param', 'dlio_config_g1imu.yaml'),
         description='Yaml config file path'
     )
     declare_dlio_params = DeclareLaunchArgument(
@@ -52,7 +52,7 @@ def generate_launch_description():
         ],
         remappings=[
             ('pointcloud', '/livox/lidar'),
-            ('imu', '/livox/imu'),
+            ('imu', '/imu'),
             ('odom', 'dlio/odom_node/odom'),
             ('pose', 'dlio/odom_node/pose'),
             ('path', 'dlio/odom_node/path'),
