@@ -1,0 +1,6 @@
+float32 pan 0.0
+float32 tilt 0.0
+
+---
+
+bool success

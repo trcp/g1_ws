@@ -12,6 +12,7 @@ find_package(rosidl_default_generators REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   srvs/PosePolicy.srv
   srvs/AudioClient.srv
+  srvs/MoveServo.srv
 )
 ament_export_dependencies(rosidl_default_runtime)
 
