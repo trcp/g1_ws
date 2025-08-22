@@ -16,6 +16,7 @@ x-preferences: &preferences
     - /etc/localtime:/etc/localtime
     - $HOME/.Xauthority/:/root/.Xauthority
     - ./src:/ws/src/devel
+    - ./assets:/assets
     - /dev:/dev
   devices:
       - /dev:/dev
@@ -39,4 +40,6 @@ services:
         - ROS=humble
     platform: linux/arm64
     container_name: g1.main
-    <<: [*preferences, *gpu]
+    #<<: [*preferences, *gpu] # use GPU
+    <<: [*preferences]
+    command: /bin/bash
