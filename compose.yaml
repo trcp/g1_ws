@@ -16,6 +16,7 @@ x-preferences: &preferences
     - /etc/localtime:/etc/localtime
     - $HOME/.Xauthority/:/root/.Xauthority
     - ./src:/ws/src/devel
+    - ./assets:/assets
     - /dev:/dev
   devices:
       - /dev:/dev
@@ -37,5 +38,5 @@ services:
       dockerfile: Dockerfile
       args:
         - ROS=humble
-    container_name: ngsr.main
+    container_name: g1.main
     <<: [*preferences, *gpu]
