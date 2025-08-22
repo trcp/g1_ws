@@ -1,0 +1,41 @@
+x-preferences: &preferences
+  privileged: true
+  ipc: host
+  network_mode: host
+  tty: true
+  stdin_open: true
+  stop_signal: SIGINT
+  environment:
+    - DISPLAY=${DISPLAY}
+    - LC_TIME
+    - TZ=Asia/Tokyo
+  volumes:
+    - /run/user/1000/pulse/native:/tmp/pulse/native
+    - ~/.config/pulse/cookie:/tmp/pulse/cookie:ro
+    - /tmp/.X11-unix:/tmp/.X11-unix
+    - /etc/localtime:/etc/localtime
+    - $HOME/.Xauthority/:/root/.Xauthority
+    - ./src:/ws/src/devel
+    - /dev:/dev
+  devices:
+      - /dev:/dev
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
+
+services:
+  g1:
+    image: gai313/ros2:humble.g1
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - ROS=humble
+    container_name: ngsr.main
+    <<: [*preferences, *gpu]
