@@ -34,8 +34,9 @@ services:
     image: gai313/ros2:humble.g1
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.g1
       args:
         - ROS=humble
-    container_name: ngsr.main
+    platform: linux/arm64
+    container_name: g1.main
     <<: [*preferences, *gpu]
