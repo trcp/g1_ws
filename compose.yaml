@@ -6,40 +6,32 @@ x-preferences: &preferences
   stdin_open: true
   stop_signal: SIGINT
   environment:
-    - DISPLAY=${DISPLAY}
-    - LC_TIME
-    - TZ=Asia/Tokyo
-  volumes:
-    - /run/user/1000/pulse/native:/tmp/pulse/native
-    - ~/.config/pulse/cookie:/tmp/pulse/cookie:ro
-    - /tmp/.X11-unix:/tmp/.X11-unix
-    - /etc/localtime:/etc/localtime
-    - $HOME/.Xauthority/:/root/.Xauthority
-    - ./src:/ws/src/devel
-    - ./assets:/assets
-    - /dev:/dev
+    - DISPLAY
+    - RMW_IMPLEMENTATION
+    # DO NOT EDIT
+    - CYCLONEDDS_URI=$HOME/cyclonedds.xml
   devices:
-      - /dev:/dev
-
-x-gpu: &gpu
-  deploy:
-    resources:
-      reservations:
-        devices:
-          - driver: nvidia
-            count: 1
-            capabilities: [gpu]
-
+    - /dev:/dev
+  volumes:
+    - /tmp/.X11-unix:/tmp/.X11-unix
+    - $HOME/.Xauthority/:$HOME/.Xauthority
+    - ./src:$HOME/colcon_ws/src/erasers_g1
+    - $HOME/cyclonedds_ws/cyclonedds.xml:$HOME/cyclonedds.xml
+  
+# ---------------------------------------------------------------
 services:
-  g1:
-    image: gai313/ros2:humble.g1
+  erasers_g1:
+    container_name: erasers_g1
+    image: erasers_g1:latest
     build:
       context: .
-      dockerfile: Dockerfile.g1
+      dockerfile: Dockerfile
+      target: robot
       args:
+        - TARGET_ARCH=arm64
+        - OS=22.04
         - ROS=humble
-    platform: linux/arm64
-    container_name: g1.main
-    #<<: [*preferences, *gpu] # use GPU
-    <<: [*preferences]
-    command: /bin/bash
+        - USERNAME=${USER}
+        - GROUPNAME=${USER}
+    <<: *preferences
+    command: "/bin/bash"
