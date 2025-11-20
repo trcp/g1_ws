@@ -12,16 +12,11 @@ def generate_launch_description():
     ld = LaunchDescription()
 
     robot_description = LaunchConfiguration('robot_description')
-    have_wheel = LaunchConfiguration('have_wheel')
 
     # default_values
     default_rviz_path = os.path.join(get_package_share_directory('g1_description'), 'rviz', 'g1.rviz')
 
     # args
-    declare_have_wheel = DeclareLaunchArgument(
-        'have_wheel', default_value='true',
-        description='If Go2W, set True, else, set False'
-    )
     declare_robot_description = DeclareLaunchArgument(
         'robot_description',
         default_value = os.path.join(
@@ -30,14 +25,12 @@ def generate_launch_description():
         ),
         description='Full path for robot description.'
     )
-    ld.add_action(declare_have_wheel)
     ld.add_action(declare_robot_description)
 
     # XACRO -> URDF
     robot_description_urdf =  ParameterValue(
         Command([
             'xacro ', robot_description, ' ',
-            'have_wheel:=', have_wheel
         ]),
         value_type=str
     )
