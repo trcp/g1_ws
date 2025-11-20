@@ -22,7 +22,7 @@
     ```
     完了したらロボットを再起動してください．
     
-1. Realsense パッケージを src ディレクトリにインストールする<br>
+1. [Realsense パッケージ](https://github.com/GAI-313/nakalab_realsense/tree/main#) を src ディレクトリにインストールする<br>
     ```bash
     cd src
     ```

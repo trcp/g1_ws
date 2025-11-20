@@ -16,6 +16,7 @@ x-preferences: &preferences
     - /tmp/.X11-unix:/tmp/.X11-unix
     - $HOME/.Xauthority/:$HOME/.Xauthority
     - ./src:$HOME/colcon_ws/src/erasers_g1
+    - ./rosbag:$HOME/colcon_ws/rosbag
     - $HOME/cyclonedds_ws/cyclonedds.xml:$HOME/cyclonedds.xml
   
 # ---------------------------------------------------------------
@@ -34,4 +35,23 @@ services:
         - USERNAME=${USER}
         - GROUPNAME=${USER}
     <<: *preferences
-    command: "/bin/bash"
+    command: "/bin/bash -ci \" ros2 launch g1_bringup bringup.launch.py\""
+
+  devel:
+    container_name: devel
+    image: erasers_g1:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: robot
+      args:
+        - TARGET_ARCH=arm64
+        - OS=22.04
+        - ROS=humble
+        - USERNAME=${USER}
+        - GROUPNAME=${USER}
+    <<: *preferences
+    environment:
+      - DISPLAY
+      - ROS_DOMAIN_ID=100
+    command: "/bin/bash -ic \"rviz2 -d $(ros2 pkg prefix --share g1_description)/rviz/g1.rviz\""
