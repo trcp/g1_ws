@@ -37,7 +37,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource([
             os.path.join(
                 get_package_share_directory('g1_bringup'),
-                'launch', 'lidar.launch.py'
+                'launch', 'mid360.launch.py'
             )
         ])
     )
