@@ -44,7 +44,6 @@ def generate_launch_description():
     joint_state_publisher = Node(
         package='erasers_g1_common_cpp',
         executable='joint_state_publisher',
-        parameters=[{'have_wheel': have_wheel}]
     )
     rviz = Node(
         package='rviz2',
