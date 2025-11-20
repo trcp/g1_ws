@@ -9,8 +9,13 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(unitree_api REQUIRED)
+find_package(unitree_hg REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(g1_srvs REQUIRED)
 
+
+# cmd_vel
 add_executable(cmd_vel src/cmd_vel.cpp src/sport_client_common.cpp)
 target_include_directories(cmd_vel PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -21,8 +26,34 @@ ament_target_dependencies(cmd_vel
     geometry_msgs
     unitree_api
 )
+
+# joint_state_publisher
+add_executable(joint_state_publisher src/joint_state_publisher.cpp)
+ament_target_dependencies(joint_state_publisher
+    rclcpp
+    unitree_hg
+    sensor_msgs
+)
+
+# loco_service_client
+add_executable(loco_service_client src/loco_service_client.cpp)
+target_include_directories(loco_service_client PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(loco_service_client
+    rclcpp
+    unitree_hg
+    unitree_api
+    g1_srvs
+)
+
+
+
 install(TARGETS
   cmd_vel
+  joint_state_publisher
+  loco_service_client
   DESTINATION lib/${PROJECT_NAME}
 )
 install(
