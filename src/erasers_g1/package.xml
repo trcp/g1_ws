@@ -16,6 +16,7 @@
   <depend>erasers_g1_common_cpp</depend>
   <depend>g1_description</depend>
   <depend>g1_bringup</depend>
+  <depend>g1_slam</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

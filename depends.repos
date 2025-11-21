@@ -1,4 +1,5 @@
 repositories:
+    # unitree sdk
     unitree_ros2:
         type: git
         url: https://github.com/unitreerobotics/unitree_ros2.git
@@ -19,3 +20,14 @@ repositories:
         type: git
         url: https://github.com/Livox-SDK/Livox-SDK2.git
         version: master
+
+    # FAST-LIO
+    fast_lio:
+        type: git
+        url: https://github.com/Ericsii/FAST_LIO_ROS2.git
+        version: ros2
+        
+    fast_lio/include/ikd-Tree:
+        type: git
+        url: https://github.com/hku-mars/ikd-Tree.git
+        version: fast_lio
