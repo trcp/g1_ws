@@ -47,13 +47,20 @@ ament_target_dependencies(loco_service_client
     unitree_api
     g1_srvs
 )
-
+# imu_publisher
+add_executable(imu_publisher src/imu_publisher.cpp)
+ament_target_dependencies(imu_publisher
+    rclcpp
+    unitree_hg
+    sensor_msgs
+)
 
 
 install(TARGETS
   cmd_vel
   joint_state_publisher
   loco_service_client
+  imu_publisher
   DESTINATION lib/${PROJECT_NAME}
 )
 install(

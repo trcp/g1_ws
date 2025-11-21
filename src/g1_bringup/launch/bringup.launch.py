@@ -26,8 +26,15 @@ def generate_launch_description():
         executable='cmd_vel',
         emulate_tty=True
     )
+    # G1 の IMU を出力するノード
+    imu_publisher = Node(
+        package='erasers_g1_common_cpp',
+        executable='imu_publisher',
+        emulate_tty=True
+    )
 
     ld.add_action(loco_service_client)
+    ld.add_action(imu_publisher)
     ld.add_action(cmd_vel)
 
 
