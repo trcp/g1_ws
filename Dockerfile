@@ -46,6 +46,9 @@ RUN . /opt/ros/${ROS}/setup.bash &&\
     rosdep install -y -i --from-path . &&\
     rm -rf /var/lib/apt/lists/*
 
+# Fix pointcloud2_to_2dmap shared ptr ref
+RUN sed -i '97c\  auto cloud = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();' ./pointcloud_to_2dmap/src/pointcloud_to_2dmap.cpp
+
 # build workspace
 USER $USERNAME
 WORKDIR /home/${USERNAME}/colcon_ws
