@@ -43,11 +43,18 @@ COPY src ./erasers_g1
 USER root
 RUN . /opt/ros/${ROS}/setup.bash &&\
     apt update &&\
-    rosdep install -y -i --from-path . &&\
+    rosdep install -y -i --from-path .\
+        --skip-keys pointcloud_to_2dmap &&\
     rm -rf /var/lib/apt/lists/*
 
 # Fix pointcloud2_to_2dmap shared ptr ref
 RUN sed -i '97c\  auto cloud = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();' ./pointcloud_to_2dmap/src/pointcloud_to_2dmap.cpp
+
+# resolve mapeditor depends
+RUN apt-get update && apt-get install -y \
+     python3-tk \
+     python3-pil.imagetk &&\
+    rm -rf /var/lib/apt/lists/*
 
 # build workspace
 USER $USERNAME
