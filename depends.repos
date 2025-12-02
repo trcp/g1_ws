@@ -31,3 +31,15 @@ repositories:
         type: git
         url: https://github.com/hku-mars/ikd-Tree.git
         version: fast_lio
+
+    # DLIO
+    direct_lidar_inertial_odometry:
+        type: git
+        url: https://github.com/vectr-ucla/direct_lidar_inertial_odometry.git
+        version: feature/ros2
+
+    # pointclod_to_2dmap
+    pointcloud_to_2dmap:
+        type: git
+        url: https://github.com/koide3/pointcloud_to_2dmap.git
+        version: master
