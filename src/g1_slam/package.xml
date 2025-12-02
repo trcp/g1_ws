@@ -13,6 +13,9 @@
   <test_depend>ament_lint_common</test_depend>
 
   <depend>fast_lio</depend>
+  <depend>direct_lidar_inertial_odometry</depend>
+  <depend>pcl_ros</depend>
+  <depend>pointcloud_to_2dmap</depend>
 
   <export>
     <build_type>ament_cmake</build_type>
