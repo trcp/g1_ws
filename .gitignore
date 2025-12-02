@@ -1,4 +1,6 @@
 /src/nakalab_realsense
 
 rosbag/*
-!rosbag/.gitkeep
+!rosbag/.gitkeepe
+map/*
+!map/.gitkeep
