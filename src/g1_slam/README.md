@@ -47,6 +47,7 @@
     - `-r 2d マップの解像度`
 
 1. **2D マップの不要部分を削除する**<br>
-    　以下のサイトで編集可能です．scp コマンドでクライアント PC に 2d マップをダウンロードして編集してください．
-
-    - https://gyropalm.github.io/ROS-SLAM-Map-Editor/editor.html
+    　ローカル環境で以下のコマンドを実行するとエディタが開きます．
+    ```bash
+    docker compose exec devel bash -ic "python3 src/erasers_g1/mapeditor.py"
+    ```
