@@ -3,7 +3,7 @@ string START="start"
 string SQUAT="squat"
 string SIT="sit"
 string STAND_UP="stand_up"
-string ZERO_RORQUE="zero_torque"
+string ZERO_TORQUE="zero_torque"
 string pose
 ---
 bool success
