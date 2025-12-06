@@ -54,6 +54,18 @@ ament_target_dependencies(imu_publisher
     unitree_hg
     sensor_msgs
 )
+# audio_client
+add_executable(audio_client src/audio_client.cpp)
+target_include_directories(audio_client PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(audio_client
+    rclcpp
+    unitree_hg
+    unitree_api
+    g1_srvs
+)
 
 
 install(TARGETS
@@ -61,6 +73,7 @@ install(TARGETS
   joint_state_publisher
   loco_service_client
   imu_publisher
+  audio_client
   DESTINATION lib/${PROJECT_NAME}
 )
 install(
