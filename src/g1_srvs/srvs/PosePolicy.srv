@@ -4,6 +4,13 @@ string SQUAT="squat"
 string SIT="sit"
 string STAND_UP="stand_up"
 string ZERO_TORQUE="zero_torque"
+string STOP_MOVE="stop_move"
+string HIGH_STAND="high_stand"
+string LOW_STAND="low_stand"
+string BALANCE_STAND="balance_stand"
+string SHAKE_HAND="shake_hand"
+string WAVE_HAND="wave_hand"
+string WAVE_HAND_WITH_TURN="wave_hand_with_turn"
 string pose
 ---
 bool success
