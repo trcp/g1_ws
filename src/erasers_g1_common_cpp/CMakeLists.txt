@@ -10,9 +10,13 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(unitree_api REQUIRED)
 find_package(unitree_hg REQUIRED)
+find_package(unitree_go REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(g1_srvs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 
 # cmd_vel
@@ -54,13 +58,23 @@ ament_target_dependencies(imu_publisher
     unitree_hg
     sensor_msgs
 )
-
+# odometry publisher
+add_executable(odom_publisher src/odom_publisher.cpp)
+ament_target_dependencies(odom_publisher
+    rclcpp
+    tf2
+    tf2_ros
+    unitree_go
+    geometry_msgs
+    nav_msgs
+)
 
 install(TARGETS
   cmd_vel
   joint_state_publisher
   loco_service_client
   imu_publisher
+  odom_publisher
   DESTINATION lib/${PROJECT_NAME}
 )
 install(
@@ -69,3 +83,4 @@ install(
 )
 
 ament_package()
+    

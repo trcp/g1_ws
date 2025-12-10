@@ -32,9 +32,16 @@ def generate_launch_description():
         executable='imu_publisher',
         emulate_tty=True
     )
+    # G1 の Odometry を出力するノード
+    odom_publisher = Node(
+        package='erasers_g1_common_cpp',
+        executable='odom_publisher',
+        emulate_tty=True
+    )
 
     ld.add_action(loco_service_client)
     ld.add_action(imu_publisher)
+    ld.add_action(odom_publisher)
     ld.add_action(cmd_vel)
 
 
