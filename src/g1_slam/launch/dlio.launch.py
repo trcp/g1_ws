@@ -13,6 +13,7 @@ def generate_launch_description():
 
 
     use_sim_time = LaunchConfiguration('use_sim_time')
+    pcd_prefix = LaunchConfiguration('pcd_prefix')
     dlio_config = LaunchConfiguration('dlio_config')
     dlio_params = LaunchConfiguration('dlio_params')
     rviz_path = LaunchConfiguration('rviz_path')
@@ -22,8 +23,12 @@ def generate_launch_description():
         'use_sim_time', default_value='false',
         description='Use simulation (Gazebo) or rosbag clock if true'
     )
+    declare_pcd_prefix = DeclareLaunchArgument(
+        'pcd_prefix', default_value=os.environ['PWD']+'/testmap',
+        description='Full path for save PCD map.'
+    )
     declare_dlio_config = DeclareLaunchArgument(
-        'dlio_config', default_value=os.path.join(get_package_share_directory('g1_slam'), 'param', 'dlio_config_g1imu.yaml'),
+        'dlio_config', default_value=os.path.join(get_package_share_directory('g1_slam'), 'param', 'dlio_config.yaml'),
         description='Yaml config file path'
     )
     declare_dlio_params = DeclareLaunchArgument(
@@ -35,6 +40,7 @@ def generate_launch_description():
         description='RViz config file path'
     )
     ld.add_action(declare_use_sim_time)
+    ld.add_action(declare_pcd_prefix)
     ld.add_action(declare_dlio_config)
     ld.add_action(declare_dlio_params)
     ld.add_action(declare_rviz_path)
@@ -74,6 +80,14 @@ def generate_launch_description():
         ],
     )
     ld.add_action(dlio_map_node)
+
+    pcd_map_saver = Node(
+        package='g1_slam',
+        executable='pointcloud_to_pcd',
+        emulate_tty=True,
+        parameters=[{'prefix': pcd_prefix}]
+    )
+    ld.add_action(pcd_map_saver)
 
     rviz = Node(
         package='rviz2',

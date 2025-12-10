@@ -2,9 +2,9 @@
   ros__parameters:
     use_sim_time: true
     frames/odom: odom
-    frames/baselink: base_link
-    frames/lidar: lidar
-    frames/imu: imu
+    frames/baselink: pelvis
+    frames/lidar: mid360_link
+    frames/imu: imu_in_pelvis
 
     map/waitUntilMove: true
     map/dense/filtered: false
