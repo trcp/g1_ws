@@ -4,12 +4,14 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
+        - /Global Options1
         - /TF1/Frames1
         - /TF1/Tree1
         - /Map1/Topic1
         - /LaserScan1/Topic1
+        - /Camera1/Visibility1
       Splitter Ratio: 0.5
-    Tree Height: 540
+    Tree Height: 256
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -27,7 +29,7 @@ Panels:
     Experimental: false
     Name: Time
     SyncMode: 0
-    SyncSource: LiDAR
+    SyncSource: LaserScan
 Visualization Manager:
   Class: ""
   Displays:
@@ -86,6 +88,38 @@ Visualization Manager:
           Value: false
         d435_link:
           Value: false
+        d455_accel_frame:
+          Value: false
+        d455_accel_optical_frame:
+          Value: false
+        d455_aligned_depth_to_infra1_frame:
+          Value: false
+        d455_color_frame:
+          Value: false
+        d455_color_optical_frame:
+          Value: false
+        d455_depth_frame:
+          Value: false
+        d455_depth_optical_frame:
+          Value: false
+        d455_gyro_frame:
+          Value: false
+        d455_gyro_optical_frame:
+          Value: false
+        d455_imu_frame:
+          Value: false
+        d455_imu_optical_frame:
+          Value: false
+        d455_infra1_frame:
+          Value: false
+        d455_infra1_optical_frame:
+          Value: false
+        d455_infra2_frame:
+          Value: false
+        d455_infra2_optical_frame:
+          Value: false
+        d455_link:
+          Value: false
         head_link:
           Value: false
         head_servo_link:
@@ -118,8 +152,6 @@ Visualization Manager:
           Value: false
         logo_link:
           Value: false
-        map:
-          Value: true
         mid360_link:
           Value: false
         odom:
@@ -148,58 +180,83 @@ Visualization Manager:
           Value: false
         torso_link:
           Value: false
+        xl330_link:
+          Value: false
       Marker Scale: 1
       Name: TF
       Show Arrows: true
       Show Axes: true
       Show Names: true
       Tree:
-        map:
-          odom:
-            base_link:
-              base_link_contour_link:
+        odom:
+          base_link:
+            base_link_contour_link:
+              {}
+            imu_in_base_link:
+              {}
+            left_hip_pitch_link:
+              left_hip_roll_link:
+                left_hip_yaw_link:
+                  left_knee_link:
+                    left_ankle_pitch_link:
+                      left_ankle_roll_link:
+                        {}
+            right_hip_pitch_link:
+              right_hip_roll_link:
+                right_hip_yaw_link:
+                  right_knee_link:
+                    right_ankle_pitch_link:
+                      right_ankle_roll_link:
+                        {}
+            torso_link:
+              d435_link:
                 {}
-              imu_in_base_link:
+              head_link:
                 {}
-              left_hip_pitch_link:
-                left_hip_roll_link:
-                  left_hip_yaw_link:
-                    left_knee_link:
-                      left_ankle_pitch_link:
-                        left_ankle_roll_link:
+              head_servo_link:
+                xl330_link:
+                  d455_link:
+                    d455_accel_frame:
+                      d455_accel_optical_frame:
+                        {}
+                    d455_aligned_depth_to_infra1_frame:
+                      d455_infra1_optical_frame:
+                        {}
+                    d455_color_frame:
+                      d455_color_optical_frame:
+                        {}
+                    d455_depth_frame:
+                      d455_depth_optical_frame:
+                        {}
+                    d455_gyro_frame:
+                      d455_gyro_optical_frame:
+                        {}
+                      d455_imu_frame:
+                        d455_imu_optical_frame:
                           {}
-              right_hip_pitch_link:
-                right_hip_roll_link:
-                  right_hip_yaw_link:
-                    right_knee_link:
-                      right_ankle_pitch_link:
-                        right_ankle_roll_link:
-                          {}
-              torso_link:
-                d435_link:
-                  {}
-                head_link:
-                  {}
-                head_servo_link:
-                  {}
-                imu_in_torso:
-                  {}
-                left_shoulder_pitch_link:
-                  left_shoulder_roll_link:
-                    left_shoulder_yaw_link:
-                      left_elbow_link:
-                        left_wrist_roll_rubber_hand:
-                          {}
-                logo_link:
-                  {}
-                mid360_link:
-                  {}
-                right_shoulder_pitch_link:
-                  right_shoulder_roll_link:
-                    right_shoulder_yaw_link:
-                      right_elbow_link:
-                        right_wrist_roll_rubber_hand:
-                          {}
+                    d455_infra1_frame:
+                      {}
+                    d455_infra2_frame:
+                      d455_infra2_optical_frame:
+                        {}
+              imu_in_torso:
+                {}
+              left_shoulder_pitch_link:
+                left_shoulder_roll_link:
+                  left_shoulder_yaw_link:
+                    left_elbow_link:
+                      left_wrist_roll_rubber_hand:
+                        {}
+              logo_link:
+                {}
+              mid360_link:
+                {}
+              right_shoulder_pitch_link:
+                right_shoulder_roll_link:
+                  right_shoulder_yaw_link:
+                    right_elbow_link:
+                      right_wrist_roll_rubber_hand:
+                        {}
       Update Interval: 0
       Value: true
     - Alpha: 1
@@ -361,10 +418,33 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /plan
       Value: true
+    - Class: rviz_default_plugins/Camera
+      Enabled: true
+      Far Plane Distance: 100
+      Image Rendering: background and overlay
+      Name: Camera
+      Overlay Alpha: 0.5
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /d455/color/image_raw
+      Value: true
+      Visibility:
+        Grid: false
+        LaserScan: false
+        LiDAR: true
+        Map: false
+        Path: false
+        RobotModel: false
+        TF: false
+        Value: true
+      Zoom Factor: 1
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: map
+    Fixed Frame: odom
     Frame Rate: 30
   Name: root
   Tools:
@@ -407,7 +487,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/ThirdPersonFollower
-      Distance: 8.366544723510742
+      Distance: 2.640667676925659
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -422,18 +502,20 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.5697963237762451
+      Pitch: 0.8697967529296875
       Target Frame: pelvis
       Value: ThirdPersonFollower (rviz_default_plugins)
-      Yaw: 3.1453957557678223
+      Yaw: 0.8453963994979858
     Saved: ~
 Window Geometry:
+  Camera:
+    collapsed: false
   Displays:
     collapsed: false
   Height: 837
   Hide Left Dock: false
   Hide Right Dock: true
-  QMainWindow State: 000000ff00000000fd000000040000000000000156000002a7fc0200000008fb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f0070006500720074006900650073020000019b000001b500000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000003d000002a7000000c900fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261000000010000010f0000017efc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073000000003b0000017e000000a400fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000005b80000003efc0100000002fb0000000800540069006d00650100000000000005b80000022700fffffffb0000000800540069006d006501000000000000045000000000000000000000045c000002a700000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd00000004000000000000019d000002a7fc020000000afb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f0070006500720074006900650073020000019b000001b500000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000003d0000018b000000c900fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261fb0000000a0049006d0061006700650000000229000000bb0000000000000000fb0000000c00430061006d00650072006101000001ce000001160000002800ffffff000000010000010f0000017efc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073000000003b0000017e000000a400fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e10000019700000003000005b80000003efc0100000002fb0000000800540069006d00650100000000000005b80000022700fffffffb0000000800540069006d0065010000000000000450000000000000000000000415000002a700000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Time:

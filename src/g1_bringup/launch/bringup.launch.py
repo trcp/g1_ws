@@ -57,7 +57,13 @@ def generate_launch_description():
         package='erasers_g1_common_cpp',
         executable='odom_publisher',
         emulate_tty=True
-    )    
+    )
+    # 頭部ジョイントの起動
+    head_joints = Node(
+        package='head_servo_controller',
+        executable='head_servo_controller',
+        emulate_tty=True
+    )
     # TTS
     audio_client = Node(
         package='erasers_g1_common_cpp',
@@ -70,6 +76,7 @@ def generate_launch_description():
     ld.add_action(imu_publisher)
     ld.add_action(odom_publisher)
     ld.add_action(cmd_vel)
+    ld.add_action(head_joints)
 
 
     pointcloud_to_laserscan = Node(
@@ -91,6 +98,15 @@ def generate_launch_description():
 
 
     # launchers
+    # 頭部カメラの起動
+    head_camera = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            os.path.join(
+                get_package_share_directory('nakalab_realsense'),
+                'launch', 'd455_launch.py'
+            )
+        ])
+    )
     # LiDAR センサーを起動する
     lidar = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
@@ -110,6 +126,7 @@ def generate_launch_description():
         ])
     )
 
+    ld.add_action(head_camera)
     ld.add_action(lidar)
     ld.add_action(display)
 
