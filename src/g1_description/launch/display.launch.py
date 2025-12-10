@@ -48,7 +48,8 @@ def generate_launch_description():
     rviz = Node(
         package='rviz2',
         executable='rviz2',
-        arguments=['-d', default_rviz_path]
+        arguments=['-d', default_rviz_path],
+        output='own_log'
     )
     ld.add_action(robot_state_publisher)
     ld.add_action(joint_state_publisher)
