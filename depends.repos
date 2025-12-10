@@ -43,3 +43,21 @@ repositories:
         type: git
         url: https://github.com/koide3/pointcloud_to_2dmap.git
         version: master
+    
+    # lidar localization
+    # {pcl_localization_ros2}
+    lidar_localization_ros2: 
+        type: git
+        url: https://github.com/rsasaki0109/lidar_localization_ros2.git
+        version: humble
+
+    ndt_omap_ros2: 
+        type: git
+        url: https://github.com/rsasaki0109/ndt_omp_ros2.git
+        version: humble
+
+    # emcl2
+    emcl2:
+        type: git
+        url: https://github.com/GAI-313/emcl2_for_kachaka.git
+        version: main

@@ -18,7 +18,7 @@ public:
   : Node("unitree_odom_converter")
   {
     this->declare_parameter("parent_frame", "odom");
-    this->declare_parameter("child_frame", "pelvis"); // G1 は pelvis が base_link のような存在
+    this->declare_parameter("child_frame", "base_link"); // G1 は base_link が base_link のような存在
     this->declare_parameter("publish_tf", true);
 
     parent_frame_ = this->get_parameter("parent_frame").as_string();

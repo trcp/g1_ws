@@ -13,6 +13,16 @@ def generate_launch_description():
     ld = LaunchDescription()
 
 
+    ptl_params = LaunchConfiguration('ptl_params')
+
+
+    declare_ptl_params = DeclareLaunchArgument(
+        'ptl_params', default_value=os.path.join(get_package_share_directory('g1_slam'), 'param', 'ptl.yaml'),
+        description='Full path for 2d png map'
+    )
+    ld.add_action(declare_ptl_params)
+
+
     # nodes
     # G1 のモード切り替え（damp, stand_up など）を制御するノード
     loco_service_client = Node(
@@ -43,6 +53,24 @@ def generate_launch_description():
     ld.add_action(imu_publisher)
     ld.add_action(odom_publisher)
     ld.add_action(cmd_vel)
+
+
+    pointcloud_to_laserscan = Node(
+        package='pointcloud_to_laserscan',
+        executable='pointcloud_to_laserscan_node',
+        name='pointcloud_to_laserscan_node',
+        emulate_tty=True,
+        parameters=[
+            ptl_params,
+            {'use_sim_time': False},
+        ],
+        remappings=[
+            ('cloud_in', '/livox/lidar'),
+            ('scan', '/scan'),
+        ],
+    )
+    ld.add_action(pointcloud_to_laserscan)
+
 
 
     # launchers

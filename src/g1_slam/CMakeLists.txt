@@ -17,14 +17,19 @@ target_include_directories(pointcloud_to_pcd PUBLIC ${PCL_INCLUDE_DIRS})
 target_link_libraries(pointcloud_to_pcd ${PCL_LIBRARIES})
 ament_target_dependencies(pointcloud_to_pcd rclcpp sensor_msgs pcl_conversions)
 
+add_executable(map_saver src/map_saver.cpp)
+ament_target_dependencies(map_saver rclcpp)
+
 install(TARGETS
   pointcloud_to_pcd
+  map_saver
   DESTINATION lib/${PROJECT_NAME}
 )
 
 install(DIRECTORY
   launch
   param
+  config
   rviz
   DESTINATION share/${PROJECT_NAME}/
 )

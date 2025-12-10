@@ -68,6 +68,19 @@ ament_target_dependencies(odom_publisher
     geometry_msgs
     nav_msgs
 )
+# scan_relay
+add_executable(scan_relay src/scan_relay.cpp)
+ament_target_dependencies(scan_relay
+    rclcpp
+    sensor_msgs
+)
+# pcd_map_qos_connv
+add_executable(pcd_map_qos_connv src/pcd_map_qos_connv.cpp)
+ament_target_dependencies(pcd_map_qos_connv
+    rclcpp
+    sensor_msgs
+)
+
 
 install(TARGETS
   cmd_vel
@@ -75,6 +88,8 @@ install(TARGETS
   loco_service_client
   imu_publisher
   odom_publisher
+  scan_relay
+  pcd_map_qos_connv
   DESTINATION lib/${PROJECT_NAME}
 )
 install(

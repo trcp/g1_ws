@@ -11,10 +11,9 @@ class PointCloudToPCD : public rclcpp::Node
 public:
   PointCloudToPCD() : Node("pointcloud_to_pcd")
   {
-    // パラメータ: 保存先のプレフィックス (例: /tmp/pcd/scan_)
-    this->declare_parameter<std::string>("prefix", "scans_");
-    this->declare_parameter<bool>("binary", false); // バイナリ保存するかASCIIか
-    this->declare_parameter<std::string>("input_topic", "input");
+    this->declare_parameter<std::string>("prefix", "map_");
+    this->declare_parameter<bool>("binary", false);
+    this->declare_parameter<std::string>("input_topic", "/map");
 
     std::string input_topic;
     this->get_parameter("input_topic", input_topic);
@@ -48,7 +47,7 @@ private:
     this->get_parameter("binary", binary_mode);
 
     std::stringstream ss;
-    ss << prefix << msg->header.stamp.sec << "." << std::setw(9) << std::setfill('0') << msg->header.stamp.nanosec << ".pcd";
+    ss << prefix << ".pcd";
     std::string filename = ss.str();
 
     RCLCPP_INFO(this->get_logger(), "Saving to %s (Points: %zu)", filename.c_str(), cloud.size());

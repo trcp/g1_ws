@@ -16,15 +16,20 @@ def generate_launch_description():
 
 
     pcd_path = LaunchConfiguration('pcd_path')
-    rviz_path = LaunchConfiguration('rviz_path', default=os.path.join(get_package_share_directory('g1_slam'), 'rviz', 'pcd_vis.rviz'))
+    rviz_path = LaunchConfiguration('rviz_path')
 
 
     declare_pcd_path = DeclareLaunchArgument(
         'pcd_path',
         description='PCD map file full path.'
     )
+    declare_rviz_path = DeclareLaunchArgument(
+        'rviz_path', default_value=os.path.join(get_package_share_directory('g1_slam'), 'rviz', 'pcd_viz.rviz'),
+        description='RViz file full path.'
+    )
 
     ld.add_action(declare_pcd_path)
+    ld.add_action(declare_rviz_path)
 
 
     pcd_to_pointcloud = Node(
