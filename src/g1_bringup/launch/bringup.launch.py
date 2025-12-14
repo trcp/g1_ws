@@ -16,6 +16,7 @@ def generate_launch_description():
 
     # configurations
     ptl_params = LaunchConfiguration('ptl_params')
+    camera_params = LaunchConfiguration('camera_params')
     start_message = LaunchConfiguration('start_message')
 
 
@@ -28,9 +29,14 @@ def generate_launch_description():
         'ptl_params', default_value=os.path.join(get_package_share_directory('g1_slam'), 'param', 'ptl.yaml'),
         description='Full path for 2d png map'
     )
+    declare_camera_params = DeclareLaunchArgument(
+        'camera_params', default_value=os.path.join(get_package_share_directory('g1_bringup'), 'params', 'd455.yaml'),
+        description='Full path for 2d png map'
+    )
 
     ld.add_action(declare_start_message)
     ld.add_action(declare_ptl_params)
+    ld.add_action(declare_camera_params)
 
 
     # nodes
@@ -79,6 +85,17 @@ def generate_launch_description():
     ld.add_action(head_joints)
 
 
+    # TF: base_link -> pelvis
+    base_link_to_pelvis =  Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        arguments=["0", "0", "0", "0", "0", "0", "base_link", "pelvis"],
+        output="screen"
+    )
+
+    ld.add_action(base_link_to_pelvis)
+
+
     pointcloud_to_laserscan = Node(
         package='pointcloud_to_laserscan',
         executable='pointcloud_to_laserscan_node',
@@ -105,7 +122,10 @@ def generate_launch_description():
                 get_package_share_directory('nakalab_realsense'),
                 'launch', 'd455_launch.py'
             )
-        ])
+        ]),
+        launch_arguments = {
+            'params_file' : camera_params
+        }.items()
     )
     # LiDAR センサーを起動する
     lidar = IncludeLaunchDescription(
@@ -154,6 +174,31 @@ def generate_launch_description():
     )
 
     ld.add_action(speech_handler)
+
+
+    # 起動時に頭部カメラ初期位置に戻す
+    start_init_head_cam_pose_cmd = ExecuteProcess(
+        cmd=[
+            'ros2', 'service', 'call',
+            '/move_servo',
+            'g1_srvs/srv/MoveServo',
+            ['{pan: 0.0, tilt: 0.0}']
+        ],
+        output='screen'
+    )
+    init_head_cam_pose_handler = RegisterEventHandler(
+        event_handler=OnProcessStart(
+            target_action=audio_client,
+            on_start=[
+                TimerAction(
+                    period=5.0,
+                    actions=[start_init_head_cam_pose_cmd]
+                )
+            ]
+        )
+    )
+
+    ld.add_action(init_head_cam_pose_handler)
 
 
     # send launch description to ROS2
