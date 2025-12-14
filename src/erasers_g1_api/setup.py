@@ -44,7 +44,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'sample_tts = samples.sample_tts:main'
+            'sample_tts = samples.sample_tts:main',
+            'sample_head_control = samples.sample_head_control:main'
         ],
     },
 )
