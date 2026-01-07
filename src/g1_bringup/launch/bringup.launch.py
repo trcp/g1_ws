@@ -182,7 +182,7 @@ def generate_launch_description():
             'ros2', 'service', 'call',
             '/move_servo',
             'g1_srvs/srv/MoveServo',
-            ['{pan: 0.0, tilt: 0.0}']
+            ['{pan: 0.0, tilt: 0.5}']
         ],
         output='screen'
     )
