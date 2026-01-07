@@ -56,6 +56,10 @@ RUN apt-get update && apt-get install -y \
      python3-pil.imagetk &&\
     rm -rf /var/lib/apt/lists/*
 
+# install pyserial
+USER $USERNAME
+RUN pip install pyserial
+
 # build workspace
 USER $USERNAME
 WORKDIR /home/${USERNAME}/colcon_ws
