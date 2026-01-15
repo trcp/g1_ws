@@ -38,8 +38,8 @@ services:
         - USERNAME=${USER}
         - GROUPNAME=${USER}
     <<: *preferences
-    #command: "/bin/bash -ci \" ros2 launch g1_bringup bringup.launch.py\""
-    command: "/bin/bash"
+    command: "/bin/bash -ci \" ros2 launch g1_bringup bringup.launch.py\""
+    #command: "/bin/bash"
 
   devel:
     container_name: devel
