@@ -14,9 +14,15 @@ find_package(unitree_go REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(urdf REQUIRED)
 find_package(g1_srvs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(interactive_markers REQUIRED)
+find_package(kdl_parser REQUIRED)
+find_package(orocos_kdl_vendor REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(tf2_kdl REQUIRED)
 
 
 # cmd_vel
@@ -93,6 +99,41 @@ ament_target_dependencies(audio_client
     g1_srvs
 )
 
+# arm_joint_control
+add_executable(arm_joint_control src/arm_joint_control.cpp)
+target_include_directories(arm_joint_control PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(arm_joint_control
+    rclcpp
+    unitree_hg
+    unitree_api
+    sensor_msgs
+    urdf
+)
+
+# arm_endeffector_control
+add_executable(arm_endeffector_control src/arm_endeffector_control.cpp)
+target_include_directories(arm_endeffector_control PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(arm_endeffector_control
+  rclcpp
+  unitree_hg
+  unitree_api
+  sensor_msgs
+  urdf
+  interactive_markers
+  kdl_parser
+  orocos_kdl_vendor
+  tf2_geometry_msgs
+  tf2_kdl
+  tf2_ros
+  tf2
+)
+
 
 install(TARGETS
   cmd_vel
@@ -103,6 +144,8 @@ install(TARGETS
   scan_relay
   pcd_map_qos_connv
   audio_client
+  arm_joint_control
+  arm_endeffector_control
   DESTINATION lib/${PROJECT_NAME}
 )
 install(

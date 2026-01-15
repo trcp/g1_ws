@@ -13,8 +13,14 @@
   <depend>unitree_hg</depend>
   <depend>unitree_go</depend>
   <depend>geometry_msgs</depend>
+  <depend>urdf</depend>
 
   <depend>g1_srvs</depend>
+  <depend>interactive_markers</depend>
+  <depend>kdl_parser</depend>
+  <depend>orocos_kdl_vendor</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>tf2_kdl</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
