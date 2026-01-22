@@ -40,3 +40,11 @@
 ```bash
 docker compose up -d erasers_g1 && docker compose exec erasers_g1 bash
 ```
+
+### アームジョイント制御
+```bash
+ros2 run joint_state_publisher_gui joint_state_publisher_gui --ros-args -r __node:=joint_state_publisher_gui -r /joint_states:=/upper_joints_control
+```
+```bash
+docker compose exec erasers_g1 bash -ic "ros2 run joint_state_publisher_gui joint_state_publisher_gui --ros-args -r __node:=joint_state_publisher_gui -r /joint_states:=/upper_joints_control"
+```
