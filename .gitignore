@@ -6,3 +6,5 @@ rosbag/*
 !rosbag/.gitkeepe
 map/*
 !map/.gitkeep
+
+.devcontainer
