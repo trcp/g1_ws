@@ -76,13 +76,27 @@ def generate_launch_description():
         executable='audio_client',
         emulate_tty=True
     )
+    # ジョイント制御
+    arm_joint_control = Node(
+        package='erasers_g1_common_cpp',
+        executable='arm_joint_control',
+        emulate_tty=True
+    )
+    # 緊急停止
+    emergency_stop = Node(
+        package='erasers_g1_common_cpp',
+        executable='emergency_stop',
+        emulate_tty=True
+    )
 
     ld.add_action(loco_service_client)
     ld.add_action(audio_client)
     ld.add_action(imu_publisher)
     ld.add_action(odom_publisher)
-    ld.add_action(cmd_vel)
+    #ld.add_action(cmd_vel)
     ld.add_action(head_joints)
+    ld.add_action(arm_joint_control)
+    ld.add_action(emergency_stop)
 
 
     # TF: base_link -> pelvis
@@ -182,7 +196,7 @@ def generate_launch_description():
             'ros2', 'service', 'call',
             '/move_servo',
             'g1_srvs/srv/MoveServo',
-            ['{pan: 0.0, tilt: 0.5}']
+            ['{pan: 0.0, tilt: 0.0}']
         ],
         output='screen'
     )
