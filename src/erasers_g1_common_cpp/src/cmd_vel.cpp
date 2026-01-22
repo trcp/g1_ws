@@ -18,7 +18,7 @@ class CmdVelSubscriberNode : public rclcpp::Node {
       : Node("g1_cmd_vel_subscriber_node"),
         client_(this), 
         last_cmd_vel_received_time_(this->now()),
-        watchdog_timeout_(500ms) // 0.5秒間 cmd_vel が来なければ停止
+        watchdog_timeout_(100ms) // 0.1秒間 cmd_vel が来なければ停止
   {
     // --- 重要: コールバックグループの設定 ---
     
@@ -109,18 +109,40 @@ class CmdVelSubscriberNode : public rclcpp::Node {
       }
     } else {
       // 通常走行時
-      // 速度がほぼゼロの場合も Move(0,0,0) を送り続ける（SwitchMoveMode=true なので安全）
-      if (std::abs(vx) < 0.01 && std::abs(vy) < 0.01 && std::abs(omega) < 0.01) {
-         ret = client_.Move(0.0, 0.0, 0.0);
-         // Move(0,0,0) が成功すれば停止状態とみなす
-         if (ret == 0) is_stopped_ = true; 
-      } else {
-         ret = client_.Move(vx, vy, omega);
-         is_stopped_ = false;
-      }
+      // 最適化: 値が変化した時、または一定時間(Heartbeat)経過した時のみ送信する
+      
+      bool value_changed = (std::abs(vx - last_sent_vx_) > 0.001f) ||
+                           (std::abs(vy - last_sent_vy_) > 0.001f) ||
+                           (std::abs(omega - last_sent_omega_) > 0.001f);
+      
+      auto now = this->now();
+      bool heartbeat_needed = (now - last_api_call_time_) > 200ms; // 5Hz Heartbeat
 
-      if (ret != 0) {
-        RCLCPP_WARN(this->get_logger(), "Move API Call failed: %d", ret);
+      if (value_changed || heartbeat_needed) {
+          bool is_zero_cmd = (std::abs(vx) < 0.01f && std::abs(vy) < 0.01f && std::abs(omega) < 0.01f);
+          
+          if (is_zero_cmd) {
+             // 確実にゼロを送る
+             ret = client_.Move(0.0, 0.0, 0.0);
+             if (ret == 0) is_stopped_ = true;
+             
+             // 前回値を0更新
+             last_sent_vx_ = 0.0f; last_sent_vy_ = 0.0f; last_sent_omega_ = 0.0f;
+          } else {
+             ret = client_.Move(vx, vy, omega);
+             is_stopped_ = false;
+             
+             // 成功時のみ前回値を更新することで、失敗時に再送を促す
+             if (ret == 0) {
+                 last_sent_vx_ = vx; last_sent_vy_ = vy; last_sent_omega_ = omega;
+             }
+          }
+
+          last_api_call_time_ = now;
+
+          if (ret != 0) {
+            RCLCPP_WARN(this->get_logger(), "Move API Call failed: %d", ret);
+          }
       }
     }
   }
@@ -142,6 +164,12 @@ class CmdVelSubscriberNode : public rclcpp::Node {
   rclcpp::Time last_cmd_vel_received_time_;
   rclcpp::Duration watchdog_timeout_;
   bool is_stopped_{true};
+  
+  // 送信最適化用
+  float last_sent_vx_{0.0f};
+  float last_sent_vy_{0.0f};
+  float last_sent_omega_{0.0f};
+  rclcpp::Time last_api_call_time_{0, 0, RCL_ROS_TIME};
 };
 
 int main(int argc, char* argv[]) {

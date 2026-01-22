@@ -10,6 +10,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(unitree_api REQUIRED)
 find_package(unitree_hg REQUIRED)
+find_package(ros_environment REQUIRED)
+
 find_package(unitree_go REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -19,10 +21,18 @@ find_package(g1_srvs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(interactive_markers REQUIRED)
-find_package(kdl_parser REQUIRED)
-find_package(orocos_kdl_vendor REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
-find_package(tf2_kdl REQUIRED)
+find_package(ros_environment REQUIRED)
+find_package(pinocchio QUIET)
+
+if(NOT pinocchio_FOUND)
+  message(STATUS "Pinocchio not found via find_package, trying standard paths...")
+  set(PINOCCHIO_INCLUDE_DIRS /opt/ros/humble/include /usr/include/eigen3)
+  set(PINOCCHIO_LIBRARIES pinocchio)
+else()
+  message(STATUS "Found Pinocchio: ${pinocchio_VERSION}")
+endif()
+
 
 
 # cmd_vel
@@ -119,21 +129,36 @@ target_include_directories(arm_endeffector_control PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
+target_include_directories(arm_endeffector_control PUBLIC
+  ${PINOCCHIO_INCLUDE_DIRS}
+)
+
+target_link_libraries(arm_endeffector_control
+  ${PINOCCHIO_LIBRARIES}
+)
+
 ament_target_dependencies(arm_endeffector_control
   rclcpp
-  unitree_hg
+  unitree_go
   unitree_api
+  unitree_hg
   sensor_msgs
   urdf
   interactive_markers
-  kdl_parser
-  orocos_kdl_vendor
   tf2_geometry_msgs
-  tf2_kdl
   tf2_ros
   tf2
 )
 
+
+
+# emergency_stop
+add_executable(emergency_stop src/emergency_stop.cpp)
+ament_target_dependencies(emergency_stop
+    rclcpp
+    unitree_go
+    g1_srvs
+)
 
 install(TARGETS
   cmd_vel
@@ -146,6 +171,7 @@ install(TARGETS
   audio_client
   arm_joint_control
   arm_endeffector_control
+  emergency_stop
   DESTINATION lib/${PROJECT_NAME}
 )
 install(

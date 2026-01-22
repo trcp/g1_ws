@@ -21,6 +21,7 @@
   <depend>orocos_kdl_vendor</depend>
   <depend>tf2_geometry_msgs</depend>
   <depend>tf2_kdl</depend>
+  <depend>pinocchio</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

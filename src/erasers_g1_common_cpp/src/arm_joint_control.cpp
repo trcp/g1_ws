@@ -30,6 +30,13 @@ public:
     max_joint_velocity_ = this->get_parameter("max_joint_velocity").as_double();
     control_dt_ = 1.0 / control_frequency_;
 
+    // Fade parameters
+    this->declare_parameter("timeout_duration", 0.5);
+    this->declare_parameter("fade_duration", 1.0);
+    timeout_duration_ = this->get_parameter("timeout_duration").as_double();
+    fade_duration_ = this->get_parameter("fade_duration").as_double();
+    last_topic_time_ = this->now() - rclcpp::Duration::from_seconds(timeout_duration_ * 2); // Start inactive
+
     // Load URDF
     urdf::Model model;
     if (!model.initFile(urdf_file))
@@ -49,7 +56,7 @@ public:
 
     // Subscriber for JointState (Control target)
     joint_target_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
-      "/arm_joint_control", 10,
+      "/upper_joints_control", 10,
       std::bind(&ArmJointControl::jointStateCallback, this, std::placeholders::_1));
 
     // Timer for control loop
@@ -108,6 +115,8 @@ private:
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
     if (!initialized_) return; // Don't accept targets until initialized
+    
+    last_topic_time_ = this->now();
 
     for (size_t i = 0; i < msg->name.size(); ++i)
     {
@@ -167,12 +176,40 @@ private:
         }
     }
 
-    if (has_active_joints)
+    // Fade logic
+    double time_since_topic = (this->now() - last_topic_time_).seconds();
+    bool is_topic_active = time_since_topic < timeout_duration_;
+    double fade_step = control_dt_ / fade_duration_;
+
+    if (is_topic_active && !prev_topic_active_) {
+        RCLCPP_INFO(this->get_logger(), "Arm control: Topic received. Starting Fade-in.");
+    } else if (!is_topic_active && prev_topic_active_) {
+        RCLCPP_INFO(this->get_logger(), "Arm control: Topic timeout. Starting Fade-out.");
+    }
+
+    if (is_topic_active) {
+        control_weight_ += fade_step;
+    } else {
+        control_weight_ -= fade_step;
+    }
+    control_weight_ = std::clamp(control_weight_, 0.0, 1.0);
+
+    if (has_active_joints && (control_weight_ > 0.0 || (control_weight_ == 0.0 && prev_control_weight_ > 0.0)))
     {
         // Set control flag for Arm SDK
-        cmd.motor_cmd[static_cast<int>(G1Arm5JointIndex::NOT_USED_JOINT)].q = 1.0F; 
+        cmd.motor_cmd[static_cast<int>(G1Arm5JointIndex::NOT_USED_JOINT)].q = static_cast<float>(control_weight_); 
         pub_->publish(cmd);
     }
+    
+    if (control_weight_ == 0.0 && prev_control_weight_ > 0.0) {
+         RCLCPP_INFO(this->get_logger(), "Arm control: Released (Weight 0.0).");
+    }
+    if (control_weight_ == 1.0 && prev_control_weight_ < 1.0) {
+         RCLCPP_INFO(this->get_logger(), "Arm control: Fully Active (Weight 1.0).");
+    }
+
+    prev_control_weight_ = control_weight_;
+    prev_topic_active_ = is_topic_active;
   }
 
   rclcpp::Publisher<LowCmd>::SharedPtr pub_;
@@ -189,6 +226,14 @@ private:
   double control_frequency_;
   double control_dt_;
   double max_joint_velocity_;
+
+  // Fade control variables
+  double timeout_duration_;
+  double fade_duration_;
+  double control_weight_ = 0.0;
+  double prev_control_weight_ = 0.0;
+  bool prev_topic_active_ = false;
+  rclcpp::Time last_topic_time_;
 };
 
 int main(int argc, char **argv)
