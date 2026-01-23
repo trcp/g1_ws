@@ -17,6 +17,7 @@
   <depend>erasers_g1_api</depend>
   <depend>g1_description</depend>
   <depend>g1_bringup</depend>
+  <depend>g1_cartographer</depend>
   <depend>g1_slam</depend>
   <depend>head_servo_controller</depend>
 
