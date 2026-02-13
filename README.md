@@ -1,4 +1,4 @@
-# G1_ws
+# g1_ws
 
 ## G1 と接続する方法
 1. G1 と PC を Ethernet で接続する

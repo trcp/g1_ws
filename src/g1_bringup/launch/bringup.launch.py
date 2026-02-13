@@ -26,7 +26,7 @@ def generate_launch_description():
         description='Bringup robot message.'
     )
     declare_ptl_params = DeclareLaunchArgument(
-        'ptl_params', default_value=os.path.join(get_package_share_directory('g1_slam'), 'param', 'ptl.yaml'),
+        'ptl_params', default_value=os.path.join(get_package_share_directory('g1_bringup'), 'params', 'ptl.yaml'),
         description='Full path for 2d png map'
     )
     declare_camera_params = DeclareLaunchArgument(
@@ -100,20 +100,20 @@ def generate_launch_description():
 
 
     # TF: base_link -> pelvis
-    base_link_to_pelvis =  Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        arguments=["0", "0", "0", "0", "0", "0", "base_link", "pelvis"],
-        output="screen"
-    )
+    # base_link_to_pelvis =  Node(
+    #     package="tf2_ros",
+    #     executable="static_transform_publisher",
+    #     arguments=["0", "0", "0", "0", "0", "0", "base_link", "pelvis"],
+    #     output="screen"
+    # )
 
-    ld.add_action(base_link_to_pelvis)
+    # ld.add_action(base_link_to_pelvis)
 
 
     pointcloud_to_laserscan = Node(
         package='pointcloud_to_laserscan',
         executable='pointcloud_to_laserscan_node',
-        name='pointcloud_to_laserscan_node',
+        name='pointcloud_to_laserscan',
         emulate_tty=True,
         parameters=[
             ptl_params,

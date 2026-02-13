@@ -19,12 +19,17 @@ import os
 def generate_launch_description():
     ld = LaunchDescription()
 
-    ptl_params = os.path.join(get_package_share_directory('g1_bringup'), 'params', 'ptl.yaml')
+    default_g1_cartographer_prefix = get_package_share_directory('g1_cartographer')
+    pointcloud_to_laserscan_config = os.path.join(default_g1_cartographer_prefix, 'config', 'pointcloud_to_laserscan.yaml')
+    default_map_path = os.path.join(os.environ['HOME'], 'colcon_ws', 'map')
+    default_map_name = 'map'
+    default_save_late = 5000
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_lifecycle = LaunchConfiguration('use_lifecycle')
     autostart = LaunchConfiguration('autostart')
     params_file = LaunchConfiguration('params_file')
+    map_path = LaunchConfiguration('map_path')
     map_name = LaunchConfiguration('map_name')
     map_save_late = LaunchConfiguration('map_save_late')
     
@@ -49,21 +54,24 @@ def generate_launch_description():
         default_value=os.path.join(get_package_share_directory('g1_cartographer'), 'params', 'slam_toolbox.yaml'),
         description='slam_toolbox parameters file'
     )
+    declare_map_path = DeclareLaunchArgument(
+        'map_path', default_value=default_map_path,
+        description='Path to save the map'
+    )
     declare_map_name = DeclareLaunchArgument(
-        'map_name',
-        default_value='running_map',
-        description='Map name'
+        'map_name', default_value=default_map_name,
+        description='Name of the map'
     )
     declare_map_save_late = DeclareLaunchArgument(
-        'map_save_late',
-        default_value='5',
-        description='Map save late'
+        'map_save_late', default_value=str(default_save_late),
+        description='Delay in milliseconds before saving the map'
     )
     
     ld.add_action(declare_use_sim_time)
     ld.add_action(declare_use_lifecycle)
     ld.add_action(declare_autostart)
     ld.add_action(declare_params_file)
+    ld.add_action(declare_map_path)
     ld.add_action(declare_map_name)
     ld.add_action(declare_map_save_late)
     
@@ -79,7 +87,7 @@ def generate_launch_description():
         name='pointcloud_to_laserscan',
         emulate_tty=True,
         parameters=[
-            ptl_params,
+            pointcloud_to_laserscan_config,
             {'use_sim_time': False},
         ],
         remappings=[
@@ -90,11 +98,12 @@ def generate_launch_description():
 
     map_saver = Node(
         package='g1_cartographer',
-        executable='map_saver',
-        name='map_saver',
+        executable='auto_map_saver',
+        name='auto_map_saver',
         emulate_tty=True,
         output='screen',
         parameters=[
+            {'map_path': map_path},
             {'map_name': map_name},
             {'save_late': map_save_late}
         ],

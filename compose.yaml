@@ -21,7 +21,7 @@ x-preferences: &preferences
     - $HOME/cyclonedds_ws/cyclonedds.xml:$HOME/cyclonedds.xml
     # timezone
     - /etc/localtime:/etc/localtime:ro
-  
+
 # ---------------------------------------------------------------
 services:
   erasers_g1:
@@ -38,7 +38,7 @@ services:
         - USERNAME=${USER}
         - GROUPNAME=${USER}
     <<: *preferences
-    command: "/bin/bash -ci \" ros2 launch g1_bringup bringup.launch.py\""
+    command: '/bin/bash -ci " ros2 launch g1_bringup bringup.launch.py"'
     #command: "/bin/bash"
 
   devel:
@@ -58,4 +58,4 @@ services:
     environment:
       - DISPLAY
       - ROS_DOMAIN_ID=100
-    command: "/bin/bash -ic \"rviz2 -d $(ros2 pkg prefix --share g1_description)/rviz/g1.rviz\""
+    command: '/bin/bash -ic "rviz2 -d $(ros2 pkg prefix --share g1_description)/rviz/g1.rviz"'

@@ -8,3 +8,5 @@ map/*
 !map/.gitkeep
 
 .devcontainer
+
+.antigravity

@@ -8,6 +8,7 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(cartographer_ros_msgs REQUIRED)
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
@@ -15,14 +16,19 @@ find_package(rclcpp REQUIRED)
 install(DIRECTORY
   launch
   params
+  config
   DESTINATION share/${PROJECT_NAME}/
 )
 
 add_executable(map_saver src/map_saver.cpp)
 ament_target_dependencies(map_saver rclcpp)
 
+add_executable(auto_map_saver src/auto_map_saver.cpp)
+ament_target_dependencies(auto_map_saver rclcpp cartographer_ros_msgs)
+
 install(TARGETS
   map_saver
+  auto_map_saver
   DESTINATION lib/${PROJECT_NAME}
 )
 
