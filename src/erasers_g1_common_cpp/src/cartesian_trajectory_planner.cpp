@@ -127,9 +127,15 @@ private:
           return;
       }
 
-      // Start Pose
-      Eigen::Vector3d p_start(t.transform.translation.x, t.transform.translation.y, t.transform.translation.z);
-      Eigen::Quaterniond q_start(t.transform.rotation.w, t.transform.rotation.x, t.transform.rotation.y, t.transform.rotation.z);
+      // Start Pose (Rubber hand joint frame)
+      Eigen::Vector3d p_hand(t.transform.translation.x, t.transform.translation.y, t.transform.translation.z);
+      Eigen::Quaterniond q_hand(t.transform.rotation.w, t.transform.rotation.x, t.transform.rotation.y, t.transform.rotation.z);
+
+      // The IK control node uses a 0.2m offset along the X axis for the end-effector (L_ee / R_ee).
+      // We must apply the same offset to get the true starting pose for the IK target.
+      Eigen::Vector3d offset(0.2, 0.0, 0.0);
+      Eigen::Vector3d p_start = p_hand + q_hand * offset;
+      Eigen::Quaterniond q_start = q_hand;
 
       // Goal Pose
       Eigen::Vector3d p_goal(goal->pose.pose.position.x, goal->pose.pose.position.y, goal->pose.pose.position.z);
