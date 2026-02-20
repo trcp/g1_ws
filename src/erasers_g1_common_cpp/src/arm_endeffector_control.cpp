@@ -16,6 +16,8 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "visualization_msgs/msg/marker.hpp"
 #include <interactive_markers/interactive_marker_server.hpp>
+#include "std_srvs/srv/set_bool.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 // Pinocchio
 #include <pinocchio/fwd.hpp>
@@ -71,6 +73,23 @@ public:
       this->get_node_services_interface()
     );
 
+    // Services
+    enable_srv_ = this->create_service<std_srvs::srv::SetBool>(
+      "/enable_ee_control", 
+      std::bind(&ArmEndEffectorControl::enableControlCallback, this, std::placeholders::_1, std::placeholders::_2));
+    
+    init_pose_srv_ = this->create_service<std_srvs::srv::Trigger>(
+      "/set_init_pose", 
+      std::bind(&ArmEndEffectorControl::setInitPoseCallback, this, std::placeholders::_1, std::placeholders::_2));
+
+    dual_arm_srv_ = this->create_service<std_srvs::srv::SetBool>(
+      "/enable_dual_arm_ik", 
+      std::bind(&ArmEndEffectorControl::enableDualArmIKCallback, this, std::placeholders::_1, std::placeholders::_2));
+
+    sync_ee_srv_ = this->create_service<std_srvs::srv::SetBool>(
+      "/sync_ee_pose", 
+      std::bind(&ArmEndEffectorControl::syncEEPoseCallback, this, std::placeholders::_1, std::placeholders::_2));
+
     // Create interactive markers based on FK poses
     make6DofMarker("left", targets_["left"].position, targets_["left"].orientation);
     make6DofMarker("right", targets_["right"].position, targets_["right"].orientation);
@@ -78,13 +97,24 @@ public:
   }
 
 private:
+  bool is_enabled_ = false; 
+  bool dual_arm_ik_enabled_ = false;
+  bool ee_sync_enabled_ = false;
+  pinocchio::SE3 T_left_to_right_; // Relative transform for synchronization
+
   std::shared_ptr<interactive_markers::InteractiveMarkerServer> im_server_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr enable_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr init_pose_srv_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr dual_arm_srv_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr sync_ee_srv_;
   pinocchio::Model model_full_, model_;
   pinocchio::Data data_full_, data_;
   Eigen::VectorXd q_current_full_; 
   Eigen::VectorXd q_solution_; // Commanded state
   Eigen::VectorXd q_measured_; // Measured state
   Eigen::VectorXd q_last_solve_; // For smoothness cost
+  Eigen::VectorXd q_last_publish_; // For velocity calculation
+  bool was_interacting_ = false;
   
   std::vector<std::string> locked_joints_;
   std::vector<std::string> active_joint_names_;
@@ -158,6 +188,7 @@ private:
       q_solution_ = pinocchio::neutral(model_);
       q_measured_ = pinocchio::neutral(model_);
       q_last_solve_ = q_solution_;
+      q_last_publish_ = q_solution_;
       q_current_full_ = pinocchio::neutral(model_full_);
 
       // Add Offset Frames (0.2m x) relative to wrist_roll_joint
@@ -214,6 +245,7 @@ private:
       std::lock_guard<std::mutex> lock(arm_mutex_);
       
       std::string side = (feedback->marker_name == "left_ee_marker") ? "left" : "right";
+      std::string other = (side == "left") ? "right" : "left";
       
       targets_[side].position << feedback->pose.position.x, feedback->pose.position.y, feedback->pose.position.z;
       targets_[side].orientation = Eigen::Quaterniond(
@@ -223,11 +255,35 @@ private:
           feedback->pose.orientation.z
       );
       targets_[side].is_interacting = true;
+
+      if (ee_sync_enabled_) {
+          pinocchio::SE3 T_master(targets_[side].orientation, targets_[side].position);
+          pinocchio::SE3 T_slave;
+          if (side == "left") {
+              T_slave = T_master * T_left_to_right_;
+          } else {
+              T_slave = T_master * T_left_to_right_.inverse();
+          }
+          
+          targets_[other].position = T_slave.translation();
+          targets_[other].orientation = Eigen::Quaterniond(T_slave.rotation());
+          targets_[other].is_interacting = true;
+          
+          geometry_msgs::msg::Pose sp;
+          sp.position.x = targets_[other].position.x(); sp.position.y = targets_[other].position.y(); sp.position.z = targets_[other].position.z();
+          sp.orientation.w = targets_[other].orientation.w(); sp.orientation.x = targets_[other].orientation.x();
+          sp.orientation.y = targets_[other].orientation.y(); sp.orientation.z = targets_[other].orientation.z();
+          im_server_->setPose(other + "_ee_marker", sp);
+      } else if (!dual_arm_ik_enabled_) {
+          targets_[other].is_interacting = false;
+      }
+      
+      im_server_->applyChanges();
   }
 
   void make6DofMarker(const std::string& side, const Eigen::Vector3d& pos, const Eigen::Quaterniond& ori) {
       visualization_msgs::msg::InteractiveMarker int_marker;
-      int_marker.header.frame_id = "pelvis";
+      int_marker.header.frame_id = "base_link";
       int_marker.name = side + "_ee_marker";
       int_marker.description = "Control " + side + " Arm EE";
       int_marker.scale = 0.15;
@@ -264,11 +320,108 @@ private:
       im_server_->insert(int_marker, std::bind(&ArmEndEffectorControl::processFeedback, this, std::placeholders::_1));
   }
 
+  void enableControlCallback(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+                             std::shared_ptr<std_srvs::srv::SetBool::Response> response) 
+  {
+      std::lock_guard<std::mutex> lock(arm_mutex_);
+      is_enabled_ = request->data;
+      response->success = true;
+      response->message = is_enabled_ ? "End-effector control enabled." : "End-effector control disabled.";
+      RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
+  }
+
+  void setInitPoseCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+                           std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+  {
+      std::lock_guard<std::mutex> lock(arm_mutex_);
+      
+      // Reset solution to neutral (all joints 0 for the active part)
+      q_solution_ = pinocchio::neutral(model_);
+      q_last_solve_ = q_solution_;
+      
+      // Sync targets to this neutral position
+      updateTargetFromFK("left");
+      updateTargetFromFK("right");
+      
+      // Update Markers
+      geometry_msgs::msg::Pose lp, rp;
+      pinocchio::SE3 left_pose = data_.oMf[left_ee_frame_id_];
+      pinocchio::SE3 right_pose = data_.oMf[right_ee_frame_id_];
+      
+      lp.position.x = left_pose.translation().x(); lp.position.y = left_pose.translation().y(); lp.position.z = left_pose.translation().z();
+      Eigen::Quaterniond lq(left_pose.rotation()); lp.orientation.w = lq.w(); lp.orientation.x = lq.x(); lp.orientation.y = lq.y(); lp.orientation.z = lq.z();
+      
+      rp.position.x = right_pose.translation().x(); rp.position.y = right_pose.translation().y(); rp.position.z = right_pose.translation().z();
+      Eigen::Quaterniond rq(right_pose.rotation()); rp.orientation.w = rq.w(); rp.orientation.x = rq.x(); rp.orientation.y = rq.y(); rp.orientation.z = rq.z();
+      
+      im_server_->setPose("left_ee_marker", lp);
+      im_server_->setPose("right_ee_marker", rp);
+      im_server_->applyChanges();
+
+      response->success = true;
+      response->message = "Upper body joints reset to initial zero pose.";
+      RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
+  }
+
+  void enableDualArmIKCallback(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+                               std::shared_ptr<std_srvs::srv::SetBool::Response> response)
+  {
+      std::lock_guard<std::mutex> lock(arm_mutex_);
+      dual_arm_ik_enabled_ = request->data;
+      response->success = true;
+      response->message = dual_arm_ik_enabled_ ? "Dual-arm strict IK mode enabled." : "Single-arm priority mode enabled.";
+      RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
+  }
+
+  void syncEEPoseCallback(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+                          std::shared_ptr<std_srvs::srv::SetBool::Response> response)
+  {
+      std::lock_guard<std::mutex> lock(arm_mutex_);
+      ee_sync_enabled_ = request->data;
+      
+      if (ee_sync_enabled_) {
+          // Calculate relative transform T_left_to_right
+          pinocchio::framesForwardKinematics(model_, data_, q_solution_);
+          pinocchio::SE3 left_pose = data_.oMf[left_ee_frame_id_];
+          pinocchio::SE3 right_pose = data_.oMf[right_ee_frame_id_];
+          
+          T_left_to_right_ = left_pose.inverse() * right_pose;
+          
+          response->message = "EE Pose synchronization enabled. Fixed relative transform captured.";
+      } else {
+          response->message = "EE Pose synchronization disabled.";
+      }
+      
+      response->success = true;
+      RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
+  }
+
   void leftPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
       std::lock_guard<std::mutex> lock(arm_mutex_);
       targets_["left"].position << msg->pose.position.x, msg->pose.position.y, msg->pose.position.z;
       targets_["left"].orientation = Eigen::Quaterniond(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
       targets_["left"].is_interacting = true;
+      
+      if (ee_sync_enabled_) {
+          // Calculate master pose
+          pinocchio::SE3 T_left(targets_["left"].orientation, targets_["left"].position);
+          // Calculate slave pose
+          pinocchio::SE3 T_right = T_left * T_left_to_right_;
+          
+          targets_["right"].position = T_right.translation();
+          targets_["right"].orientation = Eigen::Quaterniond(T_right.rotation());
+          targets_["right"].is_interacting = true;
+          
+          // Update right marker
+          geometry_msgs::msg::Pose rp;
+          rp.position.x = targets_["right"].position.x(); rp.position.y = targets_["right"].position.y(); rp.position.z = targets_["right"].position.z();
+          rp.orientation.w = targets_["right"].orientation.w(); rp.orientation.x = targets_["right"].orientation.x();
+          rp.orientation.y = targets_["right"].orientation.y(); rp.orientation.z = targets_["right"].orientation.z();
+          im_server_->setPose("right_ee_marker", rp);
+      } else if (!dual_arm_ik_enabled_) {
+          // In single priority mode, disable interaction for the other arm if just this one moved
+          targets_["right"].is_interacting = false;
+      }
       
       // Update interactive marker to match Topic input
       im_server_->setPose("left_ee_marker", msg->pose);
@@ -280,6 +433,25 @@ private:
       targets_["right"].position << msg->pose.position.x, msg->pose.position.y, msg->pose.position.z;
       targets_["right"].orientation = Eigen::Quaterniond(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
       targets_["right"].is_interacting = true;
+      
+      if (ee_sync_enabled_) {
+          // Inverse of sync: right is master
+          pinocchio::SE3 T_right(targets_["right"].orientation, targets_["right"].position);
+          pinocchio::SE3 T_left = T_right * T_left_to_right_.inverse();
+          
+          targets_["left"].position = T_left.translation();
+          targets_["left"].orientation = Eigen::Quaterniond(T_left.rotation());
+          targets_["left"].is_interacting = true;
+          
+          // Update left marker
+          geometry_msgs::msg::Pose lp;
+          lp.position.x = targets_["left"].position.x(); lp.position.y = targets_["left"].position.y(); lp.position.z = targets_["left"].position.z();
+          lp.orientation.w = targets_["left"].orientation.w(); lp.orientation.x = targets_["left"].orientation.x();
+          lp.orientation.y = targets_["left"].orientation.y(); lp.orientation.z = targets_["left"].orientation.z();
+          im_server_->setPose("left_ee_marker", lp);
+      } else if (!dual_arm_ik_enabled_) {
+          targets_["left"].is_interacting = false;
+      }
       
       // Update interactive marker to match Topic input
       im_server_->setPose("right_ee_marker", msg->pose);
@@ -306,16 +478,37 @@ private:
   void timerCallback() {
       std::lock_guard<std::mutex> lock(arm_mutex_);
 
+      if (!is_enabled_) {
+          return;
+      }
+
       bool interacting_any = targets_["left"].is_interacting || targets_["right"].is_interacting;
       
       if (interacting_any) {
+          if (!was_interacting_) {
+              q_solution_ = q_measured_;
+              q_last_solve_ = q_solution_;
+              q_last_publish_ = q_solution_;
+          }
           solveIK();
-          publishJoints(q_solution_);
+          
+          Eigen::VectorXd q_vel = (q_solution_ - q_last_publish_) / 0.05; // dt = 50ms
+          publishJoints(q_solution_, q_vel);
+          
           q_last_solve_ = q_solution_; 
+          q_last_publish_ = q_solution_;
+          was_interacting_ = true;
       } else {
-          // HOLD POSE (Do not reset to zero)
-          // Just publish the last solution
-          publishJoints(q_solution_);
+          // HOLD POSE
+          if (was_interacting_) {
+              q_last_solve_ = q_solution_;
+              q_last_publish_ = q_solution_;
+          } else {
+              q_solution_ = q_measured_; // Sync
+          }
+          Eigen::VectorXd q_vel = Eigen::VectorXd::Zero(model_.nv);
+          publishJoints(q_solution_, q_vel);
+          was_interacting_ = false;
       }
   }
 
@@ -333,8 +526,13 @@ private:
           Eigen::VectorXd grad = Eigen::VectorXd::Zero(model_.nv);
           Eigen::MatrixXd hess = Eigen::MatrixXd::Zero(model_.nv, model_.nv);
           
-          if (targets_["left"].is_interacting) addCost(left_ee_frame_id_, targets_["left"], grad, hess, clamp_p, clamp_r);
-          if (targets_["right"].is_interacting) addCost(right_ee_frame_id_, targets_["right"], grad, hess, clamp_p, clamp_r);
+          // Apply cost ONLY IF interacting, OR if dual_arm_ik_enabled is true
+          if (targets_["left"].is_interacting || dual_arm_ik_enabled_) {
+              addCost(left_ee_frame_id_, targets_["left"], grad, hess, clamp_p, clamp_r);
+          }
+          if (targets_["right"].is_interacting || dual_arm_ik_enabled_) {
+              addCost(right_ee_frame_id_, targets_["right"], grad, hess, clamp_p, clamp_r);
+          }
            
           // Regularization (pull towards neutral/0)
           grad += 0.02 * q_solution_;
@@ -380,7 +578,7 @@ private:
       hess += w_r * J.bottomRows(3).transpose() * J.bottomRows(3);
   }
   
-  void publishJoints(const Eigen::VectorXd& q) {
+  void publishJoints(const Eigen::VectorXd& q, const Eigen::VectorXd& q_vel) {
       if (q.size() != model_.nq) {
           RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "q size mismatch: %ld vs %d", q.size(), model_.nq);
           return;
@@ -396,10 +594,16 @@ private:
           if (model_.existJointName(active_joint_names_[k])) {
              pinocchio::JointIndex jid = model_.getJointId(active_joint_names_[k]);
              int q_idx = model_.joints[jid].idx_q();
+             int v_idx = model_.joints[jid].idx_v();
+             
              if (q_idx >= 0 && q_idx < q.size()) msg.position.push_back(q[q_idx]);
              else msg.position.push_back(0.0);
+             
+             if (v_idx >= 0 && v_idx < q_vel.size()) msg.velocity.push_back(q_vel[v_idx]);
+             else msg.velocity.push_back(0.0);
           } else {
              msg.position.push_back(0.0);
+             msg.velocity.push_back(0.0);
           }
       }
       joint_pub_->publish(msg);

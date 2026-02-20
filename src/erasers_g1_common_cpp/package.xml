@@ -16,6 +16,7 @@
   <depend>urdf</depend>
 
   <depend>g1_srvs</depend>
+  <depend>std_srvs</depend>
   <depend>interactive_markers</depend>
   <depend>kdl_parser</depend>
   <depend>orocos_kdl_vendor</depend>

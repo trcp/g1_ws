@@ -9,10 +9,14 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
+find_package(geometry_msgs REQUIRED)
+
 rosidl_generate_interfaces(${PROJECT_NAME}
   srvs/PosePolicy.srv
   srvs/AudioClient.srv
   srvs/MoveServo.srv
+  action/CartesianEE.action
+  DEPENDENCIES geometry_msgs action_msgs
 )
 ament_export_dependencies(rosidl_default_runtime)
 

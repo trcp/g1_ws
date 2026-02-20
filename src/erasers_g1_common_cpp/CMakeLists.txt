@@ -22,6 +22,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(interactive_markers REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(ros_environment REQUIRED)
 find_package(pinocchio QUIET)
 
@@ -144,6 +145,7 @@ ament_target_dependencies(arm_endeffector_control
   unitree_hg
   sensor_msgs
   urdf
+  std_srvs
   interactive_markers
   tf2_geometry_msgs
   tf2_ros
@@ -160,6 +162,22 @@ ament_target_dependencies(emergency_stop
     g1_srvs
 )
 
+# cartesian_trajectory_planner
+add_executable(cartesian_trajectory_planner src/cartesian_trajectory_planner.cpp)
+target_include_directories(cartesian_trajectory_planner PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${EIGEN3_INCLUDE_DIR}
+)
+ament_target_dependencies(cartesian_trajectory_planner 
+  rclcpp 
+  rclcpp_action
+  geometry_msgs 
+  tf2_ros 
+  tf2_geometry_msgs 
+  g1_srvs
+)
+
 install(TARGETS
   cmd_vel
   joint_state_publisher
@@ -172,6 +190,7 @@ install(TARGETS
   arm_joint_control
   arm_endeffector_control
   emergency_stop
+  cartesian_trajectory_planner
   DESTINATION lib/${PROJECT_NAME}
 )
 install(

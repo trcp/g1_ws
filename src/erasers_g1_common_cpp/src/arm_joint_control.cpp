@@ -126,6 +126,11 @@ private:
         if (motor_idx >= 0 && motor_idx < 35)
         {
             target_pos_[motor_idx] = msg->position[i];
+            if (i < msg->velocity.size()) {
+                target_vel_[motor_idx] = msg->velocity[i];
+            } else {
+                target_vel_[motor_idx] = 0.0;
+            }
         }
       }
     }
@@ -148,10 +153,18 @@ private:
         {
             double target = target_pos_[idx];
             double current = current_cmd_[idx];
+            double target_velocity = 0.0;
+            if (target_vel_.find(idx) != target_vel_.end()) {
+                target_velocity = target_vel_[idx];
+            }
 
             // Smooth interpolation (Ramping)
             double diff = target - current;
             double step = 0.0;
+
+            double max_delta = max_joint_velocity_ * control_dt_;
+            double expected_step_vel = std::abs(target_velocity * control_dt_) * 1.5; // allow some margin
+            max_delta = std::max(max_delta, expected_step_vel);
 
             if (std::abs(diff) > max_delta)
             {
@@ -167,7 +180,7 @@ private:
 
             // Populate command
             cmd.motor_cmd[idx].q = current;
-            cmd.motor_cmd[idx].dq = 0.0;
+            cmd.motor_cmd[idx].dq = target_velocity;
             cmd.motor_cmd[idx].kp = 60.0;
             cmd.motor_cmd[idx].kd = 1.5;
             cmd.motor_cmd[idx].tau = 0.0;
@@ -220,6 +233,7 @@ private:
   std::map<std::string, int> joint_map_;
   std::map<int, double> current_cmd_;
   std::map<int, double> target_pos_;
+  std::map<int, double> target_vel_;
   
   std::mutex data_mutex_;
   bool initialized_ = false;
