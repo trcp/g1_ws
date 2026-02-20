@@ -82,6 +82,18 @@ def generate_launch_description():
         executable='arm_joint_control',
         emulate_tty=True
     )
+    # Pinoccio IK
+    arm_endeffector_control = Node(
+        package='erasers_g1_common_cpp',
+        executable='arm_endeffector_control',
+        emulate_tty=True
+    )
+    # Cartesian trajectory planner
+    cartesian_trajectory_planner = Node(
+        package='erasers_g1_common_cpp',
+        executable='cartesian_trajectory_planner',
+        emulate_tty=True
+    )
     # 緊急停止
     emergency_stop = Node(
         package='erasers_g1_common_cpp',
@@ -96,6 +108,8 @@ def generate_launch_description():
     ld.add_action(cmd_vel)
     ld.add_action(head_joints)
     ld.add_action(arm_joint_control)
+    ld.add_action(arm_endeffector_control)
+    ld.add_action(cartesian_trajectory_planner)
     ld.add_action(emergency_stop)
 
 
