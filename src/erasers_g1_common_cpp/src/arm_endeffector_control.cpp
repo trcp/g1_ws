@@ -14,9 +14,8 @@
 #include "rclcpp/qos.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
-#include "interactive_markers/interactive_marker_server.hpp"
-#include "visualization_msgs/msg/interactive_marker.hpp"
-#include "visualization_msgs/msg/interactive_marker_control.hpp"
+#include "visualization_msgs/msg/marker.hpp"
+#include <interactive_markers/interactive_marker_server.hpp>
 
 // Pinocchio
 #include <pinocchio/fwd.hpp>
@@ -39,7 +38,11 @@ public:
     
     std::string urdf_path = this->get_parameter("urdf_path").as_string();
 
-    joint_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/arm_joint_control", 10);
+    if (!initPinocchio(urdf_path)) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to initialize Pinocchio model.");
+    }
+
+    joint_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/upper_joints_control", 10);
     
     rclcpp::QoS qos(10);
     qos.reliability(rclcpp::ReliabilityPolicy::BestEffort);
@@ -48,21 +51,34 @@ public:
       "/joint_states", qos, 
       std::bind(&ArmEndEffectorControl::jointStateCallback, this, std::placeholders::_1));
 
-    server_ = std::make_shared<interactive_markers::InteractiveMarkerServer>("g1_ee_control", this);
+    left_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+      "/left_arm/target_pose", 10,
+      std::bind(&ArmEndEffectorControl::leftPoseCallback, this, std::placeholders::_1));
 
-    if (!initPinocchio(urdf_path)) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to initialize Pinocchio model");
-        return;
-    }
-
-    createMarker("left");
-    createMarker("right");
-    server_->applyChanges();
+    right_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+      "/right_arm/target_pose", 10,
+      std::bind(&ArmEndEffectorControl::rightPoseCallback, this, std::placeholders::_1));
 
     timer_ = this->create_wall_timer(50ms, std::bind(&ArmEndEffectorControl::timerCallback, this));
+    
+    // Interactive Marker Server
+    im_server_ = std::make_shared<interactive_markers::InteractiveMarkerServer>(
+      "arm_endeffector_control",
+      this->get_node_base_interface(),
+      this->get_node_clock_interface(),
+      this->get_node_logging_interface(),
+      this->get_node_topics_interface(),
+      this->get_node_services_interface()
+    );
+
+    // Create interactive markers based on FK poses
+    make6DofMarker("left", targets_["left"].position, targets_["left"].orientation);
+    make6DofMarker("right", targets_["right"].position, targets_["right"].orientation);
+    im_server_->applyChanges();
   }
 
 private:
+  std::shared_ptr<interactive_markers::InteractiveMarkerServer> im_server_;
   pinocchio::Model model_full_, model_;
   pinocchio::Data data_full_, data_;
   Eigen::VectorXd q_current_full_; 
@@ -80,7 +96,8 @@ private:
   };
   std::map<std::string, ArmTarget> targets_;
 
-  std::shared_ptr<interactive_markers::InteractiveMarkerServer> server_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr left_pose_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr right_pose_sub_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -90,56 +107,40 @@ private:
 
   bool initPinocchio(const std::string& urdf_path) {
       try {
-          // Load URDF from file (using direct file path usually works with Pinocchio)
-          // If root inertia issues persist, Pinocchio usually handles them by adding a universe link, 
-          // or we can use the string patching method. 
-          // Given the KDL issue, let's use the patch to be safe and consistent with previous request.
+          // Load URDF using FreeFlyer to ensure a valid root joint and avoid fixed-base assertion errors in reduced models
           std::ifstream urdf_file(urdf_path);
           if (!urdf_file) {
              RCLCPP_ERROR(this->get_logger(), "File not found: %s", urdf_path.c_str());
              return false;
           }
-          std::stringstream buffer;
-          buffer << urdf_file.rdbuf();
-          std::string urdf_xml = buffer.str();
-
-          size_t pelvis_pos = urdf_xml.find("<link name=\"pelvis\">");
-          if (pelvis_pos != std::string::npos) {
-              size_t inertial_start = urdf_xml.find("<inertial>", pelvis_pos);
-              size_t link_end = urdf_xml.find("</link>", pelvis_pos);
-              if (inertial_start != std::string::npos && inertial_start < link_end) {
-                  size_t inertial_end = urdf_xml.find("</inertial>", inertial_start);
-                  if (inertial_end != std::string::npos) {
-                      urdf_xml.erase(inertial_start, inertial_end - inertial_start + 11);
-                      RCLCPP_INFO(this->get_logger(), "Patched URDF to remove root inertia");
-                  }
-              }
-          }
-
-          pinocchio::urdf::buildModelFromXML(urdf_xml, model_full_);
+          pinocchio::urdf::buildModel(urdf_path, pinocchio::JointModelFreeFlyer(), model_full_);
+          RCLCPP_INFO(this->get_logger(), "Pinocchio model initialized from %s", urdf_path.c_str());
       } catch (const std::exception& e) {
           RCLCPP_ERROR(this->get_logger(), "Pinocchio build exception: %s", e.what());
-           pinocchio::urdf::buildModel(urdf_path, model_full_);
+          // Fallback to fixed base if FreeFlyer fails
+          pinocchio::urdf::buildModel(urdf_path, model_full_);
       }
 
-      // Identify arm joints
+      // Identify active arm/waist joints and locked joints
       std::vector<std::string> allowed_keywords = {
+          "waist_yaw", "waist_roll", "waist_pitch",
+          "torso",
           "left_shoulder", "left_elbow", "left_wrist",
           "right_shoulder", "right_elbow", "right_wrist"
       };
 
       std::vector<pinocchio::JointIndex> joints_to_lock;
-      // Joint 1 is root
+      // Evaluate all joints (from 1 to njoints-1)
       for (pinocchio::JointIndex joint_id = 1; joint_id < model_full_.joints.size(); ++joint_id) {
           std::string name = model_full_.names[joint_id];
-          bool is_arm = false;
+          bool is_active = false;
           for (const auto& kw : allowed_keywords) {
               if (name.find(kw) != std::string::npos) {
-                  is_arm = true;
+                  is_active = true;
                   break;
               }
           }
-          if (!is_arm) {
+          if (!is_active) {
               joints_to_lock.push_back(joint_id);
               locked_joints_.push_back(name);
           } else {
@@ -147,10 +148,13 @@ private:
           }
       }
 
+      // For safety, let's keep neutral position references
       Eigen::VectorXd q_ref = pinocchio::neutral(model_full_);
-      model_ = pinocchio::buildReducedModel(model_full_, joints_to_lock, q_ref);
-      data_ = pinocchio::Data(model_);
       
+      // Build reduced model keeping only active joints
+      model_ = pinocchio::buildReducedModel(model_full_, joints_to_lock, q_ref);
+      
+      // Initialize states
       q_solution_ = pinocchio::neutral(model_);
       q_measured_ = pinocchio::neutral(model_);
       q_last_solve_ = q_solution_;
@@ -163,13 +167,20 @@ private:
       left_ee_frame_id_ = model_.getFrameId("L_ee");
       right_ee_frame_id_ = model_.getFrameId("R_ee");
 
+      // Verify the model and data consistency after addition
+      data_ = pinocchio::Data(model_);
+      if (!model_.check(data_)) {
+          RCLCPP_ERROR(this->get_logger(), "Model and Data consistency check failed after frame addition.");
+          return false;
+      }
+
       // Invalidate data to force update
       pinocchio::framesForwardKinematics(model_, data_, q_solution_);
       
       // Initialize targets
       updateTargetFromFK("left");
       updateTargetFromFK("right");
-      
+
       return true;
   }
   
@@ -199,87 +210,80 @@ private:
       t.orientation = Eigen::Quaterniond(pose.rotation());
   }
 
-  void createMarker(const std::string& side) {
-      ArmTarget& t = targets_[side];
-
-      visualization_msgs::msg::InteractiveMarker int_marker;
-      int_marker.header.frame_id = "torso_link";
-      int_marker.header.stamp = this->now();
-      int_marker.name = side + "_ee_control";
-      int_marker.scale = 0.2;
-      
-      int_marker.pose.position.x = t.position.x();
-      int_marker.pose.position.y = t.position.y();
-      int_marker.pose.position.z = t.position.z();
-      int_marker.pose.orientation.x = t.orientation.x();
-      int_marker.pose.orientation.y = t.orientation.y();
-      int_marker.pose.orientation.z = t.orientation.z();
-      int_marker.pose.orientation.w = t.orientation.w();
-
-      visualization_msgs::msg::InteractiveMarkerControl box_control;
-      box_control.always_visible = true;
-      visualization_msgs::msg::Marker box_marker;
-      box_marker.type = visualization_msgs::msg::Marker::CUBE;
-      box_marker.scale.x = 0.05; box_marker.scale.y = 0.05; box_marker.scale.z = 0.05;
-      box_marker.color.r = (side=="left")?0.2:0.2; box_marker.color.g = (side=="left")?0.2:0.8; box_marker.color.b = (side=="left")?0.8:0.2; 
-      box_marker.color.a = 0.8;
-      box_control.markers.push_back(box_marker);
-      box_control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_ROTATE_3D;
-      int_marker.controls.push_back(box_control);
-      
-      add6DOFControls(int_marker);
-
-      server_->insert(int_marker);
-      server_->setCallback(int_marker.name, std::bind(&ArmEndEffectorControl::processFeedback, this, std::placeholders::_1, side));
-  }
-  
-  void add6DOFControls(visualization_msgs::msg::InteractiveMarker& msg) {
-      visualization_msgs::msg::InteractiveMarkerControl control;
-
-      control.orientation.w = 1; control.orientation.x = 1; control.orientation.y = 0; control.orientation.z = 0;
-      control.name = "rotate_x"; control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS; msg.controls.push_back(control);
-      control.name = "move_x"; control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_AXIS; msg.controls.push_back(control);
-
-      control.orientation.w = 1; control.orientation.x = 0; control.orientation.y = 1; control.orientation.z = 0;
-      control.name = "rotate_z"; control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS; msg.controls.push_back(control);
-      control.name = "move_z"; control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_AXIS; msg.controls.push_back(control);
-
-      control.orientation.w = 1; control.orientation.x = 0; control.orientation.y = 0; control.orientation.z = 1;
-      control.name = "rotate_y"; control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS; msg.controls.push_back(control);
-      control.name = "move_y"; control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_AXIS; msg.controls.push_back(control);
-  }
-
-  void processFeedback(const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback, const std::string& side) {
+  void processFeedback(const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr& feedback) {
       std::lock_guard<std::mutex> lock(arm_mutex_);
-      ArmTarget& t = targets_[side];
       
-      if (feedback->event_type == visualization_msgs::msg::InteractiveMarkerFeedback::MOUSE_DOWN) {
-          t.is_interacting = true;
-          // When starting interaction, sync target to current marker pose
-          t.position.x() = feedback->pose.position.x;
-          t.position.y() = feedback->pose.position.y;
-          t.position.z() = feedback->pose.position.z;
-          t.orientation = Eigen::Quaterniond(feedback->pose.orientation.w, feedback->pose.orientation.x, feedback->pose.orientation.y, feedback->pose.orientation.z);
-          RCLCPP_INFO(this->get_logger(), "%s INTERACT START", side.c_str());
-      } else if (feedback->event_type == visualization_msgs::msg::InteractiveMarkerFeedback::MOUSE_UP) {
-          t.is_interacting = false;
-          // Keep the marker where it is (or snap to valid IK sol).
-          // If we snap to FK(q_solution_), it ensures marker stays on valid workspace.
-          updateTargetFromFK(side);
-          
-          geometry_msgs::msg::Pose p;
-          p.position.x = t.position.x(); p.position.y = t.position.y(); p.position.z = t.position.z();
-          p.orientation.x = t.orientation.x(); p.orientation.y = t.orientation.y(); p.orientation.z = t.orientation.z(); p.orientation.w = t.orientation.w();
-          
-          server_->setPose(side+"_ee_control", p);
-          server_->applyChanges();
-          RCLCPP_INFO(this->get_logger(), "%s INTERACT END", side.c_str());
-      } else if (feedback->event_type == visualization_msgs::msg::InteractiveMarkerFeedback::POSE_UPDATE) {
-          t.position.x() = feedback->pose.position.x;
-          t.position.y() = feedback->pose.position.y;
-          t.position.z() = feedback->pose.position.z;
-          t.orientation = Eigen::Quaterniond(feedback->pose.orientation.w, feedback->pose.orientation.x, feedback->pose.orientation.y, feedback->pose.orientation.z);
-      }
+      std::string side = (feedback->marker_name == "left_ee_marker") ? "left" : "right";
+      
+      targets_[side].position << feedback->pose.position.x, feedback->pose.position.y, feedback->pose.position.z;
+      targets_[side].orientation = Eigen::Quaterniond(
+          feedback->pose.orientation.w,
+          feedback->pose.orientation.x,
+          feedback->pose.orientation.y,
+          feedback->pose.orientation.z
+      );
+      targets_[side].is_interacting = true;
+  }
+
+  void make6DofMarker(const std::string& side, const Eigen::Vector3d& pos, const Eigen::Quaterniond& ori) {
+      visualization_msgs::msg::InteractiveMarker int_marker;
+      int_marker.header.frame_id = "pelvis";
+      int_marker.name = side + "_ee_marker";
+      int_marker.description = "Control " + side + " Arm EE";
+      int_marker.scale = 0.15;
+      int_marker.pose.position.x = pos.x();
+      int_marker.pose.position.y = pos.y();
+      int_marker.pose.position.z = pos.z();
+      int_marker.pose.orientation.w = ori.w();
+      int_marker.pose.orientation.x = ori.x();
+      int_marker.pose.orientation.y = ori.y();
+      int_marker.pose.orientation.z = ori.z();
+      
+      visualization_msgs::msg::InteractiveMarkerControl control;
+      control.orientation.w = 1;
+      control.orientation.x = 1; control.orientation.y = 0; control.orientation.z = 0;
+      control.name = "rotate_x"; control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+      int_marker.controls.push_back(control);
+      control.name = "move_x";   control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_AXIS;
+      int_marker.controls.push_back(control);
+
+      control.orientation.w = 1;
+      control.orientation.x = 0; control.orientation.y = 1; control.orientation.z = 0;
+      control.name = "rotate_z"; control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+      int_marker.controls.push_back(control);
+      control.name = "move_z";   control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_AXIS;
+      int_marker.controls.push_back(control);
+
+      control.orientation.w = 1;
+      control.orientation.x = 0; control.orientation.y = 0; control.orientation.z = 1;
+      control.name = "rotate_y"; control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+      int_marker.controls.push_back(control);
+      control.name = "move_y";   control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_AXIS;
+      int_marker.controls.push_back(control);
+
+      im_server_->insert(int_marker, std::bind(&ArmEndEffectorControl::processFeedback, this, std::placeholders::_1));
+  }
+
+  void leftPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+      std::lock_guard<std::mutex> lock(arm_mutex_);
+      targets_["left"].position << msg->pose.position.x, msg->pose.position.y, msg->pose.position.z;
+      targets_["left"].orientation = Eigen::Quaterniond(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
+      targets_["left"].is_interacting = true;
+      
+      // Update interactive marker to match Topic input
+      im_server_->setPose("left_ee_marker", msg->pose);
+      im_server_->applyChanges();
+  }
+
+  void rightPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+      std::lock_guard<std::mutex> lock(arm_mutex_);
+      targets_["right"].position << msg->pose.position.x, msg->pose.position.y, msg->pose.position.z;
+      targets_["right"].orientation = Eigen::Quaterniond(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
+      targets_["right"].is_interacting = true;
+      
+      // Update interactive marker to match Topic input
+      im_server_->setPose("right_ee_marker", msg->pose);
+      im_server_->applyChanges();
   }
 
   void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg) {
@@ -317,12 +321,10 @@ private:
 
   void solveIK() {
       // Damped Least Squares Optimization
-      double lambda = 1e-3; 
-      int max_iter = 10; 
-      
-      // Seed with last solution (smoother) or measured (safer)?
-      // If we use measured, we need to be careful about noise.
-      // Let's use q_solution_ as we are controlling it.
+      double lambda = 1e-4; 
+      int max_iter = 20; 
+      double clamp_p = 0.5; // max translation error to attempt in one step
+      double clamp_r = 0.5; // max rotation error to attempt in one step
       
       for (int iter=0; iter<max_iter; ++iter) {
           pinocchio::framesForwardKinematics(model_, data_, q_solution_);
@@ -331,30 +333,31 @@ private:
           Eigen::VectorXd grad = Eigen::VectorXd::Zero(model_.nv);
           Eigen::MatrixXd hess = Eigen::MatrixXd::Zero(model_.nv, model_.nv);
           
-          if (targets_["left"].is_interacting) addCost(left_ee_frame_id_, targets_["left"], grad, hess);
-          if (targets_["right"].is_interacting) addCost(right_ee_frame_id_, targets_["right"], grad, hess);
+          if (targets_["left"].is_interacting) addCost(left_ee_frame_id_, targets_["left"], grad, hess, clamp_p, clamp_r);
+          if (targets_["right"].is_interacting) addCost(right_ee_frame_id_, targets_["right"], grad, hess, clamp_p, clamp_r);
            
-          // Regularization: 0.02 * ||q||^2
-          grad += 0.04 * q_solution_;
-          hess.diagonal().array() += 0.04;
+          // Regularization (pull towards neutral/0)
+          grad += 0.02 * q_solution_;
+          hess.diagonal().array() += 0.02;
           
-          // Smoothness: 0.1 * ||q - q_last||^2
-          grad += 0.2 * (q_solution_ - q_last_solve_);
-          hess.diagonal().array() += 0.2; // 2 * 0.1
+          // Smoothness (pull towards last solution)
+          grad += 0.1 * (q_solution_ - q_last_solve_);
+          hess.diagonal().array() += 0.1;
           
           hess.diagonal().array() += lambda; // Damping
           
           Eigen::VectorXd dq = hess.ldlt().solve(-grad);
           q_solution_ += dq;
-                    for (int k=0; k<model_.nq; ++k) {
+          
+          for (int k=0; k<model_.nq; ++k) {
                if (k >= q_solution_.size()) break; // Safety
                if (q_solution_[k] < model_.lowerPositionLimit[k]) q_solution_[k] = model_.lowerPositionLimit[k];
                if (q_solution_[k] > model_.upperPositionLimit[k]) q_solution_[k] = model_.upperPositionLimit[k];
-           }
+          }
       }
   }
 
-  void addCost(pinocchio::FrameIndex fid, const ArmTarget& target, Eigen::VectorXd& grad, Eigen::MatrixXd& hess) {
+  void addCost(pinocchio::FrameIndex fid, const ArmTarget& target, Eigen::VectorXd& grad, Eigen::MatrixXd& hess, double clamp_p, double clamp_r) {
       const auto& transform = data_.oMf[fid];
       Eigen::MatrixXd J(6, model_.nv); J.setZero();
       pinocchio::getFrameJacobian(model_, data_, fid, pinocchio::LOCAL_WORLD_ALIGNED, J);
@@ -362,9 +365,13 @@ private:
       Eigen::Vector3d ep = transform.translation() - target.position;
       Eigen::Vector3d er = pinocchio::log3(transform.rotation() * target.orientation.inverse()); 
       
-      // Weights from Python: 50, 0.5
+      // Error Clamping to avoid extreme gradients causing divergence
+      if (ep.norm() > clamp_p) ep = ep.normalized() * clamp_p;
+      if (er.norm() > clamp_r) er = er.normalized() * clamp_r;
+
+      // Position highly weighted, Rotation relaxed a bit to allow 5 DOF + Waist reaching
       double w_p = 50.0;
-      double w_r = 0.5;
+      double w_r = 1.0;
       
       grad += w_p * J.topRows(3).transpose() * ep;
       hess += w_p * J.topRows(3).transpose() * J.topRows(3);
