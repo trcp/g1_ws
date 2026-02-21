@@ -60,6 +60,9 @@ RUN apt-get update && apt-get install -y \
 USER $USERNAME
 RUN pip install pyserial
 
+# COPY amcl2 code
+COPY assets/emcl2_node.cpp ./emcl2/src/emcl2_node.cpp
+
 # build workspace
 USER $USERNAME
 WORKDIR /home/${USERNAME}/colcon_ws

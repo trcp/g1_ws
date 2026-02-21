@@ -13,7 +13,7 @@ amcl:
     global_frame_id: "map"
     lambda_short: 0.1
     laser_likelihood_max_dist: 2.0
-    laser_max_range: 3.0
+    laser_max_range: 10.0
     laser_min_range: 0.2
     laser_model_type: "likelihood_field"
     max_beams: 60
@@ -43,3 +43,31 @@ amcl:
       y: 0.0
       z: 0.0
       yaw: 0.0
+
+emcl2:
+  ros__parameters:
+    odom_freq: 20
+    transform_tolerance: 0.2
+    global_frame_id: "map"
+    odom_frame_id: "odom"
+    base_frame_id: "pelvis"
+    #footprint_frame_id: "base_footprint"
+    footprint_frame_id: "pelvis"
+    laser_min_range: 0.1
+    laser_max_range: 100000000.0
+    scan_increment: 1
+    initial_pose_x: 0.0
+    initial_pose_y: 0.0
+    initial_pose_a: 0.0
+    num_particles: 2000
+    alpha_threshold: 0.5
+    expansion_radius_position: 0.1
+    expansion_radius_orientation: 0.2
+    extraction_rate: 0.1
+    range_threshold: 0.3
+    sensor_reset: false
+    odom_fw_dev_per_fw: 0.30
+    odom_fw_dev_per_rot: 0.05
+    odom_rot_dev_per_fw: 0.20
+    odom_rot_dev_per_rot: 0.40
+    laser_likelihood_max_dist: 0.2

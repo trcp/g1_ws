@@ -5,7 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.lifecycle_nodes import LifecycleNode
+
 
 def generate_launch_description():
     ld = LaunchDescription()
@@ -13,6 +13,7 @@ def generate_launch_description():
     # Paths
     g1_cartographer_prefix = get_package_share_directory('g1_cartographer')
     pointcloud_to_laserscan_config = os.path.join(g1_cartographer_prefix, 'config', 'pointcloud_to_laserscan.yaml')
+    nav2_param = os.path.join(get_package_share_directory('g1_navigation'), 'params', 'nav2.yaml')
 
     # Arguments
     map_yaml_file = LaunchConfiguration('map_yaml_file')
@@ -45,7 +46,8 @@ def generate_launch_description():
     ld.add_action(declare_autostart)
 
     # Lifecycle nodes to manage
-    lifecycle_nodes = ['map_server', 'amcl']
+    lifecycle_nodes = ['map_server']
+    #lifecycle_nodes = ['map_server', 'amcl']
 
     # Nodes
     
@@ -74,7 +76,7 @@ def generate_launch_description():
     )
 
     # Map Server
-    map_server = LifecycleNode(
+    map_server = Node(
         package='nav2_map_server',
         executable='map_server',
         name='map_server',
@@ -86,20 +88,21 @@ def generate_launch_description():
         }]
     )
 
-    # AMCL
-    amcl = LifecycleNode(
+    # 自己位置推定
+    emcl2 = Node(
+        package='emcl2',
+        executable='emcl2_node',
+        name='emcl2',
+        emulate_tty=True,
+        parameters=[nav2_param],
+    )
+    amcl = Node(
         package='nav2_amcl',
         executable='amcl',
         name='amcl',
         output='screen',
         emulate_tty=True,
-        parameters=[{
-            'use_sim_time': use_sim_time,
-            'base_frame_id': 'base_link',
-            'odom_frame_id': 'odom',
-            'map_frame_id': 'map',
-            'scan_topic': '/scan',
-        }]
+        parameters=[nav2_param]
     )
 
     # Lifecycle Manager
@@ -119,7 +122,8 @@ def generate_launch_description():
     ld.add_action(livox_tf_publisher)
     ld.add_action(pointcloud_to_laserscan)
     ld.add_action(map_server)
-    ld.add_action(amcl)
+    ld.add_action(emcl2)
+    #ld.add_action(amcl)
     ld.add_action(lifecycle_manager)
 
     return ld
