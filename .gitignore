@@ -1,6 +1,11 @@
 /src/nakalab_realsense
 /src/rclpy_util
 
+# ros workspace
+build/
+install/
+log/
+
 **/__pycache__/**
 rosbag/*
 !rosbag/.gitkeepe
@@ -13,3 +18,9 @@ map/*
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+
+# backup file
+*~
+\#*\#
+.\#*

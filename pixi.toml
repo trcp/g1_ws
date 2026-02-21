@@ -9,6 +9,9 @@ version = "0.1.0"
 
 [dependencies]
 ros-humble-desktop-full = ">=0.10.0,<0.11"
+colcon-common-extensions = ">=0.3.0,<0.4"
+numpy = ">=1.26.4,<2"
+python = ">=3.11.14,<3.12"
 
 [pypi-dependencies]
 rustypot = ">=1.4.2, <2"
