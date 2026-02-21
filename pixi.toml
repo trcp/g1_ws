@@ -1,0 +1,14 @@
+[workspace]
+authors = ["katana-2024-4 <roboworks@katana-2024-4>"]
+channels = ["robostack-humble", "conda-forge"]
+name = "g1_ws"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+ros-humble-desktop-full = ">=0.10.0,<0.11"
+
+[pypi-dependencies]
+rustypot = ">=1.4.2, <2"

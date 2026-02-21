@@ -8,5 +8,8 @@ map/*
 !map/.gitkeep
 
 .devcontainer
-
 .antigravity
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml
