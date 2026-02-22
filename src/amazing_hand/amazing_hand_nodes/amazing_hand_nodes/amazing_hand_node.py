@@ -92,6 +92,9 @@ class AmazingHandControllerNode(Node):
         elif cmd == "close":
             self.close_hand(hand)
 
+        elif cmd == "walk":
+            self.walk_hand(hand)
+
         elif cmd == "progressive":
             self.open_hand_progressive(hand)
 
@@ -146,6 +149,15 @@ class AmazingHandControllerNode(Node):
     # ==================================================
     # Gestures
     # ==================================================
+
+    def walk_hand(self, hand):
+        self.get_logger().info(f"Walk hand: {hand}")
+
+        for h in self.target_hands(hand):
+            for finger in ["index", "middle", "ring", "thumb"]:
+                self.move_finger(finger, -35, 35, self.max_speed, h)
+
+            self.move_finger("thumb", 100, -100, self.close_speed + 4, h)
 
     def open_hand(self, hand):
         self.get_logger().info(f"Open hand: {hand}")
