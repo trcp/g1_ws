@@ -138,7 +138,7 @@ def generate_launch_description():
             ('scan', '/scan'),
         ],
     )
-    #ld.add_action(pointcloud_to_laserscan)
+    ld.add_action(pointcloud_to_laserscan)
 
 
 

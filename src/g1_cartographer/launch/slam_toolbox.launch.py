@@ -81,6 +81,8 @@ def generate_launch_description():
         allow_substs=True,
     )
     '''
+
+    '''
     pointcloud_to_laserscan = Node(
         package='pointcloud_to_laserscan',
         executable='pointcloud_to_laserscan_node',
@@ -95,6 +97,7 @@ def generate_launch_description():
             ('scan', '/scan'),
         ],
     )
+    '''
 
     map_saver = Node(
         package='g1_cartographer',
