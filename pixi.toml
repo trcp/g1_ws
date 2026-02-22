@@ -12,6 +12,11 @@ ros-humble-desktop-full = ">=0.10.0,<0.11"
 colcon-common-extensions = ">=0.3.0,<0.4"
 numpy = ">=1.26.4,<2"
 python = ">=3.11.14,<3.12"
+ros-humble-cartographer-ros-msgs = ">=2.0.9002,<3"
+gcc = ">=15.2.0,<15.3"
+gxx = ">=15.2.0,<15.3"
+ros-humble-rosidl-generator-dds-idl = ">=0.8.1,<0.9"
+ros-humble-pinocchio = ">=3.7.0,<4"
 
 [pypi-dependencies]
 rustypot = ">=1.4.2, <2"
