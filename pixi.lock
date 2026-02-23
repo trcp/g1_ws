@@ -695,6 +695,7 @@ environments:
       - conda: https://conda.anaconda.org/robostack-humble/linux-64/ros-humble-rqt-service-caller-1.0.5-np126py311hbc2a38a_13.conda
       - conda: https://conda.anaconda.org/robostack-humble/linux-64/ros-humble-rqt-shell-1.0.2-np126py311hbc2a38a_13.conda
       - conda: https://conda.anaconda.org/robostack-humble/linux-64/ros-humble-rqt-srv-1.0.3-np126py311hbc2a38a_13.conda
+      - conda: https://conda.anaconda.org/robostack-humble/linux-64/ros-humble-rqt-tf-tree-1.0.5-np126py311hbc2a38a_13.conda
       - conda: https://conda.anaconda.org/robostack-humble/linux-64/ros-humble-rqt-topic-1.5.0-np126py311hbc2a38a_13.conda
       - conda: https://conda.anaconda.org/robostack-humble/linux-64/ros-humble-rti-connext-dds-cmake-module-0.11.3-np126py311hbc2a38a_13.conda
       - conda: https://conda.anaconda.org/robostack-humble/linux-64/ros-humble-rttest-0.13.0-np126py311hbc2a38a_13.conda
@@ -12901,6 +12902,31 @@ packages:
   license: BSD-3-Clause
   size: 19057
   timestamp: 1753314324391
+- conda: https://conda.anaconda.org/robostack-humble/linux-64/ros-humble-rqt-tf-tree-1.0.5-np126py311hbc2a38a_13.conda
+  sha256: 17a5e324ef1cd84b3563689ab21a9832048fb1aa8ee86847ce53948bc71fd567
+  md5: a6c0e9b7d3c8dda0bb045f3ac98693d7
+  depends:
+  - python
+  - ros-humble-python-qt-binding
+  - ros-humble-qt-dotgraph
+  - ros-humble-rclpy
+  - ros-humble-ros-workspace
+  - ros-humble-rqt-graph
+  - ros-humble-rqt-gui
+  - ros-humble-rqt-gui-py
+  - ros-humble-tf2-msgs
+  - ros-humble-tf2-ros
+  - ros2-distro-mutex 0.7.* humble_*
+  - libgcc >=13
+  - libstdcxx >=13
+  - libgcc >=13
+  - __glibc >=2.17,<3.0.a0
+  - numpy >=1.26.4,<2.0a0
+  - ros2-distro-mutex >=0.7.0,<0.8.0a0
+  - python_abi 3.11.* *_cp311
+  license: BSD-3-Clause
+  size: 30617
+  timestamp: 1753314116257
 - conda: https://conda.anaconda.org/robostack-humble/linux-64/ros-humble-rqt-topic-1.5.0-np126py311hbc2a38a_13.conda
   sha256: faa563142237e0adfc68c72a4d0a2a058306a98e70dd2d177f1c1cfcf5ca70f5
   md5: f48816e66b970b9feb841827d65f7087
