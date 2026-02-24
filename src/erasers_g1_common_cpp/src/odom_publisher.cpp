@@ -48,11 +48,14 @@ private:
   void topic_callback(const unitree_go::msg::SportModeState::SharedPtr msg)
   {
     auto current_time = this->get_clock()->now();
-
+    /*
     rclcpp::Time msg_time(msg->stamp.sec, msg->stamp.nanosec);
     if (msg_time.seconds() == 0) {
       msg_time = current_time;
     }
+    */
+
+    rclcpp::Time msg_time = current_time;
 
     tf2::Quaternion q(
       msg->imu_state.quaternion[1],

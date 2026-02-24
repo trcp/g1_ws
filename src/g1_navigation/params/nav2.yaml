@@ -56,26 +56,26 @@ emcl2:
     # footprint_frame_id: "pelvis"
     laser_min_range: 0.1
     laser_max_range: 100000000.0
-    scan_increment: 1
+    scan_increment: 3
     initial_pose_x: 0.0
     initial_pose_y: 0.0
     initial_pose_a: 0.0
     num_particles: 2000
     alpha_threshold: 0.5
-    expansion_radius_position: 0.03 # 0.1
-    expansion_radius_orientation: 0.05 # 0.2
+    expansion_radius_position: 0.05 # 0.1
+    expansion_radius_orientation: 0.1 # 0.2
     extraction_rate: 0.1
-    range_threshold: 0.5 # 0.3
+    range_threshold: 0.2 # 0.3
     sensor_reset: false
     # odom_fw_dev_per_fw: 0.05 # 0.30
     # odom_fw_dev_per_rot: 0.02 # 0.05
     # odom_rot_dev_per_fw: 0.05 # 0.20
     # odom_rot_dev_per_rot: 0.10 # 0.40
-    odom_fw_dev_per_fw: 0.30
-    odom_fw_dev_per_rot: 0.10
-    odom_rot_dev_per_fw: 0.20
-    odom_rot_dev_per_rot: 0.40
-    laser_likelihood_max_dist: 0.5 # 0.2
+    odom_fw_dev_per_fw: 0.10
+    odom_fw_dev_per_rot: 0.05
+    odom_rot_dev_per_fw: 0.10
+    odom_rot_dev_per_rot: 0.20
+    laser_likelihood_max_dist: 0.2 # 0.2
 
 # copy from https://raw.githubusercontent.com/ros-navigation/navigation2/refs/heads/humble/nav2_bringup/params/nav2_params.yaml
 bt_navigator:
