@@ -21,6 +21,8 @@ x-preferences: &preferences
     - $HOME/cyclonedds_ws/cyclonedds.xml:$HOME/cyclonedds.xml
     # timezone
     - /etc/localtime:/etc/localtime:ro
+  group_add:
+    - "dialout"
 
 # ---------------------------------------------------------------
 services:
