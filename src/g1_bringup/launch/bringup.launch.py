@@ -18,6 +18,7 @@ def generate_launch_description():
     ptl_params = LaunchConfiguration('ptl_params')
     camera_params = LaunchConfiguration('camera_params')
     start_message = LaunchConfiguration('start_message')
+    use_rviz = LaunchConfiguration('use_rviz')
 
 
     # declare argument
@@ -33,10 +34,15 @@ def generate_launch_description():
         'camera_params', default_value=os.path.join(get_package_share_directory('g1_bringup'), 'params', 'd455.yaml'),
         description='Full path for 2d png map'
     )
+    declare_use_rviz = DeclareLaunchArgument(
+        'use_rviz', default_value='false',
+        description='Whether to start Rviz'
+    )
 
     ld.add_action(declare_start_message)
     ld.add_action(declare_ptl_params)
     ld.add_action(declare_camera_params)
+    ld.add_action(declare_use_rviz)
 
 
     # nodes
@@ -138,21 +144,37 @@ def generate_launch_description():
             ('scan', '/scan'),
         ],
     )
-    ld.add_action(pointcloud_to_laserscan)
+    #ld.add_action(pointcloud_to_laserscan)
 
 
 
     # launchers
     # 頭部カメラの起動
-    head_camera = IncludeLaunchDescription(
+    head_camera = Node(
+        package='realsense2_camera',
+        executable='realsense2_camera_node',
+        name='d455',
+        parameters=[
+            camera_params,
+            {'camera_name': 'd455'}
+        ],
+        output='screen',
+        namespace='head_camera',
+        emulate_tty=True,
+    )
+    head_camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             os.path.join(
-                get_package_share_directory('nakalab_realsense'),
-                'launch', 'd455_launch.py'
+                get_package_share_directory('realsense2_camera'),
+                'launch', 'rs_launch.py'
             )
         ]),
-        launch_arguments = {
-            'params_file' : camera_params
+        launch_arguments={
+            'camera_name': 'd455',
+            'camera_namespace': 'head_camera',
+            'rgb_camera.profile': "640,480,15",
+            'depth_module.profile': "640,480,15",
+            'pointcloud.enable': 'true',
         }.items()
     )
     # LiDAR センサーを起動する
@@ -171,10 +193,14 @@ def generate_launch_description():
                 get_package_share_directory('g1_description'),
                 'launch', 'display.launch.py'
             )
-        ])
+        ]),
+        launch_arguments={
+            'use_rviz': use_rviz,
+        }.items()
     )
 
-    ld.add_action(head_camera)
+    #ld.add_action(head_camera)
+    #ld.add_action(head_camera_launch)
     ld.add_action(lidar)
     ld.add_action(display)
 
@@ -202,6 +228,35 @@ def generate_launch_description():
     )
 
     ld.add_action(speech_handler)
+
+    # コマンド経由で d455 を起動
+    launch_d455_cmd = ExecuteProcess(
+        cmd=[
+            'ros2', 'launch',
+            'realsense2_camera',
+            'rs_launch.py',
+            'camera_name:=d455',
+            'camera_namespace:=head_camera',
+            'rgb_camera.profile:="640,480,30"',
+            'depth_module.profile:="640,480,30"',
+            'pointcloud.enable:=false',
+        ],
+        output='screen'
+    )
+    launch_d455_handler = RegisterEventHandler(
+        event_handler=OnProcessStart(
+            target_action=head_joints,
+            on_start=[
+                TimerAction(
+                    period=1.0,
+                    actions=[launch_d455_cmd]
+                )
+            ]
+        )
+    )
+
+    ld.add_action(launch_d455_handler)
+
 
 
     # 起動時に頭部カメラ初期位置に戻す

@@ -37,6 +37,16 @@ USER root
 RUN mv livox_ros_driver2/package_ROS2.xml livox_ros_driver2/package.xml &&\
     cd Livox-SDK2 && mkdir build && cd build && cmake .. && make -j && sudo make install
 
+# install realsense sdk
+USER root
+RUN apt-get update &&\
+    mkdir -p /etc/apt/keyrings &&\
+    curl -sSf https://librealsense.intel.com/Debian/librealsense.pgp | tee /etc/apt/keyrings/librealsense.pgp > /dev/null &&\
+    echo "deb [signed-by=/etc/apt/keyrings/librealsense.pgp] https://librealsense.intel.com/Debian/apt-repo `lsb_release -cs` main" | \
+    tee /etc/apt/sources.list.d/librealsense.list &&\
+    apt-get update && apt-get install -y librealsense2-utils librealsense2-dev &&\
+    rm -rf /var/lib/apt/lists/*
+
 # resolve depends
 USER $USERNAME
 COPY src ./erasers_g1
@@ -59,7 +69,7 @@ RUN apt-get update && apt-get install -y \
 
 # install pyserial
 USER $USERNAME
-RUN pip install pyserial
+RUN pip install pyserial rustypot
 
 # COPY amcl2 code
 COPY assets/emcl2_node.cpp ./emcl2/src/emcl2_node.cpp

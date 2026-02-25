@@ -14,6 +14,7 @@
 
   <exec_depend>g1_cartographer</exec_depend>
   <exec_depend>cartographer_ros</exec_depend>
+  <exec_depend>emcl2</exec_depend>
   <exec_depend>nav2_amcl</exec_depend>
   <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>

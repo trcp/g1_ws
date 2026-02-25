@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -12,6 +13,7 @@ def generate_launch_description():
     ld = LaunchDescription()
 
     robot_description = LaunchConfiguration('robot_description')
+    use_rviz = LaunchConfiguration('use_rviz')
 
     # default_values
     default_rviz_path = os.path.join(get_package_share_directory('g1_description'), 'rviz', 'g1.rviz')
@@ -25,7 +27,13 @@ def generate_launch_description():
         ),
         description='Full path for robot description.'
     )
+    declare_use_rviz = DeclareLaunchArgument(
+        'use_rviz',
+        default_value='false',
+        description='Whether to start Rviz'
+    )
     ld.add_action(declare_robot_description)
+    ld.add_action(declare_use_rviz)
 
     # XACRO -> URDF
     robot_description_urdf =  ParameterValue(
@@ -49,7 +57,8 @@ def generate_launch_description():
         package='rviz2',
         executable='rviz2',
         arguments=['-d', default_rviz_path],
-        output='own_log'
+        output='own_log',
+        condition=IfCondition(use_rviz)
     )
     ld.add_action(robot_state_publisher)
     ld.add_action(joint_state_publisher)
