@@ -262,7 +262,7 @@ def generate_launch_description():
         )
     )
 
-    ld.add_action(launch_d455_handler)
+    #ld.add_action(launch_d455_handler)
 
 
 

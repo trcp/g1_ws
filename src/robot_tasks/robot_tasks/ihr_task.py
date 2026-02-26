@@ -37,7 +37,7 @@ def main():
 
     # init smach
     sm = smach.StateMachine(outcomes=['success', 'failure'])
-
+    ARM.enable(False)
     node.get_logger().info("""
     ================
     iHR TASK START !
