@@ -14,6 +14,7 @@
 
   <depend>rclpy_util</depend>
   <depend>smach_ros</depend>
+  <depend>tf_transformations</depend>
 
   <export>
     <build_type>ament_python</build_type>
