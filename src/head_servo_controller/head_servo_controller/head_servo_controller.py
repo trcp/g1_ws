@@ -32,8 +32,8 @@ TILT_HOME_PULSE = 2048
 PAN_DIR  = 1
 TILT_DIR = 1
 
-PAN_RAD_OFFSET  = 0.0
-TILT_RAD_OFFSET = -0.6
+PAN_RAD_OFFSET  = 0.325
+TILT_RAD_OFFSET = -0.057
 
 # --- キャリブレーション結果に基づくリミット設定 (マージン込み) ---
 # Measured: Tilt [1039:2751], Pan [1938:3131]
