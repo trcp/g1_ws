@@ -135,6 +135,18 @@ private:
 
   pinocchio::FrameIndex left_ee_frame_id_, right_ee_frame_id_;
 
+  bool is_transitioning_ = false;
+  rclcpp::Time transition_start_time_;
+  Eigen::VectorXd q_transition_start_;
+  double transition_duration_ = 5.0;
+
+  double computeMinJerk(double t, double T) {
+      if (t <= 0.0) return 0.0;
+      if (t >= T) return 1.0;
+      double r = t / T;
+      return r * r * r * (10.0 - 15.0 * r + 6.0 * r * r);
+  }
+
   bool initPinocchio(const std::string& urdf_path) {
       try {
           // Load URDF using FreeFlyer to ensure a valid root joint and avoid fixed-base assertion errors in reduced models
@@ -324,7 +336,18 @@ private:
                              std::shared_ptr<std_srvs::srv::SetBool::Response> response) 
   {
       std::lock_guard<std::mutex> lock(arm_mutex_);
-      is_enabled_ = request->data;
+      bool turn_on = request->data;
+      
+      if (turn_on && !is_enabled_) {
+          // Turning on from an off state: trigger smooth transition to neutral
+          q_transition_start_ = q_measured_; // start from what is currently measured
+          transition_start_time_ = this->now();
+          is_transitioning_ = true;
+          targets_["left"].is_interacting = false;
+          targets_["right"].is_interacting = false;
+      }
+      
+      is_enabled_ = turn_on;
       response->success = true;
       response->message = is_enabled_ ? "End-effector control enabled." : "End-effector control disabled.";
       RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
@@ -335,31 +358,20 @@ private:
   {
       std::lock_guard<std::mutex> lock(arm_mutex_);
       
-      // Reset solution to neutral (all joints 0 for the active part)
-      q_solution_ = pinocchio::neutral(model_);
-      q_last_solve_ = q_solution_;
+      if (is_transitioning_) {
+          response->success = false;
+          response->message = "Already transitioning to initial pose.";
+          return;
+      }
       
-      // Sync targets to this neutral position
-      updateTargetFromFK("left");
-      updateTargetFromFK("right");
-      
-      // Update Markers
-      geometry_msgs::msg::Pose lp, rp;
-      pinocchio::SE3 left_pose = data_.oMf[left_ee_frame_id_];
-      pinocchio::SE3 right_pose = data_.oMf[right_ee_frame_id_];
-      
-      lp.position.x = left_pose.translation().x(); lp.position.y = left_pose.translation().y(); lp.position.z = left_pose.translation().z();
-      Eigen::Quaterniond lq(left_pose.rotation()); lp.orientation.w = lq.w(); lp.orientation.x = lq.x(); lp.orientation.y = lq.y(); lp.orientation.z = lq.z();
-      
-      rp.position.x = right_pose.translation().x(); rp.position.y = right_pose.translation().y(); rp.position.z = right_pose.translation().z();
-      Eigen::Quaterniond rq(right_pose.rotation()); rp.orientation.w = rq.w(); rp.orientation.x = rq.x(); rp.orientation.y = rq.y(); rp.orientation.z = rq.z();
-      
-      im_server_->setPose("left_ee_marker", lp);
-      im_server_->setPose("right_ee_marker", rp);
-      im_server_->applyChanges();
+      q_transition_start_ = q_measured_; // start from what is currently measured
+      transition_start_time_ = this->now();
+      is_transitioning_ = true;
+      targets_["left"].is_interacting = false;
+      targets_["right"].is_interacting = false;
 
       response->success = true;
-      response->message = "Upper body joints reset to initial zero pose.";
+      response->message = "Started smooth transition to initial zero pose over 5.0 seconds.";
       RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
   }
 
@@ -482,14 +494,53 @@ private:
           return;
       }
 
+      if (is_transitioning_) {
+          double t = (this->now() - transition_start_time_).seconds();
+          if (t >= transition_duration_) {
+              is_transitioning_ = false;
+              q_solution_ = pinocchio::neutral(model_);
+              q_last_solve_ = q_solution_;
+              q_last_publish_ = q_solution_;
+              
+              updateTargetFromFK("left");
+              updateTargetFromFK("right");
+              targets_["left"].is_interacting = false;
+              targets_["right"].is_interacting = false;
+              
+              geometry_msgs::msg::Pose lp, rp;
+              pinocchio::SE3 left_pose = data_.oMf[left_ee_frame_id_];
+              pinocchio::SE3 right_pose = data_.oMf[right_ee_frame_id_];
+              
+              lp.position.x = left_pose.translation().x(); lp.position.y = left_pose.translation().y(); lp.position.z = left_pose.translation().z();
+              Eigen::Quaterniond lq(left_pose.rotation()); lp.orientation.w = lq.w(); lp.orientation.x = lq.x(); lp.orientation.y = lq.y(); lp.orientation.z = lq.z();
+              
+              rp.position.x = right_pose.translation().x(); rp.position.y = right_pose.translation().y(); rp.position.z = right_pose.translation().z();
+              Eigen::Quaterniond rq(right_pose.rotation()); rp.orientation.w = rq.w(); rp.orientation.x = rq.x(); rp.orientation.y = rq.y(); rp.orientation.z = rq.z();
+              
+              im_server_->setPose("left_ee_marker", lp);
+              im_server_->setPose("right_ee_marker", rp);
+              im_server_->applyChanges();
+              
+              Eigen::VectorXd q_vel = Eigen::VectorXd::Zero(model_.nv);
+              publishJoints(q_solution_, q_vel);
+              
+              RCLCPP_INFO(this->get_logger(), "Transition to initial pose complete.");
+          } else {
+              double s = computeMinJerk(t, transition_duration_);
+              Eigen::VectorXd q_neutral = pinocchio::neutral(model_);
+              q_solution_ = q_transition_start_ + s * (q_neutral - q_transition_start_);
+              
+              Eigen::VectorXd q_vel = (q_solution_ - q_last_publish_) / 0.05; // dt=50ms
+              publishJoints(q_solution_, q_vel);
+              q_last_publish_ = q_solution_;
+              q_last_solve_ = q_solution_;
+          }
+          return;
+      }
+
       bool interacting_any = targets_["left"].is_interacting || targets_["right"].is_interacting;
       
       if (interacting_any) {
-          if (!was_interacting_) {
-              q_solution_ = q_measured_;
-              q_last_solve_ = q_solution_;
-              q_last_publish_ = q_solution_;
-          }
           solveIK();
           
           Eigen::VectorXd q_vel = (q_solution_ - q_last_publish_) / 0.05; // dt = 50ms
@@ -500,14 +551,10 @@ private:
           was_interacting_ = true;
       } else {
           // HOLD POSE
-          if (was_interacting_) {
-              q_last_solve_ = q_solution_;
-              q_last_publish_ = q_solution_;
-          } else {
-              q_solution_ = q_measured_; // Sync
-          }
           Eigen::VectorXd q_vel = Eigen::VectorXd::Zero(model_.nv);
           publishJoints(q_solution_, q_vel);
+          q_last_publish_ = q_solution_;
+          q_last_solve_ = q_solution_;
           was_interacting_ = false;
       }
   }
@@ -564,12 +611,19 @@ private:
       Eigen::Vector3d er = pinocchio::log3(transform.rotation() * target.orientation.inverse()); 
       
       // Error Clamping to avoid extreme gradients causing divergence
+      double actual_ep_norm = ep.norm();
       if (ep.norm() > clamp_p) ep = ep.normalized() * clamp_p;
       if (er.norm() > clamp_r) er = er.normalized() * clamp_r;
 
       // Position highly weighted, Rotation relaxed a bit to allow 5 DOF + Waist reaching
       double w_p = 50.0;
       double w_r = 1.0;
+      
+      // Relax rotation constraint if the target is far or out of reach (> 0.05m)
+      // This allows the arm to stretch out towards the target
+      if (actual_ep_norm > 0.05) {
+          w_r *= 0.1; // Reduces orientation importance
+      }
       
       grad += w_p * J.topRows(3).transpose() * ep;
       hess += w_p * J.topRows(3).transpose() * J.topRows(3);
