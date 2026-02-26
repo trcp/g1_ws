@@ -67,9 +67,9 @@ RUN apt-get update && apt-get install -y \
     ros-${ROS}-navigation2 ros-${ROS}-nav2-bringup &&\
     rm -rf /var/lib/apt/lists/*
 
-# install pyserial
+# install python packages
 USER $USERNAME
-RUN pip install pyserial rustypot
+RUN pip install pyserial rustypot transform3d
 
 # COPY amcl2 code
 COPY assets/emcl2_node.cpp ./emcl2/src/emcl2_node.cpp
