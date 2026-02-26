@@ -100,6 +100,12 @@ def generate_launch_description():
         executable='cartesian_trajectory_planner',
         emulate_tty=True
     )
+    # Amazing Hand
+    amazing_hand = Node(
+        package='amazing_hand_nodes',
+        executable='amazing_hand_node',
+        emulate_tty=True
+    )
     # 緊急停止
     emergency_stop = Node(
         package='erasers_g1_common_cpp',
@@ -116,6 +122,7 @@ def generate_launch_description():
     ld.add_action(arm_joint_control)
     ld.add_action(arm_endeffector_control)
     ld.add_action(cartesian_trajectory_planner)
+    ld.add_action(amazing_hand)
     ld.add_action(emergency_stop)
 
 
@@ -237,9 +244,9 @@ def generate_launch_description():
             'rs_launch.py',
             'camera_name:=d455',
             'camera_namespace:=head_camera',
-            'rgb_camera.profile:="640,480,30"',
-            'depth_module.profile:="640,480,30"',
-            'pointcloud.enable:=false',
+            'rgb_camera.color_profile:=640x480x30',
+            'depth_module.depth_profile:=640x480x30',
+            'pointcloud.enable:=true',
         ],
         output='screen'
     )
