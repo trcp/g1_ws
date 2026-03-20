@@ -100,6 +100,12 @@ def generate_launch_description():
         executable='cartesian_trajectory_planner',
         emulate_tty=True
     )
+    # Amazing Hand
+    amazing_hand = Node(
+        package='amazing_hand_nodes',
+        executable='amazing_hand_node',
+        emulate_tty=True
+    )
     # 緊急停止
     emergency_stop = Node(
         package='erasers_g1_common_cpp',
@@ -114,8 +120,9 @@ def generate_launch_description():
     ld.add_action(cmd_vel)
     ld.add_action(head_joints)
     ld.add_action(arm_joint_control)
-    ld.add_action(arm_endeffector_control)
-    ld.add_action(cartesian_trajectory_planner)
+    #ld.add_action(arm_endeffector_control)
+    #ld.add_action(cartesian_trajectory_planner)
+    #ld.add_action(amazing_hand)
     ld.add_action(emergency_stop)
 
 
@@ -199,7 +206,7 @@ def generate_launch_description():
         }.items()
     )
 
-    #ld.add_action(head_camera)
+    ld.add_action(head_camera)
     #ld.add_action(head_camera_launch)
     ld.add_action(lidar)
     ld.add_action(display)
@@ -220,7 +227,7 @@ def generate_launch_description():
             target_action=audio_client,
             on_start=[
                 TimerAction(
-                    period=5.0,
+                    period=15.0,
                     actions=[start_speech_cmd]
                 )
             ]
@@ -237,11 +244,21 @@ def generate_launch_description():
             'rs_launch.py',
             'camera_name:=d455',
             'camera_namespace:=head_camera',
-            'rgb_camera.profile:="640,480,30"',
-            'depth_module.profile:="640,480,30"',
-            'pointcloud.enable:=false',
+            'rgb_camera.color_profile:=640x480x30',
+            'depth_module.depth_profile:=640x480x30',
+            #'pointcloud.enable:=true',
+            'pointcloud__neon_.enable:=true',
         ],
         output='screen'
+    )
+    enable_pointcloud_cmd = TimerAction(
+        period=3.0,
+        actions=[
+            ExecuteProcess(
+                cmd=['ros2', 'param', 'set', '/head_camera/d455', 'pointcloud__neon_.enable', 'true'],
+                output='screen'
+            )
+        ]
     )
     launch_d455_handler = RegisterEventHandler(
         event_handler=OnProcessStart(
@@ -249,13 +266,12 @@ def generate_launch_description():
             on_start=[
                 TimerAction(
                     period=1.0,
-                    actions=[launch_d455_cmd]
+                    actions=[launch_d455_cmd, enable_pointcloud_cmd]
                 )
             ]
         )
     )
-
-    ld.add_action(launch_d455_handler)
+    #ld.add_action(launch_d455_handler)
 
 
 

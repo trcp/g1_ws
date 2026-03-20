@@ -46,7 +46,9 @@ setup(
         'console_scripts': [
             'sample_tts = samples.sample_tts:main',
             'sample_head_control = samples.sample_head_control:main',
-            'sample_hand_control = samples.sample_hand_control:main'
+            'sample_hand_control = samples.sample_hand_control:main',
+            'sample_arm_control = samples.sample_arm_control:main',
+            'sample_navigation = samples.sample_navigation:main'
         ],
     },
 )

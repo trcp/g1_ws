@@ -32,8 +32,9 @@ TILT_HOME_PULSE = 2048
 PAN_DIR  = 1
 TILT_DIR = 1
 
-PAN_RAD_OFFSET  = 0.0
-TILT_RAD_OFFSET = -0.6
+#PAN_RAD_OFFSET  = 0.325
+PAN_RAD_OFFSET  = -0.1
+TILT_RAD_OFFSET = -0.057
 
 # --- キャリブレーション結果に基づくリミット設定 (マージン込み) ---
 # Measured: Tilt [1039:2751], Pan [1938:3131]
@@ -187,14 +188,14 @@ class PanTiltNode(Node):
             self.get_logger().error(f"CRITICAL: Communication lost! ({e})")
             self.is_connected = False
 
-    def rad_to_pulse(self, rad, home_pulse, direction):
-        return int(home_pulse + (rad * (4096.0 / (2 * math.pi)) * direction))
+    def rad_to_pulse(self, rad, home_pulse, direction, offset_rad):
+        return int(home_pulse + ((rad - offset_rad) * (4096.0 / (2 * math.pi)) * direction))
 
     def pulse_to_rad(self, pulse, home_pulse, direction, offset_rad):
         return (pulse - home_pulse) * (2 * math.pi / 4096.0) * direction + offset_rad
 
-    def write_position_rad(self, dxl_id, rad, home_pulse, direction):
-        pulse = self.rad_to_pulse(rad, home_pulse, direction)
+    def write_position_rad(self, dxl_id, rad, home_pulse, direction, offset_rad):
+        pulse = self.rad_to_pulse(rad, home_pulse, direction, offset_rad)
         self.safe_write_pulse(dxl_id, pulse)
 
     # --- 共通処理: 状態の取得と配信 ---
@@ -335,8 +336,8 @@ class PanTiltNode(Node):
         self.target_pan_rad = target_pan
         self.target_tilt_rad = target_tilt
         
-        self.write_position_rad(ID_PAN, target_pan, PAN_HOME_PULSE, PAN_DIR)
-        self.write_position_rad(ID_TILT, target_tilt, TILT_HOME_PULSE, TILT_DIR)
+        self.write_position_rad(ID_PAN, target_pan, PAN_HOME_PULSE, PAN_DIR, PAN_RAD_OFFSET)
+        self.write_position_rad(ID_TILT, target_tilt, TILT_HOME_PULSE, TILT_DIR, TILT_RAD_OFFSET)
         
         success = self.wait_for_both_arrival(target_pan, target_tilt)
         
@@ -386,8 +387,8 @@ class PanTiltNode(Node):
                 self.last_vel_time = 0.0
 
         if self.is_connected:
-             self.write_position_rad(ID_PAN, self.target_pan_rad, PAN_HOME_PULSE, PAN_DIR)
-             self.write_position_rad(ID_TILT, self.target_tilt_rad, TILT_HOME_PULSE, TILT_DIR)
+             self.write_position_rad(ID_PAN, self.target_pan_rad, PAN_HOME_PULSE, PAN_DIR, PAN_RAD_OFFSET)
+             self.write_position_rad(ID_TILT, self.target_tilt_rad, TILT_HOME_PULSE, TILT_DIR, TILT_RAD_OFFSET)
 
     def timer_callback(self):
         if not self.is_connected:
@@ -399,8 +400,8 @@ class PanTiltNode(Node):
         if (time.time() - self.last_vel_time) < VEL_TIMEOUT_SEC:
             self.target_pan_rad  += self.vel_cmd_pan  * CONTROL_PERIOD_SEC
             self.target_tilt_rad += self.vel_cmd_tilt * CONTROL_PERIOD_SEC
-            self.write_position_rad(ID_PAN, self.target_pan_rad, PAN_HOME_PULSE, PAN_DIR)
-            self.write_position_rad(ID_TILT, self.target_tilt_rad, TILT_HOME_PULSE, TILT_DIR)
+            self.write_position_rad(ID_PAN, self.target_pan_rad, PAN_HOME_PULSE, PAN_DIR, PAN_RAD_OFFSET)
+            self.write_position_rad(ID_TILT, self.target_tilt_rad, TILT_HOME_PULSE, TILT_DIR, TILT_RAD_OFFSET)
 
         curr_pan, curr_tilt = self.publish_current_state()
         

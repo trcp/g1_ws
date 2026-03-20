@@ -1,18 +1,7 @@
 /**:
   ros__parameters:
-    # Parameters that can be modified during runtime
-    depth_module:
-      profile: "848,480,30"
-      enable_auto_exposure: true
-      exposure:
-        "1": 7500
-        "2": 1
-      gain:
-        "1": 16
-        "2": 16
-    rgb_camera:
-      profile: "848,480,30"
-      enable_auto_exposure: true
+    rgb_camera.color_profile: 640x480x30
+    depth_module.depth_profile: 640x480x30
 
     # Flags
     enable_depth: true
@@ -41,11 +30,10 @@
     diagnostics_period: 0.0
 
     # Post-Processing Filters
-    align_depth:
-      enable: false
+    align_depth.enable: true
     colorizer:
       enable: false
-    pointcloud:
+    pointcloud__neon_:
       enable: true
       stream_filter: 2
       allow_no_texture_points: true

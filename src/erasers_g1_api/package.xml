@@ -17,6 +17,7 @@
   <depend>amazing_hand_interfaces</depend>
   <depend>g1_srvs</depend>
   <depend>g1_description</depend>
+  <depend>tf_transformations</depend>
 
   <export>
     <build_type>ament_python</build_type>

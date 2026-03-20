@@ -143,5 +143,9 @@ G1 内部で以下のコマンドを実行して 2D マップを作成．[map](/
 ```bash
 docker compose exec erasers_g1 bash -ic "ros2 launch g1_cartographer slam_toolbox.launch.py"
 ```
+ナビゲーションの実行．
+```bash
+docker compose exec erasers_g1 bash -ic "ros2 launch g1_navigation navigation.launch.py"
+```
 
 </details>

@@ -16,6 +16,7 @@
   <depend>amazing_hand_nodes</depend>
   <depend>erasers_g1_common_cpp</depend>
   <depend>erasers_g1_api</depend>
+  <depend>g1_hw_controller</depend>
   <depend>g1_description</depend>
   <depend>g1_bringup</depend>
   <depend>g1_cartographer</depend>
