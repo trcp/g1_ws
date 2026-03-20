@@ -1,5 +1,27 @@
 # g1_ws
 
+<details>
+<summary>クライアント PC セットアップ</summary>
+
+　クライアント PC（G1 と接続する PC）の g1_ws をビルド方法を解説します。
+
+1. このリポジトリをクローンする
+1. 環境変数 `PASSWORD` にコンテナ内部アカウント用のパスワードを設定する。ローカリューザーと同じパスワードにすると良い。
+    ```bash
+    export PASSWORD=password
+    ```
+1. `katana` サービスをビルドする。
+    ```bash
+    docker compose build katana
+    ```
+1. Docker イメージ `erasers_g1:latest` がビルドされたか確認する。
+    ```bash
+    docker images | grep erasers_g1
+    ```
+
+</details>
+
+
 ## G1 と接続する方法
 1. G1 と PC を Ethernet で接続する
 1. G1 に SSH する
