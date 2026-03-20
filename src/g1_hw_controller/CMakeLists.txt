@@ -42,7 +42,7 @@ install(DIRECTORY include/
   DESTINATION include
 )
 
-install(DIRECTORY config launch urdf
+install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}
 )
 
