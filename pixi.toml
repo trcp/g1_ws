@@ -6,6 +6,16 @@ platforms = ["linux-64"]
 version = "0.1.0"
 
 [tasks]
+# setup tasks
+clean_caches = { cmd = "rm -rf ./install ./build ./log" }
+make_depends_dir = { cmd = "mkdir -p src/depends" }
+vcs = { cmd = "vcs import src/depends < depends.repos", depends-on = [
+    'make_depends_dir',
+] }
+build = { cmd = "colcon build --symlink-install --packages-up-to robot_tasks --packages-skip unitree_go unitree_hg unitree_api", depends-on = [
+    "vcs",
+    "clean_caches",
+] }
 
 [dependencies]
 ros-humble-desktop-full = ">=0.10.0,<0.11"
@@ -21,9 +31,16 @@ ros-humble-rmw-cyclonedds-cpp = ">=1.3.4,<2"
 ros-humble-slam-toolbox = ">=2.6.10,<3"
 ros-humble-rqt-tf-tree = ">=1.0.5,<2"
 ros-humble-rqt-reconfigure = ">=1.1.2,<2"
+vcstool = "*"
+ros-humble-image-geometry = ">=3.2.1,<4"
+ros-humble-tf2-ros = ">=0.25.14,<0.26"
+ros-humble-rosbag2-storage-mcap = ">=0.15.14,<0.16"
 
 [pypi-dependencies]
 rustypot = ">=1.4.2, <2"
 
 [activation.env]
-RMW_IMPLEMENTATION="rmw_cyclonedds_cpp"
+RMW_IMPLEMENTATION = "rmw_cyclonedds_cpp"
+
+[activation]
+scripts = ["install/setup.sh"]

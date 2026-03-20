@@ -24,8 +24,20 @@ x-preferences: &preferences
   group_add:
     - "dialout"
 
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [ gpu ]
+
 # ---------------------------------------------------------------
 services:
+  # =======================
+  # Unitree G1 用のコンテナ
+  # =======================
   erasers_g1:
     container_name: erasers_g1
     image: erasers_g1:latest
@@ -39,10 +51,42 @@ services:
         - ROS=humble
         - USERNAME=${USER}
         - GROUPNAME=${USER}
+        - PASSWORD=123
     <<: *preferences
     command: '/bin/bash -ci " ros2 launch g1_bringup bringup.launch.py"'
     #command: "/bin/bash"
 
+  # =============
+  # Katana PC 用
+  # =============
+  katana:
+    container_name: erasers_g1
+    image: erasers_g1:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: robot
+      args:
+        - TARGET_ARCH=cuda.13.0.0
+        - OS=22.04
+        - ROS=humble
+        - USERNAME=${USER}
+        - GROUPNAME=${USER}
+        - PASSWORD
+    <<: [ *preferences, *gpu ]
+    volumes:
+      - ./cyclonedds:$HOME/cyclonedds
+    environment:
+      - DISPLAY
+      - RMW_IMPLEMENTATION
+      # DO NOT EDIT
+      - CYCLONEDDS_URI=$HOME/cyclonedds/cyclonedds.xml
+    #command: '/bin/bash -ci " ros2 launch g1_bringup bringup.launch.py"'
+    command: "/bin/bash -ci \"rviz2 -d $(ros2 pkg prefix g1_description)/share/g1_description/rviz/g1.rviz & terminator\""
+
+  # ===============================================
+  # G1 内部で rosbag を実行したり検証したりする
+  # ===============================================
   devel:
     container_name: devel
     image: erasers_g1:latest

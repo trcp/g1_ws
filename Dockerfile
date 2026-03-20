@@ -13,17 +13,17 @@ FROM gai313/ros2:${ROS}.${TARGET_ARCH} AS robot
 ARG ROS=humble
 
 # build args
-ARG USERNAME=unitree
-ARG GROUPNAME=unitree
+ARG USERNAME
+ARG GROUPNAME
 ARG UID=1000
 ARG GID=1000
-ARG PASSWORD=123
+ARG PASSWORD
 
 # Add user
 RUN groupadd -g $GID $GROUPNAME &&\
     useradd -m -s /bin/bash -u $UID -g $GID -G sudo $USERNAME &&\
     echo $USERNAME:$PASSWORD | chpasswd
-    #echo "$USERNAME   ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+#echo "$USERNAME   ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 # Add workspace
 USER $USERNAME
@@ -54,11 +54,14 @@ USER root
 RUN . /opt/ros/${ROS}/setup.bash &&\
     apt update &&\
     rosdep install -y -i --from-path .\
-        --skip-keys pointcloud_to_2dmap &&\
+    --skip-keys pointcloud_to_2dmap \
+    --skip-keys pcl_localization_ros2 \
+    --skip-keys direct_lidar_inertial_odometry \
+    --skip-keys fast_lio &&\
     rm -rf /var/lib/apt/lists/*
 
 # Fix pointcloud2_to_2dmap shared ptr ref
-RUN sed -i '97c\  auto cloud = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();' ./pointcloud_to_2dmap/src/pointcloud_to_2dmap.cpp
+#RUN sed -i '97c\  auto cloud = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();' ./pointcloud_to_2dmap/src/pointcloud_to_2dmap.cpp
 
 # resolve mapeditor depends
 RUN apt-get update && apt-get install -y \
