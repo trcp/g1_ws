@@ -8,6 +8,7 @@ Panels:
         - /TF1/Tree1
         - /LiDAR2D1/Topic1
         - /Map1/Topic1
+        - /HeadCamera1/Visibility1
       Splitter Ratio: 0.5
     Tree Height: 235
   - Class: rviz_common/Selection
@@ -27,7 +28,7 @@ Panels:
     Experimental: false
     Name: Time
     SyncMode: 0
-    SyncSource: LiDAR2D
+    SyncSource: ""
 Visualization Manager:
   Class: ""
   Displays:
@@ -60,20 +61,190 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /robot_description
-      Enabled: false
+      Enabled: true
       Links:
         All Links Enabled: true
         Expand Joint Details: false
         Expand Link Details: false
         Expand Tree: false
         Link Tree Style: Links in Alphabetic Order
+        base_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        d435_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        d455_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        head_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        head_servo_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        imu_in_pelvis:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        imu_in_torso:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        left_ankle_pitch_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_ankle_roll_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_elbow_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_hip_pitch_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_hip_roll_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_hip_yaw_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_knee_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_shoulder_pitch_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_shoulder_roll_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_shoulder_yaw_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        left_wrist_roll_rubber_hand:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        logo_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        mid360_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+        pelvis:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        pelvis_contour_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_ankle_pitch_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_ankle_roll_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_elbow_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_hip_pitch_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_hip_roll_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_hip_yaw_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_knee_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_shoulder_pitch_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_shoulder_roll_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_shoulder_yaw_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        right_wrist_roll_rubber_hand:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        torso_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
+        xl330_link:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
+          Value: true
       Mass Properties:
         Inertia: false
         Mass: false
       Name: RobotModel
       TF Prefix: ""
       Update Interval: 0
-      Value: false
+      Value: true
       Visual Enabled: true
     - Class: rviz_default_plugins/TF
       Enabled: true
@@ -86,12 +257,6 @@ Visualization Manager:
           Value: true
         d435_link:
           Value: false
-        d455_accel_frame:
-          Value: false
-        d455_accel_optical_frame:
-          Value: false
-        d455_aligned_depth_to_infra1_frame:
-          Value: false
         d455_color_frame:
           Value: false
         d455_color_optical_frame:
@@ -99,22 +264,6 @@ Visualization Manager:
         d455_depth_frame:
           Value: false
         d455_depth_optical_frame:
-          Value: false
-        d455_gyro_frame:
-          Value: false
-        d455_gyro_optical_frame:
-          Value: false
-        d455_imu_frame:
-          Value: false
-        d455_imu_optical_frame:
-          Value: false
-        d455_infra1_frame:
-          Value: false
-        d455_infra1_optical_frame:
-          Value: false
-        d455_infra2_frame:
-          Value: false
-        d455_infra2_optical_frame:
           Value: false
         d455_link:
           Value: false
@@ -220,28 +369,11 @@ Visualization Manager:
                   head_servo_link:
                     xl330_link:
                       d455_link:
-                        d455_accel_frame:
-                          d455_accel_optical_frame:
-                            {}
-                        d455_aligned_depth_to_infra1_frame:
-                          d455_infra1_optical_frame:
-                            {}
                         d455_color_frame:
                           d455_color_optical_frame:
                             {}
                         d455_depth_frame:
                           d455_depth_optical_frame:
-                            {}
-                        d455_gyro_frame:
-                          d455_gyro_optical_frame:
-                            {}
-                          d455_imu_frame:
-                            d455_imu_optical_frame:
-                              {}
-                        d455_infra1_frame:
-                          {}
-                        d455_infra2_frame:
-                          d455_infra2_optical_frame:
                             {}
                   imu_in_torso:
                     {}
@@ -467,8 +599,8 @@ Visualization Manager:
         LocalCostMap: true
         LocalPath: true
         Map: true
-        RobotModel: true
-        TF: true
+        RobotModel: false
+        TF: false
         Value: true
       Zoom Factor: 1
   Enabled: true
@@ -517,25 +649,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 15.649636268615723
+      Distance: 7.173196792602539
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 1.425392985343933
-        Y: -1.7103310823440552
-        Z: 0.288040429353714
+        X: 1.06626296043396
+        Y: -0.5799599885940552
+        Z: 0.2887308597564697
       Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.5697963237762451
+      Pitch: 0.7397966384887695
       Target Frame: ""
       Value: Orbit (rviz_default_plugins)
-      Yaw: 3.1200003623962402
+      Yaw: 2.8199830055236816
     Saved: ~
 Window Geometry:
   Displays:
@@ -556,4 +688,4 @@ Window Geometry:
     collapsed: true
   Width: 1446
   X: 72
-  Y: 27
+  Y: 32

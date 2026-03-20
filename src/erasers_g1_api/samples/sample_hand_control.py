@@ -21,14 +21,14 @@ def main():
     tts = TTS(node)
     robot = G1Control(node)
 
-    tts.say('open the left hand')
+    tts.say('open the left hand', False)
     robot.hand_control(command='open', hand='left')
 
-    tts.say('open the right hand')
+    tts.say('open the right hand', False)
     robot.hand_control(command='open', hand='right')
 
-    tts.say('close the both hand')
+    tts.say('close the both hand', False)
     robot.hand_control(command='close', hand='both')
 
-    tts.say('both hand for walking')
+    tts.say('both hand for walking', False)
     robot.hand_control(command='walk', hand='both')
