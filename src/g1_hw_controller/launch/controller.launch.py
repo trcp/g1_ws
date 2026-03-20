@@ -43,6 +43,6 @@ def generate_launch_description():
     return LaunchDescription([
         control_node,
         joint_state_broadcaster_spawner,
-        forward_position_controller_spawner,
+        #forward_position_controller_spawner,
         upper_body_controller_spawner,
     ])
