@@ -1,0 +1,18 @@
+# kinematics.yaml
+# G1 ヒューマノイドロボット上半身 計画グループの逆運動学 (IK) ソルバ設定
+#
+# 注意: KDL ソルバはチェーン（一直線のリンク構造）にしか対応していない。
+# upper_body グループは腰＋両腕のツリー構造のため、KDL IK は設定できない。
+# （move_group での軌道計画は可能だが、IK での姿勢指定は arm_left/arm_right のみ）
+
+arm_left:
+  kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin
+  kinematics_solver_search_resolution: 0.005
+  kinematics_solver_timeout: 0.05
+  kinematics_solver_attempts: 3
+
+arm_right:
+  kinematics_solver: kdl_kinematics_plugin/KDLKinematicsPlugin
+  kinematics_solver_search_resolution: 0.005
+  kinematics_solver_timeout: 0.05
+  kinematics_solver_attempts: 3
