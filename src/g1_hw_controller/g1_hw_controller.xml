@@ -1,0 +1,9 @@
+<library path="g1_hw_controller">
+  <class name="g1_hw_controller/G1UpperBodyHW"
+         type="g1_hw_controller::G1UpperBodyHW"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Hardware interface for Unitree G1 upper body control via topics.
+    </description>
+  </class>
+</library>

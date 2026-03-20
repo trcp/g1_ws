@@ -23,7 +23,7 @@ def generate_launch_description():
         'robot_description',
         default_value = os.path.join(
             get_package_share_directory('g1_description'),
-            'urdf', 'g1_comp.urdf'
+            'urdf', 'erasers_g1.urdf.xacro'
         ),
         description='Full path for robot description.'
     )
