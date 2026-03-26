@@ -69,6 +69,8 @@ class LocoServiceClientNode : public rclcpp::Node {
       ret = client_.Damp();
     } else if (pose == PosePolicy::Request::START) {
       ret = client_.Start();
+    } else if (pose == PosePolicy::Request::RUNNING_MODE) {
+      ret = client_.RunningMode();
     } else if (pose == PosePolicy::Request::SQUAT) {
       ret = client_.SetFsmId(706);
     } else if (pose == PosePolicy::Request::SIT) {
