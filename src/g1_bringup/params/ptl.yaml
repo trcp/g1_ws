@@ -1,9 +1,9 @@
 pointcloud_to_laserscan:
   ros__parameters:
-    target_frame: "" # MessageFilterをバイパスし、入力点群のフレームを継承
+    target_frame: "base_footprint" # MessageFilterをバイパスし、入力点群のフレームを継承
     queue_size: 2 # 軽量化のため10から2に変更
     transform_tolerance: 0.2
-    min_height: -0.8
+    min_height: 0.05
     max_height: 2.0
     angle_min: -3.14159265359 # -M_PI
     angle_max: 3.14159265359 # M_PI

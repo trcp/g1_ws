@@ -76,13 +76,20 @@ services:
     <<: [ *preferences, *gpu ]
     volumes:
       - ./cyclonedds:$HOME/cyclonedds
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - $HOME/.Xauthority/:$HOME/.Xauthority
+      - ./src:$HOME/colcon_ws/src/erasers_g1
+      - ./rosbag:$HOME/colcon_ws/rosbag
+      - ./map:$HOME/colcon_ws/map
+      # timezone
+      - /etc/localtime:/etc/localtime:ro
     environment:
       - DISPLAY
       - RMW_IMPLEMENTATION
       # DO NOT EDIT
       - CYCLONEDDS_URI=$HOME/cyclonedds/cyclonedds.xml
     #command: '/bin/bash -ci " ros2 launch g1_bringup bringup.launch.py"'
-    command: "/bin/bash -ci \"rviz2 -d $(ros2 pkg prefix g1_description)/share/g1_description/rviz/g1.rviz & terminator\""
+    command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py & terminator\""
 
   # ===============================================
   # G1 内部で rosbag を実行したり検証したりする
