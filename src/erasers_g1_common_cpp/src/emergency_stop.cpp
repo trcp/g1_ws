@@ -34,7 +34,8 @@ private:
       RCLCPP_ERROR(this->get_logger(), "EMERGENCY STOP BY REMOTE CONTROLLER!!!!!");
 
       auto request = std::make_shared<g1_srvs::srv::PosePolicy::Request>();
-      request->pose = "damp";
+      //request->pose = "damp";
+      request->pose = "squat";
 
       using ServiceResponseFuture = rclcpp::Client<g1_srvs::srv::PosePolicy>::SharedFuture;
       auto response_received_callback = [this](ServiceResponseFuture future) {
