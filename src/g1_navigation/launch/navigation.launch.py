@@ -41,7 +41,7 @@ def generate_launch_description():
         os.environ['HOME'],
         'colcon_ws',
         'map',
-        'map_kayamori.yaml'
+        'map.yaml'
     )
 
     declare_map_yaml_file = DeclareLaunchArgument(

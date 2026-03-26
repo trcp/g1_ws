@@ -19,8 +19,8 @@ import os
 def generate_launch_description():
     ld = LaunchDescription()
 
-    default_g1_cartographer_prefix = get_package_share_directory('g1_cartographer')
-    pointcloud_to_laserscan_config = os.path.join(default_g1_cartographer_prefix, 'config', 'pointcloud_to_laserscan.yaml')
+    default_g1_cartographer_prefix = get_package_share_directory('g1_bringup')
+    pointcloud_to_laserscan_config = os.path.join(default_g1_cartographer_prefix, 'params', 'ptl.yaml')
     default_map_path = os.path.join(os.environ['HOME'], 'colcon_ws', 'map')
     default_map_name = 'map'
     default_save_late = 5000
@@ -82,7 +82,6 @@ def generate_launch_description():
     )
     '''
 
-    '''
     pointcloud_to_laserscan = Node(
         package='pointcloud_to_laserscan',
         executable='pointcloud_to_laserscan_node',
@@ -97,7 +96,6 @@ def generate_launch_description():
             ('scan', '/scan'),
         ],
     )
-    '''
 
     map_saver = Node(
         package='g1_cartographer',
@@ -112,7 +110,7 @@ def generate_launch_description():
         ],
     )
 
-    ld.add_action(pointcloud_to_laserscan)
+    #ld.add_action(pointcloud_to_laserscan)
     ld.add_action(map_saver)
 
     slam_toolbox = LifecycleNode(
