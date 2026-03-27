@@ -7,7 +7,7 @@ x-preferences: &preferences
   stop_signal: SIGINT
   environment:
     - DISPLAY
-    - RMW_IMPLEMENTATION
+    - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
     # DO NOT EDIT
     - CYCLONEDDS_URI=$HOME/cyclonedds.xml
   devices:
@@ -85,7 +85,7 @@ services:
       - /etc/localtime:/etc/localtime:ro
     environment:
       - DISPLAY
-      - RMW_IMPLEMENTATION
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       # DO NOT EDIT
       - CYCLONEDDS_URI=$HOME/cyclonedds/cyclonedds.xml
     #command: '/bin/bash -ci " ros2 launch g1_bringup bringup.launch.py"'
