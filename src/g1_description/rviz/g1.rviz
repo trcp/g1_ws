@@ -4,6 +4,7 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
+        - /TF1/Frames1
         - /TF1/Tree1
         - /LiDAR2D1/Topic1
         - /Map1/Topic1
@@ -19,7 +20,8 @@ Panels:
     Name: Tool Properties
     Splitter Ratio: 0.5886790156364441
   - Class: rviz_common/Views
-    Expanded: ~
+    Expanded:
+      - /Current View1
     Name: Views
     Splitter Ratio: 0.5
   - Class: rviz_common/Time
@@ -97,6 +99,10 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
+        left_amazing_hand:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
         left_ankle_pitch_link:
           Alpha: 1
           Show Axes: false
@@ -171,6 +177,10 @@ Visualization Manager:
           Show Axes: false
           Show Trail: false
           Value: true
+        right_amazing_hand:
+          Alpha: 1
+          Show Axes: false
+          Show Trail: false
         right_ankle_pitch_link:
           Alpha: 1
           Show Axes: false
@@ -256,9 +266,9 @@ Visualization Manager:
         d435_link:
           Value: false
         d455_accel_frame:
-          Value: true
+          Value: false
         d455_accel_optical_frame:
-          Value: true
+          Value: false
         d455_color_frame:
           Value: false
         d455_color_optical_frame:
@@ -268,13 +278,13 @@ Visualization Manager:
         d455_depth_optical_frame:
           Value: false
         d455_gyro_frame:
-          Value: true
+          Value: false
         d455_gyro_optical_frame:
-          Value: true
+          Value: false
         d455_imu_frame:
-          Value: true
+          Value: false
         d455_imu_optical_frame:
-          Value: true
+          Value: false
         d455_link:
           Value: false
         head_link:
@@ -285,6 +295,8 @@ Visualization Manager:
           Value: false
         imu_in_torso:
           Value: false
+        left_amazing_hand:
+          Value: true
         left_ankle_pitch_link:
           Value: false
         left_ankle_roll_link:
@@ -309,16 +321,16 @@ Visualization Manager:
           Value: false
         logo_link:
           Value: false
-        map:
-          Value: true
         mid360_link:
           Value: false
         odom:
           Value: true
         pelvis:
-          Value: true
+          Value: false
         pelvis_contour_link:
           Value: false
+        right_amazing_hand:
+          Value: true
         right_ankle_pitch_link:
           Value: false
         right_ankle_roll_link:
@@ -351,8 +363,6 @@ Visualization Manager:
       Show Axes: true
       Show Names: true
       Tree:
-        map:
-          {}
         odom:
           base_footprint:
             base_link:
@@ -405,7 +415,8 @@ Visualization Manager:
                       left_shoulder_yaw_link:
                         left_elbow_link:
                           left_wrist_roll_rubber_hand:
-                            {}
+                            left_amazing_hand:
+                              {}
                   logo_link:
                     {}
                   mid360_link:
@@ -415,7 +426,8 @@ Visualization Manager:
                       right_shoulder_yaw_link:
                         right_elbow_link:
                           right_wrist_roll_rubber_hand:
-                            {}
+                            right_amazing_hand:
+                              {}
       Update Interval: 0
       Value: true
     - Alpha: 1
@@ -433,7 +445,7 @@ Visualization Manager:
       Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 161
+      Max Intensity: 156
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: LiDAR
@@ -623,13 +635,13 @@ Visualization Manager:
         LocalPath: true
         Map: true
         RobotModel: false
-        TF: false
+        TF: true
         Value: true
       Zoom Factor: 1
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: map
+    Fixed Frame: odom
     Frame Rate: 30
   Name: root
   Tools:
@@ -672,7 +684,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 7.173196792602539
+      Distance: 3.6448304653167725
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -690,7 +702,7 @@ Visualization Manager:
       Pitch: 1.5697963237762451
       Target Frame: base_link
       Value: Orbit (rviz_default_plugins)
-      Yaw: 3.1349828243255615
+      Yaw: 1.5718220472335815
     Saved: ~
 Window Geometry:
   Displays:
