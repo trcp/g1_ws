@@ -185,8 +185,8 @@ controller_server:
       vx_std: 0.3
       vy_std: 0.1
       wz_std: 0.6
-      vx_max: 0.5
-      vx_min: -0.1
+      vx_max: 0.8
+      vx_min: -0.25
       vy_max: 0.3
       vy_min: -0.3
       wz_max: 2.0
@@ -197,7 +197,18 @@ controller_server:
       gamma: 0.015
       motion_model: "Omni"
       visualize: false
-      critics: ["ConstraintCritic", "ObstaclesCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic", "VelocityDeadbandCritic"]
+      critics:
+        [
+          "ConstraintCritic",
+          "ObstaclesCritic",
+          "GoalCritic",
+          "GoalAngleCritic",
+          "PathAlignCritic",
+          "PathFollowCritic",
+          "PathAngleCritic",
+          "PreferForwardCritic",
+          "VelocityDeadbandCritic",
+        ]
       ConstraintCritic:
         enabled: true
         cost_power: 1
