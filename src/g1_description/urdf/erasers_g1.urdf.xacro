@@ -3,6 +3,24 @@
   <!-- Original URDF -->
   <xacro:include filename="$(find g1_description)/urdf/g1_comp.urdf" />
 
+  <!-- EE -->
+  <xacro:property name="ee_origin">
+    <origin xyz="0.16 0 0" rpy="0 0 0"/>
+  </xacro:property>
+
+  <link name="left_amazing_hand"/>
+  <joint name="left_amazing_hand_joint" type="fixed">
+    <parent link="left_wrist_roll_rubber_hand"/>
+    <child link="left_amazing_hand"/>
+    <xacro:insert_block name="ee_origin"/>
+  </joint>
+  <link name="right_amazing_hand"/>
+  <joint name="right_amazing_hand_joint" type="fixed">
+    <parent link="right_wrist_roll_rubber_hand"/>
+    <child link="right_amazing_hand"/>
+    <xacro:insert_block name="ee_origin"/>
+  </joint>
+
   <!-- ros2_control configuration -->
   <ros2_control name="G1UpperBodyHW" type="system">
     <hardware>
