@@ -4,10 +4,12 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
+        - /Global Options1
         - /TF1/Frames1
         - /TF1/Tree1
         - /LiDAR2D1/Topic1
         - /Map1/Topic1
+        - /LocalPath1
         - /HeadCamera1/Visibility1
       Splitter Ratio: 0.5
     Tree Height: 331
@@ -321,6 +323,8 @@ Visualization Manager:
           Value: false
         logo_link:
           Value: false
+        map:
+          Value: true
         mid360_link:
           Value: false
         odom:
@@ -363,6 +367,8 @@ Visualization Manager:
       Show Axes: true
       Show Names: true
       Tree:
+        map:
+          {}
         odom:
           base_footprint:
             base_link:
@@ -609,7 +615,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /local_plan
+        Value: /plan
       Value: true
     - Class: rviz_default_plugins/Camera
       Enabled: true
@@ -634,10 +640,31 @@ Visualization Manager:
         LocalCostMap: true
         LocalPath: true
         Map: true
+        Pose: true
         RobotModel: false
         TF: true
         Value: true
       Zoom Factor: 1
+    - Alpha: 1
+      Axes Length: 1
+      Axes Radius: 0.10000000149011612
+      Class: rviz_default_plugins/Pose
+      Color: 255; 25; 0
+      Enabled: true
+      Head Length: 0.30000001192092896
+      Head Radius: 0.10000000149011612
+      Name: Pose
+      Shaft Length: 1
+      Shaft Radius: 0.05000000074505806
+      Shape: Arrow
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /goal_pose
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -684,7 +711,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 3.6448304653167725
+      Distance: 19.174400329589844
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -702,7 +729,7 @@ Visualization Manager:
       Pitch: 1.5697963237762451
       Target Frame: base_link
       Value: Orbit (rviz_default_plugins)
-      Yaw: 1.5718220472335815
+      Yaw: 0.5568230152130127
     Saved: ~
 Window Geometry:
   Displays:
