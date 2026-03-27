@@ -141,7 +141,7 @@ ros2 service call /sync_ee_pose std_srvs/srv/SetBool "data: true"
 
 G1 内部で以下のコマンドを実行して 2D マップを作成．[map](/map) ディレクトリに自動保存されます．
 ```bash
-docker compose exec erasers_g1 bash -ic "ros2 launch g1_cartographer slam_toolbox.launch.py"
+docker compose exec erasers_g1 bash -ic "ros2 launch g1_cartographer slam_toolbox.launch.py map_name:=map"
 ```
 ナビゲーションの実行．
 ```bash
