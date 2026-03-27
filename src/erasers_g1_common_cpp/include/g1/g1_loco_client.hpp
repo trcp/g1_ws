@@ -6,6 +6,7 @@
 #include <limits>
 #include <rclcpp/node.hpp>
 #include <string>
+#include <atomic>
 
 #include "common/base_client.hpp"
 #include "common/ut_errror.hpp"
@@ -42,9 +43,35 @@ class LocoClient {
   BaseClient base_client_;
 
  public:
-  explicit LocoClient(rclcpp::Node* node)
+    explicit LocoClient(rclcpp::Node* node)
       : node_(node),
-        base_client_(node_, "/api/sport/request", "/api/sport/response") {}
+        base_client_(node_, "/api/sport/request", "/api/sport/response") {
+    current_fsm_id_.store(-1);
+    callback_group_ = node_->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+    auto sub_options = rclcpp::SubscriptionOptions();
+    sub_options.callback_group = callback_group_;
+
+    state_sub_ = node_->create_subscription<unitree_api::msg::Response>(
+        "/api/sport/response", rclcpp::QoS(1),
+        [this](const unitree_api::msg::Response::SharedPtr msg) {
+          try {
+            auto js = nlohmann::json::parse(msg->data);
+            // Some messages have {"data": value}, others might just be the value
+            if (msg->header.identity.api_id == ROBOT_API_ID_LOCO_GET_FSM_ID ||
+                msg->header.identity.api_id == ROBOT_API_ID_LOCO_GET_FSM_MODE) {
+              if (js.is_object() && js.contains("data") && js["data"].is_number()) {
+                current_fsm_id_.store(js["data"].get<int>());
+              } else if (js.is_number()) {
+                current_fsm_id_.store(js.get<int>());
+              }
+            } else if (js.is_object() && js.contains("data") && js["data"].is_number()) {
+              // As per user hint, any message on this topic might have the mode in "data"
+              current_fsm_id_.store(js["data"].get<int>());
+            }
+          } catch (...) {
+          }
+        }, sub_options);
+  }
 
   /*Low Level API Call*/
   int32_t GetFsmId(int& fsm_id) {
@@ -250,9 +277,28 @@ class LocoClient {
     }
   }
 
+  int32_t WaitFsmId(int target_fsm_id, double timeout_sec = 5.0) {
+    RCLCPP_INFO(node_->get_logger(), "WaitFsmId: target=%d, start_id=%d", target_fsm_id, current_fsm_id_.load());
+    auto start_time = node_->now();
+    while ((node_->now() - start_time).seconds() < timeout_sec) {
+      if (current_fsm_id_.load() == target_fsm_id) {
+        return 0;
+      }
+      // Periodic poll
+      int dummy_id;
+      GetFsmId(dummy_id);
+      rclcpp::sleep_for(std::chrono::milliseconds(200));
+    }
+    RCLCPP_WARN(node_->get_logger(), "WaitFsmId: timed out. Final ID=%d", current_fsm_id_.load());
+    return UT_ROBOT_TASK_TIMEOUT;
+  }
+
  private:
   bool continous_move_ = false;
   bool first_shake_hand_stage_ = true;
+  std::atomic<int> current_fsm_id_;
+  rclcpp::Subscription<unitree_api::msg::Response>::SharedPtr state_sub_;
+  rclcpp::CallbackGroup::SharedPtr callback_group_;
 };
 }  // namespace unitree::robot::g1
 
