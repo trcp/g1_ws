@@ -13,9 +13,9 @@ request_adapters: >-
   default_planner_request_adapters/FixWorkspaceBounds
   default_planner_request_adapters/FixStartStateBounds
   default_planner_request_adapters/FixStartStateCollision
+  default_planner_request_adapters/AddTimeOptimalParameterization
 
 response_adapters: >-
-  default_planning_response_adapters/AddTimeOptimalParameterization
   default_planning_response_adapters/ValidateSolution
   default_planning_response_adapters/DisplayMotionPlans
   default_planning_response_adapters/PublishMotionPlanningDisplay

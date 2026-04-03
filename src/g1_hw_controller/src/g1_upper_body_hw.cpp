@@ -42,8 +42,11 @@ hardware_interface::CallbackReturn G1UpperBodyHW::on_init(const hardware_interfa
   // Initialize ROS 2 Node
   node_ = std::make_shared<rclcpp::Node>("g1_upper_body_hw_node");
   joint_command_pub_ = node_->create_publisher<sensor_msgs::msg::JointState>("/upper_joints_control", 10);
-  low_state_sub_ = node_->create_subscription<unitree_hg::msg::LowState>(
-    "/lowstate", 10, std::bind(&G1UpperBodyHW::lowStateCallback, this, std::placeholders::_1));
+  
+  rclcpp::QoS qos_profile(10);
+  qos_profile.best_effort();
+  joint_state_sub_ = node_->create_subscription<sensor_msgs::msg::JointState>(
+    "/joint_states", qos_profile, std::bind(&G1UpperBodyHW::jointStateCallback, this, std::placeholders::_1));
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -97,13 +100,9 @@ hardware_interface::return_type G1UpperBodyHW::read(const rclcpp::Time & /*time*
   for (size_t i = 0; i < info_.joints.size(); ++i)
   {
     const auto & joint_name = info_.joints[i].name;
-    if (joint_map_.find(joint_name) != joint_map_.end())
+    if (feedback_map_.find(joint_name) != feedback_map_.end())
     {
-      int motor_idx = joint_map_[joint_name];
-      if (feedback_states_.find(motor_idx) != feedback_states_.end())
-      {
-        hw_states_[i] = feedback_states_[motor_idx];
-      }
+      hw_states_[i] = feedback_map_[joint_name];
     }
   }
 
@@ -132,15 +131,11 @@ hardware_interface::return_type G1UpperBodyHW::write(const rclcpp::Time & /*time
   return hardware_interface::return_type::OK;
 }
 
-void G1UpperBodyHW::lowStateCallback(const unitree_hg::msg::LowState::SharedPtr msg)
+void G1UpperBodyHW::jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg)
 {
-  for (const auto & pair : joint_map_)
+  for (size_t i = 0; i < msg->name.size(); ++i)
   {
-    int idx = pair.second;
-    if (idx >= 0 && idx < 35) // G1 motor count
-    {
-      feedback_states_[idx] = msg->motor_state[idx].q;
-    }
+    feedback_map_[msg->name[i]] = msg->position[i];
   }
 }
 

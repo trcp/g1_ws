@@ -203,9 +203,9 @@ private:
       q_last_publish_ = q_solution_;
       q_current_full_ = pinocchio::neutral(model_full_);
 
-      // Add Offset Frames (0.2m x) relative to wrist_roll_joint
-      addToFrame("left_wrist_roll_joint", "L_ee", Eigen::Vector3d(0.2, 0, 0));
-      addToFrame("right_wrist_roll_joint", "R_ee", Eigen::Vector3d(0.2, 0, 0));
+      // Add Offset Frames (0.0m) relative to amazing_hand_joint
+      addToFrame("left_amazing_hand_joint", "L_ee", Eigen::Vector3d(0, 0, 0));
+      addToFrame("right_amazing_hand_joint", "R_ee", Eigen::Vector3d(0, 0, 0));
 
       left_ee_frame_id_ = model_.getFrameId("L_ee");
       right_ee_frame_id_ = model_.getFrameId("R_ee");

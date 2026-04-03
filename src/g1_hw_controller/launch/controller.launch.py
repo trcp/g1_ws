@@ -34,6 +34,12 @@ def generate_launch_description():
         arguments=['joint_state_broadcaster', '--controller-manager', '/controller_manager'],
     )
 
+    joint_state_broadcaster_spawner = Node(
+        package='controller_manager',
+        executable='spawner',
+        arguments=['joint_state_broadcaster', '--controller-manager', '/controller_manager'],
+    )
+
     upper_body_controller_spawner = Node(
         package='controller_manager',
         executable='spawner',
@@ -43,6 +49,5 @@ def generate_launch_description():
     return LaunchDescription([
         control_node,
         joint_state_broadcaster_spawner,
-        #forward_position_controller_spawner,
         upper_body_controller_spawner,
     ])

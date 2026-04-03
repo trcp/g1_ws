@@ -24,6 +24,8 @@ find_package(interactive_markers REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(ros_environment REQUIRED)
+find_package(control_msgs REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(pinocchio QUIET)
 
 if(NOT pinocchio_FOUND)
@@ -177,6 +179,8 @@ ament_target_dependencies(cartesian_trajectory_planner
   tf2_geometry_msgs 
   g1_srvs
 )
+
+
 
 install(TARGETS
   cmd_vel

@@ -43,7 +43,7 @@ upper_body_controller:
     state_interfaces:
       - position
     action_monitor_rate: 10.0
-    allow_partial_joints_goal: false
+    allow_partial_joints_goal: true
     constraints:
       stopped_velocity_tolerance: 0.1
       goal_time: 0.6
