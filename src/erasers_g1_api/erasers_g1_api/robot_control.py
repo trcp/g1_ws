@@ -4,11 +4,15 @@ import rclpy
 
 # msgs
 from geometry_msgs.msg import Twist, PoseStamped, PoseWithCovarianceStamped, Pose
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, JointState
+from shape_msgs.msg import SolidPrimitive
 from amazing_hand_interfaces.srv import HandCommand
 from g1_srvs.srv import MoveServo
 from nav2_msgs.action import NavigateToPose
 from action_msgs.msg import GoalStatus
+from moveit_msgs.action import MoveGroup, ExecuteTrajectory
+from moveit_msgs.msg import Constraints, JointConstraint, PositionConstraint, OrientationConstraint, MoveItErrorCodes
+from moveit_msgs.srv import GetPositionIK
 
 # tf
 from geometry_msgs.msg import TransformStamped
@@ -23,7 +27,6 @@ from rclpy.action import ActionClient
 from rclpy_util.util import TemporarySubscriber
 
 # ArmControl specific imports
-from g1_srvs.action import CartesianEE
 from std_srvs.srv import SetBool, Trigger
 import tf_transformations
 
@@ -471,7 +474,7 @@ class ArmControl():
         node : Node
             ROS2 ノードオブジェクト
         wait_time : int, optional
-            アクションサーバーやサービスの接続待機時間(秒)。デフォルトは 5。
+            アクションサーバーの接続待機時間(秒)。デフォルトは 5。
         tf_buffer : Buffer, optional
             TF2 バッファオブジェクト。None の場合は新規作成。デフォルトは None。
         """
@@ -482,87 +485,42 @@ class ArmControl():
         self.__tf_buffer = tf_buffer or Buffer()
         self.__tf_listener = TransformListener(self.__tf_buffer, self.__node)
 
-        # Action Clients Setup
-        self.__left_action_client = ActionClient(self.__node, CartesianEE, "/left_arm/cartesian_planner")
-        self.__right_action_client = ActionClient(self.__node, CartesianEE, "/right_arm/cartesian_planner")
+        # MoveGroup Action Client
+        self.__move_group_client = ActionClient(self.__node, MoveGroup, "/move_action")
         
-        # Service Clients Setup
-        self.__enable_srv_client = self.__node.create_client(SetBool, "/enable_ee_control")
-        self.__init_pose_srv_client = self.__node.create_client(Trigger, "/set_init_pose")
+        if not self.__move_group_client.wait_for_server(timeout_sec=wait_time):
+            self.__node.get_logger().error("MoveGroup action server not available...")
 
-        if not self.__left_action_client.wait_for_server(timeout_sec=wait_time) or \
-           not self.__right_action_client.wait_for_server(timeout_sec=wait_time):
-            self.__node.get_logger().error("Cartesian planner action servers not available...")
+        # IK Service Client
+        self.__ik_cli = self.__node.create_client(GetPositionIK, "/compute_ik")
+        if not self.__ik_cli.wait_for_service(timeout_sec=wait_time):
+            self.__node.get_logger().error("IK service /compute_ik not available...")
 
-    def init_pose(self, wait: bool = True) -> bool:
+        # Joint states storage
+        self.__joint_states = {}
+        self.__joint_sub = self.__node.create_subscription(
+            JointState,
+            "/joint_states",
+            self.__joint_state_callback,
+            10
+        )
+
+    def __joint_state_callback(self, msg: JointState):
+        for name, pos in zip(msg.name, msg.position):
+            self.__joint_states[name] = pos
+
+    def get_current_joints_pose(self, planning_group: str = 'upper_body'):
         """
-        アームの現在位置（IKソリューション）をニュートラルな初期（ゼロ）姿勢にリセットする．
-        /set_init_pose サービスを呼び出します。
-
-        Parameters
-        ----------
-        wait : bool, optional
-            遷移完了まで待機するかどうか。デフォルトは True。
+        現在の各ジョイントの角度を取得します。
 
         Returns
         -------
-        bool
-            成功時は True、失敗時は False。
+        dict
+            各ジョイント名をキー、角度(rad)を値とする辞書
         """
-        if not self.__init_pose_srv_client.wait_for_service(timeout_sec=2.0):
-            self.__node.get_logger().error("Init pose service not available")
-            return False
-            
-        req = Trigger.Request()
-        future = self.__init_pose_srv_client.call_async(req)
-        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=5.0)
-        
-        if future.done():
-            success = future.result().success
-            if success and wait:
-                start_req = time.time()
-                while time.time() - start_req < 5.0 and rclpy.ok():
-                    rclpy.spin_once(self.__node, timeout_sec=0.1)
-            return success
-        return False
+        return self.__joint_states.copy()
 
-    def enable(self, state: bool, wait: bool = True) -> bool:
-        """
-        アーム制御の有効/無効を切り替える．
-        C++側で自動的に遷移が行われるため、Python側では状態の送信と待機のみを行います。
-        /enable_ee_control サービスを呼び出します。
-
-        Parameters
-        ----------
-        state : bool
-            True で制御有効化、False で無効化（現在姿勢の維持）。
-        wait : bool, optional
-            遷移完了まで待機するかどうか。デフォルトは True。
-
-        Returns
-        -------
-        bool
-            成功時は True、失敗時は False。
-        """
-        if not self.__enable_srv_client.wait_for_service(timeout_sec=2.0):
-            self.__node.get_logger().error("Enable service not available")
-            return False
-
-        req = SetBool.Request()
-        req.data = state
-        future = self.__enable_srv_client.call_async(req)
-        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=5.0)
-        
-        if future.done():
-            success = future.result().success
-            if state and success and wait:
-                start_req = time.time()
-                while time.time() - start_req < 5.0 and rclpy.ok():
-                    rclpy.spin_once(self.__node, timeout_sec=0.1)
-            return success
-        return False
-
-    def get_current_pose(self, simple: bool = False, arm: str = 'left', reference_frame: str = 'base_link'):
+    def get_current_pose(self, simple: bool = False, planning_group: str = 'upper_body', reference_frame: str = 'base_link'):
         """
         指定されたエンドエフェクタの現在位置姿勢を取得する．
 
@@ -571,195 +529,163 @@ class ArmControl():
         simple : bool, optional
             True の場合、[x, y, z, roll, pitch, yaw] の1次元リストとして現在位置を出力する。
             False の場合、PoseStamped 型で現在位置を出力する。デフォルトは False。
-        arm : str, optional
-            'left', 'right', 'both' のいずれかを指定する。デフォルトは 'left'。
+        planning_group : str, optional
+            SRDFで定義されたプランニンググループ名。デフォルトは 'upper_body'。
         reference_frame : str, optional
             基準となる座標フレーム。デフォルトは 'base_link'。
 
         Returns
         -------
-        PoseStamped or list of float or list
-            arm='both' の場合は、左右両方の姿勢データのリストを返す（例: `[left_pose, right_pose]`）。
+        PoseStamped or list of float
+            現在の姿勢データ。
         """
-        if arm == 'both':
-            return [
-                self.get_current_pose(simple, 'left', reference_frame),
-                self.get_current_pose(simple, 'right', reference_frame)
-            ]
-
-        while rclpy.ok():
+        tip_link = "left_amazing_hand" if "left" in planning_group else "right_amazing_hand"
+            
+        start_time = self.__node.get_clock().now()
+        while rclpy.ok() and (self.__node.get_clock().now() - start_time).nanoseconds < 2e9: # 2s timeout
             rclpy.spin_once(self.__node, timeout_sec=0.1)
             try:
-                # ターゲットフレームはIK制御で使用される手先の基準フレーム
-                target_frame = 'left_wrist_roll_rubber_hand' if arm == 'left' else 'right_wrist_roll_rubber_hand'
-                transform = self.__tf_buffer.lookup_transform(reference_frame, target_frame, rclpy.time.Time())
+                transform = self.__tf_buffer.lookup_transform(reference_frame, tip_link, rclpy.time.Time())
+                pos = transform.transform.translation
+                rot = transform.transform.rotation
                 
-                t_x = transform.transform.translation.x
-                t_y = transform.transform.translation.y
-                t_z = transform.transform.translation.z
-                q = transform.transform.rotation
-
-                # Apply 0.2m offset for true IK target (Offset along local X)
-                T_mat = tf_transformations.quaternion_matrix([q.x, q.y, q.z, q.w])
-                offset = [0.2, 0.0, 0.0, 1.0]
-                world_offset = [sum(a * b for a, b in zip(row, offset)) for row in T_mat]
-
-                target_x = t_x + world_offset[0]
-                target_y = t_y + world_offset[1]
-                target_z = t_z + world_offset[2]
-
                 if simple:
-                    (roll, pitch, yaw) = euler_from_quaternion([q.x, q.y, q.z, q.w])
-                    return [target_x, target_y, target_z, roll, pitch, yaw]
+                    (roll, pitch, yaw) = euler_from_quaternion([rot.x, rot.y, rot.z, rot.w])
+                    return [pos.x, pos.y, pos.z, roll, pitch, yaw]
                 else:
                     pose = PoseStamped()
                     pose.header.frame_id = reference_frame
                     pose.header.stamp = self.__node.get_clock().now().to_msg()
-                    pose.pose.position.x = target_x
-                    pose.pose.position.y = target_y
-                    pose.pose.position.z = target_z
-                    pose.pose.orientation = q
+                    pose.pose.position.x = pos.x
+                    pose.pose.position.y = pos.y
+                    pose.pose.position.z = pos.z
+                    pose.pose.orientation = rot
                     return pose
             except Exception as e:
-                self.__node.get_logger().debug(f"TF Lookup failed for {arm} arm: {str(e)}")
+                self.__node.get_logger().debug(f"TF Lookup failed for {tip_link}: {str(e)}")
                 continue
+        return None
 
-    def move_to_pose(self, pose, duration: float = 2.0, arm: str = 'left', wait: bool = True) -> bool:
+    def move_to_pose(self, pose, planning_group: str = 'upper_body', wait: bool = True, **kwargs) -> bool:
         """
         与えられた目標姿勢に向けてエンドエフェクタを自律移動させる．
-        KeyboardInterrupt 発生時には即座にアクションをキャンセルする。
 
         Parameters
         ----------
-        pose : PoseStamped or list of PoseStamped or Pose or list of Pose
-            目標とする姿勢情報。arm='both' の場合、左右それぞれの Goal が格納された長さ2のリストを受け付ける
-            （単一のオブジェクトが渡された場合は両腕を同じ目的座標に移動させる）。
-        duration : float, optional
-            移動にかける時間(秒)。デフォルトは 2.0。
-        arm : str, optional
-            'left', 'right', 'both' のいずれか。デフォルトは 'left'。
+        pose : PoseStamped or Pose
+            目標とする姿勢情報。
+        planning_group : str, optional
+            使用するプランニンググループ名。デフォルトは 'upper_body'。
         wait : bool, optional
             移動完了まで処理をブロックするかどうか。デフォルトは True。
+        **kwargs
+            planning_attempts: 計画試行回数 (default: 10)
+            planning_time: 許容計画時間 (default: 5.0)
 
         Returns
         -------
         bool
-            動作が成功した場合は True、失敗・キャンセルされた場合は False。
+            動作が成功した場合は True、失敗した場合は False。
         """
-        self.__current_goal_handles.clear()
+        goal_msg = MoveGroup.Goal()
+        goal_msg.request.group_name = planning_group
+        goal_msg.request.num_planning_attempts = kwargs.get('planning_attempts', 10)
+        goal_msg.request.allowed_planning_time = kwargs.get('planning_time', 5.0)
+        
+        # Determine tip link (assuming standard names for G1)
+        tip_link = "left_amazing_hand" if "left" in planning_group else "right_amazing_hand"
+        
+        # Formulate goal constraints
+        target_pose = pose
+        if isinstance(pose, Pose):
+            target_pose = PoseStamped()
+            target_pose.header.frame_id = "base_link"
+            target_pose.pose = pose
+            
+        l_pc, l_oc = self._create_pose_constraints(target_pose, tip_link)
+        goal_msg.request.goal_constraints.append(Constraints(
+            position_constraints=[l_pc],
+            orientation_constraints=[l_oc]
+        ))
+        
+        return self._send_move_group_goal(goal_msg, wait)
 
-        # Handle Pose to PoseStamped conversion
-        def cast_to_stamped(p):
-            if isinstance(p, Pose):
-                ps = PoseStamped()
-                ps.header.frame_id = 'base_link'
-                ps.header.stamp = self.__node.get_clock().now().to_msg()
-                ps.pose = p
-                return ps
-            return p
+    def _create_pose_constraints(self, target_pose: PoseStamped, tip_link: str):
+        """
+        PoseStamped から PositionConstraint と OrientationConstraint を生成する内部ヘルパー。
+        (pc, oc) のタプルを返す。
+        """
+        # Position Constraint
+        pc = PositionConstraint()
+        pc.header.frame_id = target_pose.header.frame_id
+        pc.link_name = tip_link
+        pc.constraint_region.primitive_poses.append(target_pose.pose)
+        
+        box = SolidPrimitive()
+        box.type = SolidPrimitive.BOX
+        box.dimensions = [0.01, 0.01, 0.01] # 1cm tolerance
+        pc.constraint_region.primitives.append(box)
+        pc.weight = 1.0
+        
+        # Orientation Constraint
+        oc = OrientationConstraint()
+        oc.header.frame_id = target_pose.header.frame_id
+        oc.link_name = tip_link
+        oc.orientation = target_pose.pose.orientation
+        oc.absolute_x_axis_tolerance = 0.1 # 0.1rad tolerance
+        oc.absolute_y_axis_tolerance = 0.1
+        oc.absolute_z_axis_tolerance = 0.1
+        oc.weight = 1.0
+        
+        return pc, oc
 
-        if arm == 'both':
-            if isinstance(pose, list) and len(pose) == 2:
-                pose_left = cast_to_stamped(pose[0])
-                pose_right = cast_to_stamped(pose[1])
+    def _solve_ik(self, pose_stamped: PoseStamped, group_name: str) -> dict:
+        """
+        MoveIt の /compute_ik サービスを使用して特定のグループの逆運動学を解く。
+        """
+        req = GetPositionIK.Request()
+        req.ik_request.group_name = group_name
+        req.ik_request.pose_stamped = pose_stamped
+        req.ik_request.timeout.sec = 1
+        
+        # 現在の関節状態を反映
+        if self.__joint_states:
+            req.ik_request.robot_state.joint_state.name = list(self.__joint_states.keys())
+            req.ik_request.robot_state.joint_state.position = list(self.__joint_states.values())
+        
+        future = self.__ik_cli.call_async(req)
+        # IKサービスは比較的速いので短めのタイムアウトで spin
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=2.0)
+        
+        if future.done():
+            res = future.result()
+            if res.error_code.val == MoveItErrorCodes.SUCCESS:
+                return dict(zip(res.solution.joint_state.name, res.solution.joint_state.position))
             else:
-                pose_left = cast_to_stamped(pose)
-                pose_right = cast_to_stamped(pose)
+                self.__node.get_logger().error(f"IK failed for {group_name} with error: {res.error_code.val}")
+        return None
 
-            future_l = self._send_goal('left', pose_left, duration)
-            future_r = self._send_goal('right', pose_right, duration)
-            return self._wait_for_futures([future_l, future_r], wait, duration)
-        else:
-            p = cast_to_stamped(pose)
-            future = self._send_goal(arm, p, duration)
-            return self._wait_for_futures([future], wait, duration)
-
-    def _send_goal(self, arm: str, pose: PoseStamped, duration: float):
-        client = self.__left_action_client if arm == 'left' else self.__right_action_client
-        goal_msg = CartesianEE.Goal()
-        goal_msg.pose = pose
-        goal_msg.duration = duration
-        return client.send_goal_async(goal_msg)
-
-    def _wait_for_futures(self, futures: list, wait: bool, duration: float) -> bool:
-        if not wait:
-            # wait_for_futures non-blocking is just a small wait to ensure goal is accepted
-            try:
-                start_req = time.time()
-                while time.time() - start_req < 0.2 and rclpy.ok():
-                    rclpy.spin_once(self.__node, timeout_sec=0.1)
-            except KeyboardInterrupt:
-                pass
-            return True
-
-        # Blocking wait mechanism
-        try:
-            handles = []
-            for f in futures:
-                rclpy.spin_until_future_complete(self.__node, f, timeout_sec=10.0)
-                if f.done():
-                    handle = f.result()
-                    if handle.accepted:
-                        handles.append(handle)
-                        self.__current_goal_handles.append(handle)
-
-            if not handles:
-                self.__node.get_logger().error("All Action goals were rejected or timed out")
-                return False
-
-            result_futures = [h.get_result_async() for h in handles]
-            
-            # Spin until all results are in, or KeyboardInterrupt occurs
-            start_time = time.time()
-            all_done = False
-            while rclpy.ok() and not all_done:
-                all_done = all([rf.done() for rf in result_futures])
-                rclpy.spin_once(self.__node, timeout_sec=0.1)
-                
-                # Fallback timeout in case the action server gets stuck
-                if time.time() - start_time > duration + 5.0:
-                    self.__node.get_logger().warn("Action server timeout.")
-                    break
-            
-            success = True
-            for rf in result_futures:
-                if rf.done() and rf.result().status != GoalStatus.STATUS_SUCCEEDED:
-                    success = False
-                    
-            return success
-
-        except KeyboardInterrupt:
-            self.__node.get_logger().warn("KeyboardInterrupt: Canceling arm trajectory...")
-            for h in self.__current_goal_handles:
-                cancel_f = h.cancel_goal_async()
-                rclpy.spin_until_future_complete(self.__node, cancel_f, timeout_sec=3.0)
-            self.__current_goal_handles.clear()
-            return False
-            
-    def move_abs(self, x: float = 0.0, y: float = 0.0, z: float = 0.0, roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0, duration: float = 2.0, reference_frame: str = 'base_link', arm: str = 'left', wait: bool = True) -> bool:
+    def move_abs(self, x: float = 0.0, y: float = 0.0, z: float = 0.0, roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0, planning_group: str = 'upper_body', wait: bool = True, reference_frame: str = 'base_link', **kwargs) -> bool:
         """
-        基準フレームでの絶対座標を指定してアームを移動させる．
-        指定されたエンドエフェクタの位置が範囲外でも，アームはその方向へ最大限伸ばすように動作する（C++側での自動緩和）。
+        絶対座標指定でロボットを移動させる．
 
         Parameters
         ----------
         x, y, z : float
-            目標位置の座標。
+            目標位置。
         roll, pitch, yaw : float
-            目標姿勢のオイラー角（ラジアン）。
-        duration : float, optional
-            移動時間。デフォルトは 2.0。
+            目標姿勢（ラジアン）。
+        planning_group : str, optional
+            プランニンググループ名。デフォルトは 'upper_body'。
+        wait : bool, optional
+            完了待機の有無。デフォルトは True。
         reference_frame : str, optional
             基準座標系。デフォルトは 'base_link'。
-        arm : str, optional
-            'left', 'right', 'both' のいずれか。
-        wait : bool, optional
-            移動完了まで待機するかどうか。
-
+        
         Returns
         -------
         bool
-            成功時は True、失敗時は False。
+            成功時は True。
         """
         pose = PoseStamped()
         pose.header.frame_id = reference_frame
@@ -774,36 +700,13 @@ class ArmControl():
         pose.pose.orientation.z = q[2]
         pose.pose.orientation.w = q[3]
 
-        return self.move_to_pose(pose, duration=duration, arm=arm, wait=wait)
+        return self.move_to_pose(pose, planning_group=planning_group, wait=wait, **kwargs)
 
-    def move_rel(self, x: float = 0.0, y: float = 0.0, z: float = 0.0, roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0, duration: float = 2.0, arm: str = 'left', wait: bool = True) -> bool:
+    def move_rel(self, x: float = 0.0, y: float = 0.0, z: float = 0.0, roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0, planning_group: str = 'upper_body', wait: bool = True, **kwargs) -> bool:
         """
-        現在位置姿勢からの相対座標でアームを移動させる．
-
-        Parameters
-        ----------
-        x, y, z : float
-            現在位置からの相対移動量。
-        roll, pitch, yaw : float
-            現在姿勢からの相対的な回転量（ラジアン）。
-        duration : float, optional
-            移動時間。
-        arm : str, optional
-            対象とするアーム。
-        wait : bool, optional
-            完了待機の有無。
-
-        Returns
-        -------
-        bool
-            成功時は True、失敗時は False。
+        現在位置姿勢からの相対移動．
         """
-        if arm == 'both':
-            succ_l = self.move_rel(x, y, z, roll, pitch, yaw, duration, 'left', wait)
-            succ_r = self.move_rel(x, y, z, roll, pitch, yaw, duration, 'right', wait)
-            return succ_l and succ_r
-            
-        current_pose = self.get_current_pose(simple=True, arm=arm, reference_frame='base_link')
+        current_pose = self.get_current_pose(simple=True, planning_group=planning_group)
         if current_pose is None:
             self.__node.get_logger().error("Could not get current pose for relative movement")
             return False
@@ -818,6 +721,202 @@ class ArmControl():
         q_rel = tf_transformations.quaternion_from_euler(roll, pitch, yaw)
         q_new = tf_transformations.quaternion_multiply(q_curr, q_rel)
         
-        (new_roll, new_pitch, new_yaw) = euler_from_quaternion(q_new)
+        (nr, np, ny) = euler_from_quaternion(q_new)
 
-        return self.move_abs(x=new_x, y=new_y, z=new_z, roll=new_roll, pitch=new_pitch, yaw=new_yaw, duration=duration, reference_frame='base_link', arm=arm, wait=wait)
+        return self.move_abs(x=new_x, y=new_y, z=new_z, roll=nr, pitch=np, yaw=ny, planning_group=planning_group, wait=wait, **kwargs)
+
+    def move_dual_abs(self, lx=0.0, ly=0.0, lz=0.0, lr=0.0, lp=0.0, lyaw=0.0,
+                      rx=0.0, ry=0.0, rz=0.0, rr=0.0, rp=0.0, ryaw=0.0,
+                      wait=True, reference_frame='base_link', **kwargs) -> bool:
+        """
+        左右の手の目標座標を同時に指定して移動させる。
+        planning_group は強制的に 'upper_body' が使用されます。
+        """
+        goal_msg = MoveGroup.Goal()
+        goal_msg.request.group_name = 'upper_body'
+        goal_msg.request.num_planning_attempts = kwargs.get('planning_attempts', 10)
+        goal_msg.request.allowed_planning_time = kwargs.get('planning_time', 5.0)
+
+        # Left Arm Pose
+        l_pose = PoseStamped()
+        l_pose.header.frame_id = reference_frame
+        l_pose.header.stamp = self.__node.get_clock().now().to_msg()
+        l_pose.pose.position.x = float(lx)
+        l_pose.pose.position.y = float(ly)
+        l_pose.pose.position.z = float(lz)
+        l_q = quaternion_from_euler(lr, lp, lyaw)
+        l_pose.pose.orientation.x = l_q[0]
+        l_pose.pose.orientation.y = l_q[1]
+        l_pose.pose.orientation.z = l_q[2]
+        l_pose.pose.orientation.w = l_q[3]
+        l_pc, l_oc = self._create_pose_constraints(l_pose, "left_amazing_hand")
+
+        # Right Arm Pose
+        r_pose = PoseStamped()
+        r_pose.header.frame_id = reference_frame
+        r_pose.header.stamp = self.__node.get_clock().now().to_msg()
+        r_pose.pose.position.x = float(rx)
+        r_pose.pose.position.y = float(ry)
+        r_pose.pose.position.z = float(rz)
+        r_q = quaternion_from_euler(rr, rp, ryaw)
+        r_pose.pose.orientation.x = r_q[0]
+        r_pose.pose.orientation.y = r_q[1]
+        r_pose.pose.orientation.z = r_q[2]
+        r_pose.pose.orientation.w = r_q[3]
+        # Right Arm IK
+        r_pc, r_oc = self._create_pose_constraints(r_pose, "right_amazing_hand")
+
+        # Solve IK for both arms to get joint targets
+        l_joints = self._solve_ik(l_pose, "arm_left")
+        r_joints = self._solve_ik(r_pose, "arm_right")
+
+        if l_joints is None or r_joints is None:
+            self.__node.get_logger().error(f"Dual IK solving failed. L: {'Success' if l_joints else 'Fail'}, R: {'Success' if r_joints else 'Fail'}")
+            return False
+        
+        self.__node.get_logger().info("Dual IK solved successfully. Proceeding with joint-space planning.")
+
+        # Build joint constraints for upper_body
+        goal_msg = MoveGroup.Goal()
+        goal_msg.request.group_name = 'upper_body'
+        goal_msg.request.num_planning_attempts = kwargs.get('planning_attempts', 10)
+        goal_msg.request.allowed_planning_time = kwargs.get('planning_time', 5.0)
+
+        constraints = Constraints()
+        # combine joints (L & R)
+        target_joints = {**l_joints, **r_joints}
+        
+        # Define target joints for upper_body (Waist + Both Arms)
+        upper_body_joints = [
+            "waist_yaw_joint",
+            "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint", "left_elbow_joint", "left_wrist_roll_joint",
+            "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint", "right_elbow_joint", "right_wrist_roll_joint"
+        ]
+
+        for j_name in upper_body_joints:
+            jc = JointConstraint()
+            jc.joint_name = j_name
+            # IK結果があればそれを使用、なければ現在値を保持
+            jc.position = target_joints.get(j_name, self.__joint_states.get(j_name, 0.0))
+            jc.tolerance_above = 0.01
+            jc.tolerance_below = 0.01
+            jc.weight = 1.0
+            constraints.joint_constraints.append(jc)
+
+        goal_msg.request.goal_constraints.append(constraints)
+        return self._send_move_group_goal(goal_msg, wait)
+
+    def move_dual_rel(self, lx=0.0, ly=0.0, lz=0.0, lr=0.0, lp=0.0, lyaw=0.0,
+                      rx=0.0, ry=0.0, rz=0.0, rr=0.0, rp=0.0, ryaw=0.0,
+                      wait=True, **kwargs) -> bool:
+        """
+        現在位置からの左右同時の相対移動。
+        """
+        l_curr = self.get_current_pose(simple=True, planning_group='arm_left')
+        r_curr = self.get_current_pose(simple=True, planning_group='arm_right')
+        
+        if l_curr is None or r_curr is None:
+            self.__node.get_logger().error("Could not get current pose for dual relative movement")
+            return False
+
+        # Left Relative
+        clx, cly, clz, clr, clp, clyaw = l_curr
+        nlx, nly, nlz = clx + lx, cly + ly, clz + lz
+        ql_curr = tf_transformations.quaternion_from_euler(clr, clp, clyaw)
+        ql_rel = tf_transformations.quaternion_from_euler(lr, lp, lyaw)
+        ql_new = tf_transformations.quaternion_multiply(ql_curr, ql_rel)
+        new_lr, new_lp, new_lyaw = euler_from_quaternion(ql_new)
+
+        # Right Relative
+        crx, cry, crz, crr, crp, cryaw = r_curr
+        nrx, nry, nrz = crx + rx, cry + ry, crz + rz
+        qr_curr = tf_transformations.quaternion_from_euler(crr, crp, cryaw)
+        qr_rel = tf_transformations.quaternion_from_euler(rr, rp, ryaw)
+        qr_new = tf_transformations.quaternion_multiply(qr_curr, qr_rel)
+        new_rr, new_rp, new_ryaw = euler_from_quaternion(qr_new)
+
+        return self.move_dual_abs(lx=nlx, ly=nly, lz=nlz, lr=new_lr, lp=new_lp, lyaw=new_lyaw,
+                                  rx=nrx, ry=nry, rz=nrz, rr=new_rr, rp=new_rp, ryaw=new_ryaw,
+                                  wait=wait, **kwargs)
+
+    def move_groupstate(self, group_name: str = 'upper_body', group_state: str = 'home', wait: bool = True) -> bool:
+        """
+        定義済み状態への遷移．
+        """
+        goal_msg = MoveGroup.Goal()
+        goal_msg.request.group_name = group_name
+        
+        joints = []
+        if group_name == "arm_left":
+            joints = ["left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint", "left_elbow_joint", "left_wrist_roll_joint"]
+        elif group_name == "arm_right":
+            joints = ["right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint", "right_elbow_joint", "right_wrist_roll_joint"]
+        elif group_name == "upper_body":
+            joints = ["waist_yaw_joint", "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint", "left_elbow_joint", "left_wrist_roll_joint", 
+                      "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint", "right_elbow_joint", "right_wrist_roll_joint"]
+        else:
+            self.__node.get_logger().error(f"Unsupported group: {group_name}")
+            return False
+            
+        constraints = Constraints()
+        for j in joints:
+            jc = JointConstraint()
+            jc.joint_name = j
+            jc.position = 0.0 # 'home' assumes all zero
+            jc.tolerance_above = 0.01
+            jc.tolerance_below = 0.01
+            jc.weight = 1.0
+            constraints.joint_constraints.append(jc)
+            
+        goal_msg.request.goal_constraints.append(constraints)
+        return self._send_move_group_goal(goal_msg, wait)
+
+    def joint_control(self, rlt: bool = False, wait: bool = True, planning_group: str = 'upper_body', **kwargs) -> bool:
+        """
+        ジョイント角度制御．
+        """
+        goal_msg = MoveGroup.Goal()
+        goal_msg.request.group_name = planning_group
+        
+        constraints = Constraints()
+        for name, val in kwargs.items():
+            jc = JointConstraint()
+            jc.joint_name = name
+            if rlt:
+                jc.position = self.__joint_states.get(name, 0.0) + val
+            else:
+                jc.position = val
+            jc.tolerance_above = 0.01
+            jc.tolerance_below = 0.01
+            jc.weight = 1.0
+            constraints.joint_constraints.append(jc)
+            
+        goal_msg.request.goal_constraints.append(constraints)
+        return self._send_move_group_goal(goal_msg, wait)
+
+    def _send_move_group_goal(self, goal_msg, wait):
+        self.__node.get_logger().info(f"Sending MoveGroup goal for group: {goal_msg.request.group_name}")
+        future = self.__move_group_client.send_goal_async(goal_msg)
+        
+        if not wait:
+            return True
+            
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=10.0)
+        if not future.done():
+            self.__node.get_logger().error("MoveGroup goal sending timed out")
+            return False
+            
+        handle = future.result()
+        if not handle.accepted:
+            self.__node.get_logger().error("MoveGroup goal rejected")
+            return False
+            
+        result_future = handle.get_result_async()
+        rclpy.spin_until_future_complete(self.__node, result_future)
+        result = result_future.result()
+        
+        if result.result.error_code.val == MoveItErrorCodes.SUCCESS:
+            return True
+        else:
+            self.__node.get_logger().error(f"MoveGroup failed with error code: {result.result.error_code.val}")
+            return False

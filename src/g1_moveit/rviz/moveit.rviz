@@ -47,7 +47,7 @@ Visualization Manager:
       Plane Cell Count: 10
       Reference Frame: <Fixed Frame>
       Value: true
-    - Acceleration_Scaling_Factor: 0.1
+    - Acceleration_Scaling_Factor: 0.30000000000000004
       Class: moveit_rviz_plugin/MotionPlanning
       Enabled: true
       Move Group Namespace: ""
@@ -484,7 +484,7 @@ Visualization Manager:
         Show Robot Collision: false
         Show Robot Visual: true
       Value: true
-      Velocity_Scaling_Factor: 0.1
+      Velocity_Scaling_Factor: 0.30000000000000004
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -546,10 +546,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.5853981971740723
+      Pitch: 0.4903982877731323
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 0.8203979730606079
+      Yaw: 1.1703976392745972
     Saved: ~
 Window Geometry:
   Displays:
