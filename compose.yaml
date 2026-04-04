@@ -1,3 +1,59 @@
+# ==========
+# NVIDIA GPU
+# ==========
+x-gpu: &gpu
+  environment:
+    - __NV_PRIME_RENDER_OFFLOAD=1
+    - __GLX_VENDOR_LIBRARY_NAME=nvidia
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
+
+
+# ======
+# JETSON
+# ======
+x-jetpack: &jetpack
+  environment:
+    - XAUTHORITY=/tmp/.docker.xauth
+    - NVIDIA_DRIVER_CAPABILITIES=all
+    - NVIDIA_VISIBLE_DEVICES=all
+  volumes:
+    - /run/jtop.sock:/run/jtop.sock
+    - /tmp/argus_socket:/tmp/argus_socket
+    - /etc/enctune.conf:/etc/enctune.conf
+    - /etc/nv_tegra_release:/etc/nv_tegra_release
+    - /tmp/nv_jetson_model:/tmp/nv_jetson_model
+    - /var/run/dbus:/var/run/dbus
+    - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket
+    - /var/run/docker.sock:/var/run/docker.sock
+    - /tmp/.X11-unix/:/tmp/.X11-unix
+    - /tmp/.docker.xauth:/tmp/.docker.xauth
+    - $HOME/.Xauthority/:/root/.Xauthority
+  devices:
+    - /dev:/dev
+  runtime: nvidia
+  build:
+    context: .
+    dockerfile: Dockerfile
+    target: sample
+    args:
+      - TARGET_ARCH=jetpack
+      - L4T_VERSION=r36.4.0
+      - USERNAME=${USER}
+      - GROUPNAME=${USER}
+      - PASSWORD
+      - UID=1000
+      - GID=1000
+
+
+# ===========
+# preferences
+# ===========
 x-preferences: &preferences
   privileged: true
   ipc: host
@@ -6,32 +62,17 @@ x-preferences: &preferences
   stdin_open: true
   stop_signal: SIGINT
   environment:
-    - DISPLAY
+    - DISPLAY=${DISPLAY}
+    - LC_TIME
+    - TZ=Asia/Tokyo
     - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-    # DO NOT EDIT
-    - CYCLONEDDS_URI=$HOME/cyclonedds.xml
   devices:
     - /dev:/dev
   volumes:
-    - /tmp/.X11-unix:/tmp/.X11-unix
-    - $HOME/.Xauthority/:$HOME/.Xauthority
     - ./src:$HOME/colcon_ws/src/erasers_g1
     - ./rosbag:$HOME/colcon_ws/rosbag
     - ./map:$HOME/colcon_ws/map
-    - $HOME/cyclonedds_ws/cyclonedds.xml:$HOME/cyclonedds.xml
-    # timezone
-    - /etc/localtime:/etc/localtime:ro
-  group_add:
-    - "dialout"
 
-x-gpu: &gpu
-  deploy:
-    resources:
-      reservations:
-        devices:
-          - driver: nvidia
-            count: 1
-            capabilities: [ gpu ]
 
 # ---------------------------------------------------------------
 services:
@@ -52,7 +93,7 @@ services:
         - USERNAME=${USER}
         - GROUPNAME=${USER}
         - PASSWORD=123
-    <<: *preferences
+    <<: [*preferences, *jetpack]
     command: '/bin/bash -ci " ros2 launch g1_bringup bringup.launch.py"'
     #command: "/bin/bash"
 
@@ -65,7 +106,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: robot
+      target: main
       args:
         - TARGET_ARCH=cuda.13.0.0
         - OS=22.04
@@ -73,23 +114,28 @@ services:
         - USERNAME=${USER}
         - GROUPNAME=${USER}
         - PASSWORD
-    <<: [ *preferences, *gpu ]
-    volumes:
-      - ./cyclonedds:$HOME/cyclonedds
-      - /tmp/.X11-unix:/tmp/.X11-unix
-      - $HOME/.Xauthority/:$HOME/.Xauthority
-      - ./src:$HOME/colcon_ws/src/erasers_g1
-      - ./rosbag:$HOME/colcon_ws/rosbag
-      - ./map:$HOME/colcon_ws/map
-      # timezone
-      - /etc/localtime:/etc/localtime:ro
-    environment:
-      - DISPLAY
-      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      # DO NOT EDIT
-      - CYCLONEDDS_URI=$HOME/cyclonedds/cyclonedds.xml
-    #command: '/bin/bash -ci " ros2 launch g1_bringup bringup.launch.py"'
+    <<: [*preferences, *gpu ]
     command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py & terminator\""
+  
+  # =============
+  # L4T 36.4
+  # =============
+  r36.4:
+    container_name: erasers_g1
+    image: erasers_g1:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: main
+      args:
+        - TARGET_ARCH=jetpack
+        - L4T_VERSION=r36.4.0
+        - USERNAME=${USER}
+        - GROUPNAME=${USER}
+        - PASSWORD
+    <<: [*preferences, *gpu, *jetpack ]
+    #command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py & terminator\""
+    command: "/bin/bash"
 
   # ===============================================
   # G1 内部で rosbag を実行したり検証したりする
@@ -100,7 +146,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: robot
+      target: main
       args:
         - TARGET_ARCH=arm64
         - OS=22.04
