@@ -128,6 +128,12 @@ def generate_launch_description():
         executable='emergency_stop',
         emulate_tty=True
     )
+    # Mic server
+    mic_server = Node(
+        package='erasers_g1_common_cpp',
+        executable='mic_server',
+        emulate_tty=True
+    )
 
     ld.add_action(loco_service_client)
     ld.add_action(audio_client)
@@ -140,6 +146,7 @@ def generate_launch_description():
     #ld.add_action(cartesian_trajectory_planner)
     #ld.add_action(amazing_hand)
     ld.add_action(emergency_stop)
+    ld.add_action(mic_server)
 
 
     # TF: base_link -> pelvis

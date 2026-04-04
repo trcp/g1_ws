@@ -180,6 +180,14 @@ ament_target_dependencies(cartesian_trajectory_planner
   g1_srvs
 )
 
+# mic_server
+add_executable(mic_server src/mic_server.cpp)
+ament_target_dependencies(mic_server 
+  rclcpp 
+  std_msgs 
+  std_srvs
+)
+
 
 
 install(TARGETS
@@ -195,6 +203,7 @@ install(TARGETS
   arm_endeffector_control
   emergency_stop
   cartesian_trajectory_planner
+  mic_server
   DESTINATION lib/${PROJECT_NAME}
 )
 install(
