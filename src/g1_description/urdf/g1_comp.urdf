@@ -541,6 +541,12 @@
     <parent link="torso_link"/>
     <child link="mid360_link"/>
   </joint>
+  <link name="livox_frame"></link>
+  <joint name="livox_joint" type="fixed">
+    <origin xyz="0.0002835 0.00003 0.40618" rpy="3.14 0.04014257279586953 0"/>
+    <parent link="torso_link"/>
+    <child link="livox_frame"/>
+  </joint>
 
   <!-- Arm -->
   <link name="left_shoulder_pitch_link">
