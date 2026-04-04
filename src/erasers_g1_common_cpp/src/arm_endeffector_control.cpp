@@ -36,9 +36,9 @@ class ArmEndEffectorControl : public rclcpp::Node
 public:
   ArmEndEffectorControl() : Node("arm_endeffector_control")
   {
-    this->declare_parameter("urdf_path", "/home/unitree/colcon_ws/src/erasers_g1/g1_description/urdf/g1_comp.urdf");
+    this->declare_parameter("urdf", "/home/unitree/colcon_ws/src/erasers_g1/g1_description/urdf/g1_comp.urdf");
     
-    std::string urdf_path = this->get_parameter("urdf_path").as_string();
+    std::string urdf_path = this->get_parameter("urdf").as_string();
 
     if (!initPinocchio(urdf_path)) {
       RCLCPP_ERROR(this->get_logger(), "Failed to initialize Pinocchio model.");
