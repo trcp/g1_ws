@@ -3,6 +3,7 @@
 # ROS2
 from rclpy_util.util import TemporarySubscriber
 from rclpy.node import Node
+from rclpy import qos
 import rclpy
 
 # TF
@@ -10,6 +11,8 @@ from tf2_ros import Buffer, TransformListener
 
 # interfaces
 from sensor_msgs.msg import Image, CameraInfo
+from std_srvs.srv import SetBool
+from std_msgs.msg import Int16MultiArray
 
 # erasers API
 from erasers_g1_api.tts import TTS
@@ -21,9 +24,208 @@ import smach
 from cv_bridge import CvBridge
 import cv2
 
+# whisper
+from faster_whisper import WhisperModel
+
 # preferences
+import numpy as np
 import traceback
 import time
+
+
+'''
+音声認識
+'''
+class SpeechToText(smach.State):
+    def __init__(self,
+                 node:Node,
+                 tts_say:TTS.say,
+                 timeout_sec:float=10.0,
+                 start_msg:str='Please task for me.',
+                 success_msg:str='I can hear! Please wait.',
+                 timeout_msg:str='Sorry. I can not hear.',
+                 device:str='cpu',
+                 model_size:str='base',
+                 lang:str='ja',
+                 success_keywards:list=[],
+                 speech_threshold:float=1000.0,
+                 silence_duration:float=1.5,
+                 max_record_duration:float=10.0,
+                 max_challenge:int=3):
+        
+        # init smach
+        smach.State.__init__(self,
+                             outcomes=['success', 'timeout', 'failure'],
+                             input_keys=['num_challenge'],
+                             output_keys=['num_challenge', 'stt_text'])
+        
+        # init values
+        self.__node:Node = node
+        self.__say:TTS.say = tts_say
+        self.__timeout_sec = timeout_sec
+        self.__start_msg = start_msg
+        self.__success_msg = success_msg
+        self.__timeout_msg = timeout_msg
+        self.__lang:str = lang
+        self.__whisper_model = WhisperModel(model_size, device=device) # init whisper
+        # VAD parameters
+        self.__speech_threshold = speech_threshold # Adjust based on mic sensitivity
+        self.__silence_duration = silence_duration # seconds
+        self.__max_record_duration = max_record_duration # seconds
+        self.__max_challenge = max_challenge
+        self.__success_keywards = success_keywards
+        self.__max_challenge = max_challenge
+
+        # mic service
+        self.__mic_cli = self.__node.create_client(SetBool, 'mic_rec')
+        while not self.__mic_cli.wait_for_service(timeout_sec=1.0):
+            self.__node.get_logger().error('mic_service not available')
+            raise RuntimeError('mic_service not available')
+    
+
+    def __send_mic_req(self, req:SetBool.Request):
+        future = self.__mic_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future)
+        response:SetBool.Response = future.result()
+        self.__node.get_logger().info('mic_service response: %s'%response.message)
+        return response.success
+    
+
+    def __audio_cb(self, msg: Int16MultiArray):
+        if self.__recording_finished:
+            return
+
+        # append data
+        self.__audio_buffer.extend(msg.data)
+        
+        # VAD check
+        chunk_data = np.array(msg.data, dtype=np.float32)
+        rms = np.sqrt(np.mean(chunk_data**2))
+        
+        if rms > self.__speech_threshold:
+            if not self.__speech_started:
+                self.__speech_started = True
+                self.__node.get_logger().info("Speech started (RMS: {:.2f})".format(rms))
+            self.__silence_start_time = None
+        elif self.__speech_started:
+            if self.__silence_start_time is None:
+                self.__silence_start_time = time.time()
+            elif time.time() - self.__silence_start_time > self.__silence_duration:
+                self.__recording_finished = True
+                self.__node.get_logger().info("Silence detected, finishing recording")
+    
+
+    def execute(self, userdata):
+        try:
+            num_challenge = userdata.num_challenge
+            if num_challenge > 0:
+                self.__node.get_logger().warn('Voice recong challenge is %d times. Remaining %d times.'%(num_challenge, self.__max_challenge - num_challenge))
+
+            # bringup mic
+            self.__say(self.__start_msg)
+            request = SetBool.Request()
+            request.data = True
+            if not self.__send_mic_req(request):
+                self.__node.get_logger().error('mic_service request failed')
+                self.__say(self.__failure_msg)
+                return 'failure'
+            self.__node.get_logger().info('''
+            =================================
+                VOICE RECOGNITION START
+            =================================
+            ''')
+            self.__audio_buffer = []
+            self.__speech_started = False
+            self.__silence_start_time = None
+            self.__recording_finished = False
+
+            # Subscribe to audio
+            qos_profile = qos.QoSProfile(depth=10)
+            with TemporarySubscriber(self.__node,
+                                    Int16MultiArray,
+                                    '/audio/raw',
+                                    qos_profile,
+                                    self.__audio_cb):
+                
+                start_time = time.time()
+                while not self.__recording_finished:
+                    if time.time() - start_time > self.__max_record_duration:
+                        self.__node.get_logger().warn("Max recording duration reached")
+                        break
+                    rclpy.spin_once(self.__node, timeout_sec=0.1)
+
+            # Stop mic
+            self.__node.get_logger().info('''
+            =================================
+                VOICE RECOGNITION STOP...
+            =================================
+            ''')
+            request.data = False
+            self.__send_mic_req(request)
+
+            # detect voice
+            if not self.__audio_buffer:
+                userdata.num_challenge = num_challenge + 1
+                if userdata.num_challenge >= self.__max_challenge:
+                    self.__node.get_logger().error("Voice recong challenge is %d times. challenge is over."%(num_challenge))
+                    self.__say(self.__failure_msg)
+                    userdata.num_challenge = 0  # init challenge count
+                    return 'failure'
+                else:
+                    self.__node.get_logger().warn("No audio data recorded")
+                    self.__say(self.__timeout_msg)
+                    return 'timeout'
+            audio_np = np.array(self.__audio_buffer, dtype=np.float32)
+            audio_np = audio_np / 32768.0
+            # Input is already 16kHz from G1Mic, so no downsampling needed
+            segments, info = self.__whisper_model.transcribe(audio_np, beam_size=5, language=self.__lang)
+            text_result = ""
+            for segment in segments:
+                text_result += segment.text
+            self.__node.get_logger().info(f"Detected text: {text_result}")
+
+            if not text_result:
+                userdata.num_challenge = num_challenge + 1
+                if userdata.num_challenge >= self.__max_challenge:
+                    self.__node.get_logger().error("Voice recong challenge is %d times. challenge is over."%(num_challenge))
+                    self.__say(self.__failure_msg)
+                    userdata.num_challenge = 0  # init challenge count
+                    return 'failure'
+                else:
+                    self.__node.get_logger().warn("Recong text is empty.")
+                    self.__say(self.__timeout_msg)
+                    return 'timeout'
+
+            # check keywords if provided
+            if self.__success_keywards:
+                 if not any(keyword in text_result for keyword in self.__success_keywards):
+                    userdata.num_challenge = num_challenge + 1
+                    if userdata.num_challenge >= self.__max_challenge:
+                        self.__node.get_logger().error("Voice recong challenge is %d times. challenge is over."%(num_challenge))
+                        self.__say(self.__failure_msg)
+                        userdata.num_challenge = 0  # init challenge count
+                        return 'failure'
+                    else:
+                        self.__node.get_logger().warn(f"Keywords not detected in: {text_result}")
+                        self.__say(self.__timeout_msg)
+                        return 'timeout'
+
+            userdata.stt_text = text_result
+            userdata.num_challenge = 0  # init challenge count
+            self.__say(self.__success_msg)
+            return 'success'
+
+        except:
+            # Ensure mic is stopped on error
+            try:
+                request = SetBool.Request()
+                request.data = False
+                self.__send_mic_req(request)
+            except:
+                pass
+
+            self.__node.get_logger().error('Error is occured in SpeechToText\n%s'%traceback.format_exc())
+            return 'failure'
 
 
 '''

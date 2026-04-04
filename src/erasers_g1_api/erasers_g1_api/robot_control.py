@@ -1,3 +1,9 @@
+import numpy as np
+try:
+    np.float = float
+except AttributeError:
+    pass
+
 #!/usr/bin/env python3
 from rclpy.node import Node
 import rclpy
@@ -13,6 +19,7 @@ from action_msgs.msg import GoalStatus
 from moveit_msgs.action import MoveGroup, ExecuteTrajectory
 from moveit_msgs.msg import Constraints, JointConstraint, PositionConstraint, OrientationConstraint, MoveItErrorCodes
 from moveit_msgs.srv import GetPositionIK
+from std_msgs.msg import Int16MultiArray
 
 # tf
 from geometry_msgs.msg import TransformStamped
@@ -29,6 +36,17 @@ from rclpy_util.util import TemporarySubscriber
 # ArmControl specific imports
 from std_srvs.srv import SetBool, Trigger
 import tf_transformations
+import threading
+
+# G1Mic specific imports
+import socket
+import struct
+import numpy as np
+import wave
+try:
+    import netifaces
+except ImportError:
+    netifaces = None
 
 class G1Control():
     def __init__(self, node:Node):
@@ -920,3 +938,147 @@ class ArmControl():
         else:
             self.__node.get_logger().error(f"MoveGroup failed with error code: {result.result.error_code.val}")
             return False
+
+class G1Mic():
+    """
+    Unitree G1 robot microphone audio receiver class.
+    Communicates with mic_server node via ROS 2 services and topics.
+    """
+
+    def __init__(
+        self,
+        node: Node,
+        sample_rate: int = 16000,
+        channels: int = 1
+    ):
+        """
+        G1Mic クラスのコンストラクタ
+
+        Parameters
+        ----------
+        node : Node
+            ROS2 ノードオブジェクト
+        sample_rate : int, optional
+            サンプリングレート。
+        channels : int, optional
+            チャンネル数。
+        """
+        self.__node = node
+        self.__sample_rate = sample_rate
+        self.__channels = channels
+        
+        self.__audio_buffer = []
+        self.__buffer_lock = threading.Lock()
+        
+        # Service client for control
+        self.__mic_rec_cli = self.__node.create_client(SetBool, 'mic_rec')
+        
+        # Subscriber for audio data
+        self.__audio_sub = self.__node.create_subscription(
+            Int16MultiArray,
+            '/audio/raw',
+            self.__audio_callback,
+            10
+        )
+
+    def __audio_callback(self, msg: Int16MultiArray):
+        """
+        音声データを受信した際のコールバック関数。
+        """
+        with self.__buffer_lock:
+            # Convert Int16MultiArray data to numpy array
+            self.__audio_buffer.append(np.array(msg.data, dtype=np.int16))
+
+    def __enter__(self) -> "G1Mic":
+        """
+        コンテキストマネージャの開始。音声配信を有効化します。
+        """
+        if not self.__mic_rec_cli.wait_for_service(timeout_sec=5.0):
+            self.__node.get_logger().error('mic_server (mic_rec service) is not running.')
+            raise RuntimeError('mic_server is not running.')
+
+        # 録音開始のリクエスト
+        req = SetBool.Request()
+        req.data = True
+        
+        future = self.__mic_rec_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=2.0)
+        
+        if future.done():
+            res = future.result()
+            if res.success:
+                self.__node.get_logger().info("Microphone recording enabled via mic_server.")
+            else:
+                self.__node.get_logger().error(f"Failed to enable recording: {res.message}")
+        else:
+            self.__node.get_logger().error("Service call timed out.")
+
+        with self.__buffer_lock:
+            self.__audio_buffer = [] # Clear buffer on start
+
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        コンテキストマネージャの終了。音声配信を無効化します。
+        """
+        req = SetBool.Request()
+        req.data = False
+        
+        future = self.__mic_rec_cli.call_async(req)
+        # We don't necessarily need to wait long here, but it's good practice
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=1.0)
+        
+        self.__node.get_logger().info("Microphone recording disabled.")
+
+    def read(self) -> np.ndarray:
+        """
+        前回の呼び出しから現在までに蓄積された全ての音声データを取得します。
+
+        Returns
+        -------
+        np.ndarray
+            蓄積された音声データ（int16）を結合したもの。データがない場合は空の配列。
+        """
+        with self.__buffer_lock:
+            if not self.__audio_buffer:
+                return np.array([], dtype=np.int16)
+            
+            # Concatenate all chunks in buffer
+            full_data = np.concatenate(self.__audio_buffer)
+            self.__audio_buffer = [] # Clear buffer after reading
+            return full_data
+
+    def save_wav(self, file_path: str, audio_data: np.ndarray) -> bool:
+        """
+        取得した音声データを WAV ファイルとして保存します。
+
+        Parameters
+        ----------
+        file_path : str
+            保存先のファイルパス。
+        audio_data : np.ndarray
+            保存する音声データ。int16 の numpy 配列。
+
+        Returns
+        -------
+        bool
+            保存に成功した場合は True。
+        """
+        if audio_data.size == 0:
+            self.__node.get_logger().warn("No audio data to save.")
+            return False
+
+        try:
+            with wave.open(file_path, 'wb') as wf:
+                wf.setnchannels(self.__channels)
+                wf.setsampwidth(2) # 16-bit
+                wf.setframerate(self.__sample_rate)
+                wf.writeframes(audio_data.tobytes())
+            
+            self.__node.get_logger().info(f"Successfully saved audio to {file_path}")
+            return True
+        except Exception as e:
+            self.__node.get_logger().error(f"Failed to save WAV file: {e}")
+            return False
+
