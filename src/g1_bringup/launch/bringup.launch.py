@@ -3,6 +3,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess, RegisterEventHandler, TimerAction
 from launch.substitutions import LaunchConfiguration
 from launch.event_handlers import OnProcessStart
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
@@ -18,6 +19,8 @@ def generate_launch_description():
     ptl_params = LaunchConfiguration('ptl_params')
     camera_params = LaunchConfiguration('camera_params')
     start_message = LaunchConfiguration('start_message')
+    robot_model = LaunchConfiguration('robot_model')
+    use_camera = LaunchConfiguration('use_camera')
     use_rviz = LaunchConfiguration('use_rviz')
 
 
@@ -34,6 +37,14 @@ def generate_launch_description():
         'camera_params', default_value=os.path.join(get_package_share_directory('g1_bringup'), 'params', 'd455.yaml'),
         description='Full path for 2d png map'
     )
+    declare_robot_model = DeclareLaunchArgument(
+        'robot_model', default_value=os.path.join(get_package_share_directory('g1_description'), 'urdf', 'g1_29dof.urdf'),
+        description='Full path for URDF'
+    )
+    declare_use_camera = DeclareLaunchArgument(
+        'use_camera', default_value='true',
+        description='Whether to bringup camera & servo'
+    )
     declare_use_rviz = DeclareLaunchArgument(
         'use_rviz', default_value='false',
         description='Whether to start Rviz'
@@ -42,6 +53,8 @@ def generate_launch_description():
     ld.add_action(declare_start_message)
     ld.add_action(declare_ptl_params)
     ld.add_action(declare_camera_params)
+    ld.add_action(declare_robot_model)
+    ld.add_action(declare_use_camera)
     ld.add_action(declare_use_rviz)
 
 
@@ -74,7 +87,8 @@ def generate_launch_description():
     head_joints = Node(
         package='head_servo_controller',
         executable='head_servo_controller',
-        emulate_tty=True
+        emulate_tty=True,
+        condition=IfCondition(use_camera)
     )
     # TTS
     audio_client = Node(
@@ -86,13 +100,15 @@ def generate_launch_description():
     arm_joint_control = Node(
         package='erasers_g1_common_cpp',
         executable='arm_joint_control',
-        emulate_tty=True
+        emulate_tty=True,
+        parameters=[{'urdf': robot_model}]
     )
     # Pinoccio IK
     arm_endeffector_control = Node(
         package='erasers_g1_common_cpp',
         executable='arm_endeffector_control',
-        emulate_tty=True
+        emulate_tty=True,
+        parameters=[{'urdf': robot_model}]
     )
     # Cartesian trajectory planner
     cartesian_trajectory_planner = Node(
@@ -168,6 +184,7 @@ def generate_launch_description():
         output='screen',
         namespace='head_camera',
         emulate_tty=True,
+        condition=IfCondition(use_camera)
     )
     head_camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
@@ -203,6 +220,7 @@ def generate_launch_description():
         ]),
         launch_arguments={
             'use_rviz': use_rviz,
+            'robot_description': robot_model
         }.items()
     )
 
