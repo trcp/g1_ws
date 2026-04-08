@@ -85,7 +85,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: robot
+      target: main
       args:
         - TARGET_ARCH=arm64
         - OS=22.04
@@ -108,8 +108,9 @@ services:
       dockerfile: Dockerfile
       target: main
       args:
-        - TARGET_ARCH=cuda.13.0.0
+        - TARGET_ARCH=cuda
         - OS=22.04
+        - CUDA=13.0.0
         - ROS=humble
         - USERNAME=${USER}
         - GROUPNAME=${USER}

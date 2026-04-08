@@ -11,7 +11,7 @@ ARG ROS=humble
 # ===============
 FROM gai313/ros2:${ROS}.amd64 AS ros2-amd64
 FROM gai313/ros2:${ROS}.arm64 AS ros2-arm64
-FROM gai313/ros2:${ROS}.cuda${CUDA} AS ros2-cuda
+FROM gai313/ros2:${ROS}.cuda.${CUDA} AS ros2-cuda
 FROM gai313/ros2:humble.jetpack.${L4T_VERSION} AS ros2-jetpack
 
 
