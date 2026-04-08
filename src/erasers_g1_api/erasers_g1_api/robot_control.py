@@ -55,9 +55,12 @@ class G1Control():
         self.__servo_cli = self.__node.create_client(MoveServo, '/move_servo')
         self.__hand_cli = self.__node.create_client(HandCommand, '/hand_command')
 
-        while not self.__servo_cli.wait_for_service(timeout_sec=5.0) or not self.__hand_cli.wait_for_service(timeout_sec=5.0):
-            self.__node.get_logger().error('Robot Service Servers are not running ...')
-            raise RuntimeError('Robot Service Servers are not running ...')
+        while not self.__servo_cli.wait_for_service(timeout_sec=5.0):
+            self.__node.get_logger().error('Servo Service Servers are not running ...')
+            break
+        while not self.__hand_cli.wait_for_service(timeout_sec=5.0):
+            self.__node.get_logger().error('Hand Service Servers are not running ...')
+            break
 
 
     def __send_angle_req(self, req:MoveServo.Request):
@@ -162,7 +165,7 @@ class G1Navigation():
                 continue
 
 
-    def move_to_pose(self, pose, tolerance: float = None, reference_frame: str = 'map', wait: bool = True) -> bool:
+    def move_to_pose(self, pose, tolerance: float = 0.05, reference_frame: str = 'map', wait: bool = True) -> bool:
         """
         与えられた目標姿勢に基づいてロボットを自律移動させる．
         すべてのナビゲーションの中核となるメソッドであり、KeyboardInterrupt 発生時には即座にアクションをキャンセルする。
@@ -172,7 +175,7 @@ class G1Navigation():
         pose : PoseStamped or Pose
             目標とする姿勢情報。Pose メッセージの場合、reference_frame の座標系基準として扱われる。
         tolerance : float, optional
-            目標から指定された距離(m)以内に到達した場合、その時点でナビゲーションを成功として終了する。
+            目標から指定された距離(m)以内に到達した場合、その時点でナビゲーションを成功として終了する。デフォルトは 0.05。
         reference_frame : str, optional
             pose が Pose 型の場合の基準フレーム。デフォルトは 'map'。
         wait : bool, optional
@@ -356,7 +359,7 @@ class G1Navigation():
             self.__cmd_vel_pub.publish(Twist()) # Stop
 
 
-    def move_abs(self, x: float = 0.0, y: float = 0.0, yaw: float = 0.0, tolerance: float = None, reference_frame: str = 'map', wait: bool = True) -> bool:
+    def move_abs(self, x: float = 0.0, y: float = 0.0, yaw: float = 0.0, tolerance: float = 0.05, reference_frame: str = 'map', wait: bool = True) -> bool:
         """
         基準フレームでの絶対座標を指定してロボットを自律移動させる．
         内部で move_to_pose() を呼び出す。
@@ -397,7 +400,7 @@ class G1Navigation():
         return self.move_to_pose(pose, tolerance=tolerance, reference_frame=reference_frame, wait=wait)
 
 
-    def move_rel(self, x: float = 0.0, y: float = 0.0, yaw: float = 0.0, tolerance: float = None, wait: bool = True) -> bool:
+    def move_rel(self, x: float = 0.0, y: float = 0.0, yaw: float = 0.0, tolerance: float = 0.05, wait: bool = True) -> bool:
         """
         ロボットの現在の位置・姿勢からの相対座標で自律移動させる．
         内部で move_abs() を呼び出す。

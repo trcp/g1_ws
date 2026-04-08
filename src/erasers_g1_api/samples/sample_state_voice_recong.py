@@ -9,7 +9,29 @@ import smach
 from erasers_g1_api.tts import TTS
 from erasers_g1_api.state_skills.recongnition import SpeechToText
 
+# preferences
+import traceback
 
+
+"""
+聞こえたメッセージを確認する
+"""
+@smach.cb_interface(outcomes=['success', 'failure'],
+                    input_keys=['stt_text'],
+                    output_keys=[])
+def cb_state_check_verify(userdata, node:Node, tts_say:TTS.say):
+    try:
+        stt_text = userdata.stt_text
+        tts_say("I heard %s"%stt_text)
+        return 'success'
+    except Exception as e:
+        node.get_logger().error(f"Error in grasp_bag: {e}\n{traceback.format_exc()}")
+        return 'failure'
+
+
+"""
+main
+"""
 def main():
     # init ROS
     rclpy.init()
@@ -36,12 +58,16 @@ def main():
     with sm:
         smach.StateMachine.add('VOICE_RECONG', SpeechToText(node=node,
                                                             tts_say=SAY,
-                                                            model_size='large',
-                                                            device='cuda',
-                                                            lang='ja',
+                                                            model_size='medium',
+                                                            device='cpu',
+                                                            lang='en',
                                                             silence_duration=5.0),
-                                transitions={'success': 'success',
+                                transitions={'success': 'CHECK_VERIFY',
                                              'timeout': 'VOICE_RECONG',
+                                             'failure':'failure'})
+        smach.StateMachine.add('CHECK_VERIFY', smach.CBState(cb=cb_state_check_verify,
+                                                             cb_kwargs={'node': node, 'tts_say': SAY}),
+                                transitions={'success': 'success',
                                              'failure':'failure'})
     
     outcome = sm.execute()

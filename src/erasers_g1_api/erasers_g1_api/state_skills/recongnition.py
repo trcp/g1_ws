@@ -45,13 +45,53 @@ class SpeechToText(smach.State):
                  success_msg:str='I can hear! Please wait.',
                  timeout_msg:str='Sorry. I can not hear.',
                  device:str='cpu',
-                 model_size:str='base',
-                 lang:str='ja',
+                 model_size:str='small',
+                 lang:str='en',
                  success_keywards:list=[],
                  speech_threshold:float=1000.0,
                  silence_duration:float=1.5,
                  max_record_duration:float=10.0,
                  max_challenge:int=3):
+        """Whisper と ROS マイク音声を使った音声認識状態。
+
+        Parameters
+        ----------
+        node : Node
+            サービス呼び出しとログ出力に使用する ROS ノードインスタンス。
+        tts_say : TTS.say
+            音声応答に使うテキスト読み上げ関数。
+        timeout_sec : float, optional
+            マイクサービスの待機や状態遷移のタイムアウト時間（秒）、デフォルトは 10.0。
+        start_msg : str, optional
+            認識開始時に読み上げるメッセージ、デフォルトは 'Please task for me.'。
+        success_msg : str, optional
+            認識成功時に読み上げるメッセージ、デフォルトは 'I can hear! Please wait.'。
+        timeout_msg : str, optional
+            認識タイムアウト時に読み上げるメッセージ、デフォルトは 'Sorry. I can not hear.'。
+        device : str, optional
+            Whisper の実行デバイス、デフォルトは 'cpu'。
+        model_size : str, optional
+            Whisper モデルサイズ、デフォルトは 'small'。
+        lang : str, optional
+            音声認識に使用する言語コード、デフォルトは 'en'。
+        success_keywards : list, optional
+            認識結果に含まれている必要があるキーワードのリスト、デフォルトは []。
+        speech_threshold : float, optional
+            音声を検出する VAD の RMS 閾値、デフォルトは 1000.0。
+        silence_duration : float, optional
+            無音とみなすまでの継続時間（秒）、デフォルトは 1.5。
+        max_record_duration : float, optional
+            録音の最大継続時間（秒）、デフォルトは 10.0。
+        max_challenge : int, optional
+            失敗後にリトライする最大回数、デフォルトは 3。
+
+        userdata
+        --------
+        num_challenge : int
+            既に試行した認識リトライ回数。状態はこの値を読み書きする。
+        stt_text : str
+            認識結果のテキスト。成功時に出力される。
+        """
         
         # init smach
         smach.State.__init__(self,
