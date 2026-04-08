@@ -24,6 +24,7 @@ def package_files(directory, data_files):
 
 # Add directories
 data_files = package_files("locations", data_files)
+data_files = package_files("launch", data_files)
 
 setup(
     name=package_name,
@@ -44,7 +45,8 @@ setup(
     entry_points={
         'console_scripts': [
             'receptionist = robot_tasks.receptionist:main',
-            'ihr_task = robot_tasks.ihr_task:main'
+            'ihr_task = robot_tasks.ihr_task:main',
+            'restaurant_task = robot_tasks.restaurant:main',
         ],
     },
 )
