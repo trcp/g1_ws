@@ -38,7 +38,7 @@ def generate_launch_description():
         description='Full path for 2d png map'
     )
     declare_robot_model = DeclareLaunchArgument(
-        'robot_model', default_value=os.path.join(get_package_share_directory('g1_description'), 'urdf', 'g1_29dof.urdf'),
+        'robot_model', default_value=os.path.join(get_package_share_directory('g1_description'), 'urdf', 'g1_comp.urdf'),
         description='Full path for URDF'
     )
     declare_use_camera = DeclareLaunchArgument(
