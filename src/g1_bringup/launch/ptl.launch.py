@@ -41,7 +41,7 @@ def generate_launch_description():
     # launchers
     ld = LaunchDescription()
 
-    ld.add_action(ptl_node)
+    #ld.add_action(ptl_node)
     ld.add_action(rviz_node)
 
     return ld
