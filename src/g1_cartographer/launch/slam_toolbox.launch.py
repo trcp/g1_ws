@@ -100,7 +100,7 @@ def generate_launch_description():
             {'use_sim_time': False},
         ],
         remappings=[
-            ('cloud_in', '/livox/lidar'),
+            ('cloud_in', '/utlidar/cloud_livox_mid360'),
             ('scan', '/scan'),
         ],
     )
