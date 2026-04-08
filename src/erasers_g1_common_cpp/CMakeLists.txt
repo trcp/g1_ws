@@ -182,10 +182,30 @@ ament_target_dependencies(cartesian_trajectory_planner
 
 # mic_server
 add_executable(mic_server src/mic_server.cpp)
+target_include_directories(mic_server PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
 ament_target_dependencies(mic_server 
   rclcpp 
   std_msgs 
   std_srvs
+  unitree_api
+  unitree_hg
+  g1_srvs
+)
+
+# vui_diagnostic
+add_executable(vui_diagnostic src/vui_diagnostic.cpp)
+target_include_directories(vui_diagnostic PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(vui_diagnostic
+    rclcpp
+    unitree_hg
+    unitree_api
+    g1_srvs
 )
 
 
@@ -204,6 +224,7 @@ install(TARGETS
   emergency_stop
   cartesian_trajectory_planner
   mic_server
+  vui_diagnostic
   DESTINATION lib/${PROJECT_NAME}
 )
 install(

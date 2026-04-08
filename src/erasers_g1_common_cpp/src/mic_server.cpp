@@ -19,6 +19,8 @@
 #include <std_msgs/msg/int16_multi_array.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 
+#include "g1/g1_audio_client.hpp"
+
 class G1MicServer : public rclcpp::Node {
  public:
   G1MicServer() : Node("mic_server") {
@@ -31,6 +33,9 @@ class G1MicServer : public rclcpp::Node {
     srv_server_ = this->create_service<std_srvs::srv::SetBool>(
         "mic_rec",
         std::bind(&G1MicServer::handle_mic_rec, this, std::placeholders::_1, std::placeholders::_2));
+
+    // VUI Client initialization (using /api/vui instead of /api/voice)
+    vui_client_ = std::make_unique<BaseClient>(this, "/api/vui/request", "/api/vui/response");
 
     is_recording_ = false;
 
@@ -135,10 +140,35 @@ class G1MicServer : public rclcpp::Node {
 
   void handle_mic_rec(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
                       std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
-    is_recording_ = request->data;
-    response->success = true;
-    response->message = is_recording_ ? "Recording enabled" : "Recording disabled";
-    RCLCPP_INFO(this->get_logger(), "Microphone recording: %s", is_recording_ ? "ON" : "OFF");
+    bool target_state = request->data;
+    
+    unitree_api::msg::Request vreq;
+    int32_t ret = -1;
+
+    if (target_state) {
+      RCLCPP_INFO(this->get_logger(), "Activating G1 Microphone (API 1007)...");
+      vreq.header.identity.api_id = 1007; // Vui_Api_Open_Mic
+      vreq.parameter = "{}";
+      ret = vui_client_->Call(vreq);
+    } else {
+      RCLCPP_INFO(this->get_logger(), "Deactivating G1 Microphone (API 1008)...");
+      vreq.header.identity.api_id = 1008; // Vui_Api_Close_Mic
+      vreq.parameter = "{}";
+      ret = vui_client_->Call(vreq);
+    }
+
+    if (ret == 0) {
+      is_recording_ = target_state;
+      response->success = true;
+      response->message = is_recording_ ? "Recording enabled and VUI opened" : "Recording disabled and VUI closed";
+      RCLCPP_INFO(this->get_logger(), "VUI RPC Success: %s", response->message.c_str());
+    } else {
+      response->success = false;
+      response->message = "VUI RPC Failed with code: " + std::to_string(ret) + ". Check if VUI service is running.";
+      RCLCPP_ERROR(this->get_logger(), "%s", response->message.c_str());
+      // Even if RPC fails, we might still want to toggle local recording? 
+      // No, safety first. If we can't open mic, don't pretend we are recording.
+    }
   }
 
   void receive_loop() {
@@ -166,6 +196,7 @@ class G1MicServer : public rclcpp::Node {
   std::thread receive_thread_;
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr audio_pub_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_server_;
+  std::unique_ptr<BaseClient> vui_client_;
 };
 
 int main(int argc, char **argv) {

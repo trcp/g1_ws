@@ -35,9 +35,9 @@ class BaseClient {
         topic_name_request_(topic_name_request),
         topic_name_response_(std::move(topic_name_response)),
         req_puber_(node_->create_publisher<Request>(topic_name_request,
-                                                    rclcpp::QoS(1))) {
+                                                    rclcpp::QoS(1).best_effort())) {
     req_suber_ = node_->create_subscription<Response>(
-        this->topic_name_response_, rclcpp::QoS(1),
+        this->topic_name_response_, rclcpp::QoS(1).best_effort(),
         [this](const std::shared_ptr<const Response> data) {
           std::lock_guard<std::mutex> lock(pending_mutex_);
           auto it = pending_requests_.find(data->header.identity.id);
