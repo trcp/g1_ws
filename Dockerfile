@@ -78,7 +78,7 @@ RUN apt-get update && apt-get install -y \
 
 # install python packages
 USER $USERNAME
-RUN pip install --index-url https://pypi.org/simple pyserial rustypot transform3d faster-whisper
+RUN pip install --index-url https://pypi.org/simple pyserial rustypot transform3d faster-whisper "numpy==1.22.4"
 
 # COPY amcl2 code
 COPY assets/emcl2_node.cpp ./emcl2/src/emcl2_node.cpp
