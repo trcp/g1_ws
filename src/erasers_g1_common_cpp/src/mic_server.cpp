@@ -30,12 +30,17 @@ class G1MicServer : public rclcpp::Node {
 
     // Publisher & Service
     audio_pub_ = this->create_publisher<std_msgs::msg::Int16MultiArray>("/audio/raw", 10);
+    
+    // Create dedicated callback group for the service to prevent deadlock
+    service_cb_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     srv_server_ = this->create_service<std_srvs::srv::SetBool>(
         "mic_rec",
-        std::bind(&G1MicServer::handle_mic_rec, this, std::placeholders::_1, std::placeholders::_2));
+        std::bind(&G1MicServer::handle_mic_rec, this, std::placeholders::_1, std::placeholders::_2),
+        rmw_qos_profile_services_default,
+        service_cb_group_);
 
-    // VUI Client initialization (using /api/vui instead of /api/voice)
-    vui_client_ = std::make_unique<BaseClient>(this, "/api/vui/request", "/api/vui/response");
+    // VUI Client initialization (using /api/voice since /api/vui returned ERROR 100)
+    vui_client_ = std::make_unique<BaseClient>(this, "/api/voice/request", "/api/voice/response");
 
     is_recording_ = false;
 
@@ -195,6 +200,7 @@ class G1MicServer : public rclcpp::Node {
   std::atomic<bool> stop_flag_{false};
   std::thread receive_thread_;
   rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr audio_pub_;
+  rclcpp::CallbackGroup::SharedPtr service_cb_group_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_server_;
   std::unique_ptr<BaseClient> vui_client_;
 };
@@ -202,7 +208,9 @@ class G1MicServer : public rclcpp::Node {
 int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<G1MicServer>();
-  rclcpp::spin(node);
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(node);
+  executor.spin();
   rclcpp::shutdown();
   return 0;
 }

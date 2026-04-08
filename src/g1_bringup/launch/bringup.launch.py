@@ -170,11 +170,11 @@ def generate_launch_description():
             {'use_sim_time': False},
         ],
         remappings=[
-            ('cloud_in', '/livox/lidar'),
+            ('cloud_in', '/utlidar/cloud_livox_mid360'),
             ('scan', '/scan'),
         ],
     )
-    #ld.add_action(pointcloud_to_laserscan)
+    ld.add_action(pointcloud_to_laserscan)
 
 
 
@@ -233,7 +233,7 @@ def generate_launch_description():
 
     ld.add_action(head_camera)
     #ld.add_action(head_camera_launch)
-    ld.add_action(lidar)
+    #ld.add_action(lidar)
     ld.add_action(display)
 
 

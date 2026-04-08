@@ -47,7 +47,7 @@ amcl:
 emcl2:
   ros__parameters:
     odom_freq: 20
-    transform_tolerance: 0.2
+    transform_tolerance: 0.5
     global_frame_id: "map"
     odom_frame_id: "odom"
     # base_frame_id: "pelvis"
@@ -181,7 +181,7 @@ controller_server:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 20
       model_dt: 0.1
-      batch_size: 600
+      batch_size: 300
       vx_std: 0.3
       vy_std: 0.1
       wz_std: 0.6
@@ -269,7 +269,7 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 5.0
+      update_frequency: 2.0
       publish_frequency: 2.0
       global_frame: odom
       robot_base_frame: base_link
@@ -361,7 +361,7 @@ map_saver:
 
 planner_server:
   ros__parameters:
-    expected_planner_frequency: 20.0
+    expected_planner_frequency: 5.0
     use_sim_time: False
     planner_plugins: ["GridBased"]
     GridBased:
@@ -399,7 +399,7 @@ behavior_server:
       plugin: "nav2_behaviors/AssistedTeleop"
     global_frame: odom
     robot_base_frame: base_link
-    transform_tolerance: 0.1
+    transform_tolerance: 0.5
     use_sim_time: false
     simulate_ahead_time: 2.0
     max_rotational_vel: 1.0
