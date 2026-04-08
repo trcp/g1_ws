@@ -1,6 +1,8 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
+#include <chrono>
 #include <rclcpp/rclcpp.hpp>
 #include "g1/g1_audio_client.hpp"
 
@@ -13,9 +15,13 @@ public:
   }
 
   void run_diagnosis() {
-    RCLCPP_INFO(this->get_logger(), "--- Starting VUI Service Diagnosis (Aggressive) ---");
+    RCLCPP_INFO(this->get_logger(), "--- Starting System-Wide Service Diagnosis ---");
 
-    std::vector<std::string> namespaces = {"voice", "vui", "audiohub"};
+    std::vector<std::string> namespaces = {
+      "voice", "vui", "audiohub", "videohub", 
+      "sport", "loco", "robot_state", "gpt", "motion_switcher"
+    };
+
     for (const auto& ns : namespaces) {
       std::string req_topic = "/api/" + ns + "/request";
       std::string res_topic = "/api/" + ns + "/response";
@@ -23,15 +29,19 @@ public:
       
       BaseClient client(this, req_topic, res_topic);
       
-      // 1. Get Volume Check
+      // Wait for DDS discovery
+      rclcpp::sleep_for(std::chrono::milliseconds(1500));
+      
+      // Sending API 1001 (often GetServerApiVersion) to test if service responds
       unitree_api::msg::Request req;
-      req.header.identity.api_id = 1005; // Voice/VUI Get Volume
+      req.header.identity.api_id = 1001; 
       int32_t ret = client.Call(req);
-      report_status(ns + " (API 1005)", ret);
+      report_status(ns + " (API 1001)", ret);
 
-      // 2. Open Mic Check (Partial)
-      if (ret == 0) {
-        RCLCPP_INFO(this->get_logger(), ">> SUCCESS on namespace: %s", ns.c_str());
+      if (ret != -1 && ret != -100) {
+        RCLCPP_INFO(this->get_logger(), ">> SERVICE IS ALIVE on namespace: %s", ns.c_str());
+      } else {
+        RCLCPP_ERROR(this->get_logger(), ">> SERVICE DEAD/UNREACHABLE on namespace: %s", ns.c_str());
       }
     }
 
@@ -60,12 +70,13 @@ private:
     std::string msg;
     switch (code) {
       case 0: msg = "OK (Success)"; break;
-      case 3103: msg = "ERROR 3103: API Not Registered (Service might be old or disabled)"; break;
+      case 3103: msg = "ERROR 3103: API Not Registered (Service alive but API missing)"; break;
       case 3104: msg = "ERROR 3104: Request Timeout (Robot not responding)"; break;
-      case 3202: msg = "ERROR 3202: Internal Server Error (VUI module crashed?)"; break;
+      case 3202: msg = "ERROR 3202: Internal Server Error/Crash"; break;
       case 3205: msg = "ERROR 3205: Request Denied (Service busy or locked)"; break;
-      case -100: msg = "ERROR: Local Timeout (DDS level failure)"; break;
-      default: msg = "ERROR " + std::to_string(code) + ": Unknown error"; break;
+      case -100: msg = "ERROR -100: Local Timeout (DDS failure)"; break;
+      case -1: msg = "ERROR -1: Error / Local Timeout"; break;
+      default: msg = "ERROR " + std::to_string(code) + ": Unknown error / Alive"; break;
     }
     
     if (code == 0) {
@@ -84,9 +95,19 @@ int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<VuiDiagnosticNode>();
   
-  // Run once and exit
-  node->run_diagnosis();
+  std::thread diag_thread([node]() {
+    // wait a bit for node initialization
+    rclcpp::sleep_for(std::chrono::milliseconds(1000));
+    node->run_diagnosis();
+    rclcpp::shutdown();
+  });
   
-  rclcpp::shutdown();
+  // Spin is REQUIRED for BaseClient's subscriber callback to be invoked
+  rclcpp::spin(node);
+  
+  if (diag_thread.joinable()) {
+    diag_thread.join();
+  }
+  
   return 0;
 }
