@@ -149,17 +149,6 @@ def generate_launch_description():
     ld.add_action(mic_server)
 
 
-    # TF: base_link -> pelvis
-    # base_link_to_pelvis =  Node(
-    #     package="tf2_ros",
-    #     executable="static_transform_publisher",
-    #     arguments=["0", "0", "0", "0", "0", "0", "base_link", "pelvis"],
-    #     output="screen"
-    # )
-
-    # ld.add_action(base_link_to_pelvis)
-
-
     pointcloud_to_laserscan = Node(
         package='pointcloud_to_laserscan',
         executable='pointcloud_to_laserscan_node',
