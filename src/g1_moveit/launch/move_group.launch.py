@@ -45,7 +45,7 @@ def generate_launch_description():
     pkg_g1_moveit = get_package_share_directory('g1_moveit')
 
     default_robot_description_path = os.path.join(
-        pkg_g1_description, 'urdf', 'erasers_g1.urdf.xacro'
+        pkg_g1_description, 'urdf', 'erasers_g1.urdf'
     )
     default_use_sim_time = 'false'
 

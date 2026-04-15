@@ -21,6 +21,7 @@ def generate_launch_description():
     start_message = LaunchConfiguration('start_message')
     robot_model = LaunchConfiguration('robot_model')
     use_camera = LaunchConfiguration('use_camera')
+    dx_path = LaunchConfiguration('dx_path')
     use_rviz = LaunchConfiguration('use_rviz')
 
 
@@ -38,12 +39,16 @@ def generate_launch_description():
         description='Full path for 2d png map'
     )
     declare_robot_model = DeclareLaunchArgument(
-        'robot_model', default_value=os.path.join(get_package_share_directory('g1_description'), 'urdf', 'g1_comp.urdf'),
+        'robot_model', default_value=os.path.join(get_package_share_directory('g1_description'), 'urdf', 'erasers_g1.urdf'),
         description='Full path for URDF'
     )
     declare_use_camera = DeclareLaunchArgument(
         'use_camera', default_value='true',
         description='Whether to bringup camera & servo'
+    )
+    declare_dx_path = DeclareLaunchArgument(
+        'dx_path', default_value=os.environ.get('DX_PATH', '/dev/ttyUSB0'),
+        description='Dynamixel path'
     )
     declare_use_rviz = DeclareLaunchArgument(
         'use_rviz', default_value='false',
@@ -56,6 +61,7 @@ def generate_launch_description():
     ld.add_action(declare_robot_model)
     ld.add_action(declare_use_camera)
     ld.add_action(declare_use_rviz)
+    ld.add_action(declare_dx_path)
 
 
     # nodes
@@ -88,6 +94,7 @@ def generate_launch_description():
         package='head_servo_controller',
         executable='head_servo_controller',
         emulate_tty=True,
+        parameters=[{'dx_path': dx_path}],
         condition=IfCondition(use_camera)
     )
     # TTS
@@ -134,6 +141,12 @@ def generate_launch_description():
         executable='mic_server',
         emulate_tty=True
     )
+    # 緊急停止用 joy_node
+    emc_joy_node = Node(
+        package='joy',
+        executable='joy_node',
+        namespace='emc'
+    )
 
     ld.add_action(loco_service_client)
     ld.add_action(audio_client)
@@ -147,6 +160,7 @@ def generate_launch_description():
     #ld.add_action(amazing_hand)
     ld.add_action(emergency_stop)
     ld.add_action(mic_server)
+    ld.add_action(emc_joy_node)
 
 
     pointcloud_to_laserscan = Node(

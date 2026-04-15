@@ -162,6 +162,7 @@ ament_target_dependencies(emergency_stop
     rclcpp
     unitree_go
     g1_srvs
+    sensor_msgs
 )
 
 # cartesian_trajectory_planner

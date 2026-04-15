@@ -75,7 +75,9 @@ class PanTiltNode(Node):
         self.last_vel_time = 0.0
         self.is_connected = False
 
-        self.portHandler = PortHandler(DEVICENAME)
+        self.declare_parameter('dx_path', DEVICENAME)
+
+        self.portHandler = PortHandler(self.get_parameter('dx_path').value)
         self.packetHandler = PacketHandler(PROTOCOL_VERSION)
 
         self.try_connect()
@@ -92,7 +94,7 @@ class PanTiltNode(Node):
         self.timer = self.create_timer(CONTROL_PERIOD_SEC, self.timer_callback)
 
     def try_connect(self):
-        self.get_logger().info(f"Connecting to {DEVICENAME}...")
+        self.get_logger().info(f"Connecting to {self.get_parameter('dx_path').value}...")
         try:
             if self.portHandler.is_open:
                 self.portHandler.closePort()

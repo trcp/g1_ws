@@ -66,6 +66,8 @@ x-preferences: &preferences
     - LC_TIME
     - TZ=Asia/Tokyo
     - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    # 頭部カメラジョイントモーターのデバイスパス
+    - DX_PATH="/dev/ttyCH341USB0"
   devices:
     - /dev:/dev
   volumes:
@@ -87,12 +89,17 @@ services:
       dockerfile: Dockerfile
       target: main
       args:
-        - TARGET_ARCH=arm64
+        - TARGET_ARCH=jetpack
         - OS=22.04
+        - L4T_VERSION=r36.4.0
         - ROS=humble
         - USERNAME=${USER}
         - GROUPNAME=${USER}
         - PASSWORD=123
+    group_add:
+        - "audio"
+        - "video"
+        - "input"
     <<: [*preferences, *jetpack]
     command: '/bin/bash -ci " ros2 launch g1_bringup bringup.launch.py"'
     #command: "/bin/bash"
@@ -101,7 +108,7 @@ services:
   # Katana PC 用
   # =============
   katana:
-    container_name: erasers_g1
+    container_name: katana
     image: erasers_g1:latest
     build:
       context: .
@@ -122,7 +129,7 @@ services:
   # L4T 36.4
   # =============
   r36.4:
-    container_name: erasers_g1
+    container_name: r36.4
     image: erasers_g1:latest
     build:
       context: .

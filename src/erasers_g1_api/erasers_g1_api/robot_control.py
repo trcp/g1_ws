@@ -13,7 +13,7 @@ from geometry_msgs.msg import Twist, PoseStamped, PoseWithCovarianceStamped, Pos
 from sensor_msgs.msg import Imu, JointState
 from shape_msgs.msg import SolidPrimitive
 from amazing_hand_interfaces.srv import HandCommand
-from g1_srvs.srv import MoveServo
+from g1_srvs.srv import MoveServo, PosePolicy
 from nav2_msgs.action import NavigateToPose
 from action_msgs.msg import GoalStatus
 from moveit_msgs.action import MoveGroup, ExecuteTrajectory
@@ -54,12 +54,16 @@ class G1Control():
 
         self.__servo_cli = self.__node.create_client(MoveServo, '/move_servo')
         self.__hand_cli = self.__node.create_client(HandCommand, '/hand_command')
+        self.__pose_cli = self.__node.create_client(PosePolicy, '/pose_policy')
 
         while not self.__servo_cli.wait_for_service(timeout_sec=5.0):
             self.__node.get_logger().error('Servo Service Servers are not running ...')
             break
         while not self.__hand_cli.wait_for_service(timeout_sec=5.0):
             self.__node.get_logger().error('Hand Service Servers are not running ...')
+            break
+        while not self.__pose_cli.wait_for_service(timeout_sec=5.0):
+            self.__node.get_logger().error('Pose Service Servers are not running ...')
             break
 
 
@@ -75,6 +79,13 @@ class G1Control():
         rclpy.spin_until_future_complete(self.__node, future)
         response:HandCommand.Response = future.result()
         return response.success
+    
+
+    def __send_pose_req(self, req:PosePolicy.Request):
+        future = self.__pose_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future)
+        response:PosePolicy.Response = future.result()
+        return response.success
 
 
     def move_head(self, tilt:float=0.0, pan:float=0.0):
@@ -89,6 +100,12 @@ class G1Control():
         req.command = command
         req.hand = hand
         return self.__send_hand_req(req)
+    
+
+    def pose_policy(self, pose:str):
+        req = PosePolicy.Request()
+        req.pose = pose
+        return self.__send_pose_req(req)
 
 
 class G1Navigation():
@@ -608,11 +625,6 @@ class ArmControl():
         bool
             動作が成功した場合は True、失敗した場合は False。
         """
-        goal_msg = MoveGroup.Goal()
-        goal_msg.request.group_name = planning_group
-        goal_msg.request.num_planning_attempts = kwargs.get('planning_attempts', 10)
-        goal_msg.request.allowed_planning_time = kwargs.get('planning_time', 5.0)
-        
         # Determine tip link (assuming standard names for G1)
         tip_link = "left_amazing_hand" if "left" in planning_group else "right_amazing_hand"
         
@@ -622,6 +634,20 @@ class ArmControl():
             target_pose = PoseStamped()
             target_pose.header.frame_id = "base_link"
             target_pose.pose = pose
+
+        # upper_body doesn't have an IK solver in KDL for pose goals
+        if planning_group == 'upper_body':
+            sub_group = "arm_left" if "left" in tip_link else "arm_right"
+            joints = self._solve_ik(target_pose, sub_group)
+            if joints is None:
+                self.__node.get_logger().error(f"IK failed for {sub_group} when delegating from {planning_group}")
+                return False
+            return self.joint_control(**joints, wait=wait, planning_group='upper_body', planning_attempts=kwargs.get('planning_attempts', 10), planning_time=kwargs.get('planning_time', 5.0))
+
+        goal_msg = MoveGroup.Goal()
+        goal_msg.request.group_name = planning_group
+        goal_msg.request.num_planning_attempts = kwargs.get('planning_attempts', 10)
+        goal_msg.request.allowed_planning_time = kwargs.get('planning_time', 5.0)
             
         l_pc, l_oc = self._create_pose_constraints(target_pose, tip_link)
         goal_msg.request.goal_constraints.append(Constraints(
@@ -664,26 +690,64 @@ class ArmControl():
         """
         MoveIt の /compute_ik サービスを使用して特定のグループの逆運動学を解く。
         """
-        req = GetPositionIK.Request()
-        req.ik_request.group_name = group_name
-        req.ik_request.pose_stamped = pose_stamped
-        req.ik_request.timeout.sec = 1
+        self.__node.get_logger().info(f"Solving IK for {group_name} at pose: {pose_stamped.pose.position.x:.3f}, {pose_stamped.pose.position.y:.3f}, {pose_stamped.pose.position.z:.3f}")
         
-        # 現在の関節状態を反映
-        if self.__joint_states:
-            req.ik_request.robot_state.joint_state.name = list(self.__joint_states.keys())
-            req.ik_request.robot_state.joint_state.position = list(self.__joint_states.values())
-        
-        future = self.__ik_cli.call_async(req)
-        # IKサービスは比較的速いので短めのタイムアウトで spin
-        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=2.0)
-        
-        if future.done():
-            res = future.result()
-            if res.error_code.val == MoveItErrorCodes.SUCCESS:
+        leg_joints = [
+            "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint", "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+            "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint", "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint"
+        ]
+
+        def call_ik(seed_joint_positions=None):
+            req = GetPositionIK.Request()
+            req.ik_request.group_name = group_name
+            req.ik_request.pose_stamped = pose_stamped
+            req.ik_request.timeout.sec = 0
+            req.ik_request.timeout.nanosec = 500000000 # 0.5s
+            req.ik_request.avoid_collisions = True
+            
+            # Populate joint states (including missing legs to avoid MoveIt warnings/errors)
+            all_joint_names = list(self.__joint_states.keys())
+            all_joint_positions = list(self.__joint_states.values())
+            
+            for lj in leg_joints:
+                if lj not in self.__joint_states:
+                    all_joint_names.append(lj)
+                    all_joint_positions.append(0.0)
+            
+            if seed_joint_positions:
+                # Override positions with seed (keep names same)
+                pos_dict = dict(zip(all_joint_names, all_joint_positions))
+                for name, pos in seed_joint_positions.items():
+                    if name in pos_dict:
+                        pos_dict[name] = pos
+                all_joint_names = list(pos_dict.keys())
+                all_joint_positions = list(pos_dict.values())
+
+            req.ik_request.robot_state.joint_state.name = all_joint_names
+            req.ik_request.robot_state.joint_state.position = all_joint_positions
+            
+            future = self.__ik_cli.call_async(req)
+            rclpy.spin_until_future_complete(self.__node, future, timeout_sec=1.0)
+            return future.result() if future.done() else None
+
+        # Attempt 1: Current state
+        res = call_ik()
+        if res and res.error_code.val == MoveItErrorCodes.SUCCESS:
+            return dict(zip(res.solution.joint_state.name, res.solution.joint_state.position))
+
+        # Attempt 2-4: Retry with slight random noise in seed
+        import random
+        for i in range(3):
+            self.__node.get_logger().info(f"Retrying IK with noise (Attempt {i+2})")
+            noisy_seed = {name: pos + random.uniform(-0.1, 0.1) for name, pos in self.__joint_states.items()}
+            res = call_ik(noisy_seed)
+            if res and res.error_code.val == MoveItErrorCodes.SUCCESS:
                 return dict(zip(res.solution.joint_state.name, res.solution.joint_state.position))
-            else:
-                self.__node.get_logger().error(f"IK failed for {group_name} with error: {res.error_code.val}")
+
+        if res:
+            self.__node.get_logger().error(f"IK failed for {group_name} with error: {res.error_code.val}")
+        else:
+            self.__node.get_logger().error(f"IK service call timed out for {group_name}")
         return None
 
     def move_abs(self, x: float = 0.0, y: float = 0.0, z: float = 0.0, roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0, planning_group: str = 'upper_body', wait: bool = True, reference_frame: str = 'base_link', **kwargs) -> bool:
@@ -733,11 +797,14 @@ class ArmControl():
             return False
             
         cx, cy, cz, croll, cpitch, cyaw = current_pose
+        self.__node.get_logger().info(f"Current {planning_group} pose: {cx:.3f}, {cy:.3f}, {cz:.3f}")
 
         new_x = cx + x
         new_y = cy + y
         new_z = cz + z
         
+        self.__node.get_logger().info(f"Target {planning_group} pose: {new_x:.3f}, {new_y:.3f}, {new_z:.3f} (rel x={x})")
+
         q_curr = tf_transformations.quaternion_from_euler(croll, cpitch, cyaw)
         q_rel = tf_transformations.quaternion_from_euler(roll, pitch, yaw)
         q_new = tf_transformations.quaternion_multiply(q_curr, q_rel)
@@ -899,14 +966,31 @@ class ArmControl():
         goal_msg = MoveGroup.Goal()
         goal_msg.request.group_name = planning_group
         
+        joints = []
+        if planning_group == "arm_left":
+            joints = ["left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint", "left_elbow_joint", "left_wrist_roll_joint"]
+        elif planning_group == "arm_right":
+            joints = ["right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint", "right_elbow_joint", "right_wrist_roll_joint"]
+        elif planning_group == "upper_body":
+            joints = ["waist_yaw_joint", "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint", "left_elbow_joint", "left_wrist_roll_joint", 
+                      "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint", "right_elbow_joint", "right_wrist_roll_joint"]
+        else:
+            self.__node.get_logger().error(f"Unsupported group: {planning_group}")
+            return False
+
         constraints = Constraints()
-        for name, val in kwargs.items():
+        for j_name in joints:
             jc = JointConstraint()
-            jc.joint_name = name
-            if rlt:
-                jc.position = self.__joint_states.get(name, 0.0) + val
+            jc.joint_name = j_name
+            if j_name in kwargs:
+                val = kwargs[j_name]
+                if rlt:
+                    jc.position = self.__joint_states.get(j_name, 0.0) + val
+                else:
+                    jc.position = val
             else:
-                jc.position = val
+                jc.position = self.__joint_states.get(j_name, 0.0)
+            
             jc.tolerance_above = 0.01
             jc.tolerance_below = 0.01
             jc.weight = 1.0
