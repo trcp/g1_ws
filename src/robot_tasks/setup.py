@@ -25,6 +25,7 @@ def package_files(directory, data_files):
 # Add directories
 data_files = package_files("locations", data_files)
 data_files = package_files("launch", data_files)
+data_files = package_files("params", data_files)
 
 setup(
     name=package_name,
@@ -46,6 +47,7 @@ setup(
         'console_scripts': [
             'receptionist = robot_tasks.receptionist:main',
             'ihr_task = robot_tasks.ihr_task:main',
+            'taisou = robot_tasks.taisou:main',
             'restaurant_task = robot_tasks.restaurant:main',
         ],
     },

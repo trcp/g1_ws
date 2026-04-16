@@ -28,7 +28,7 @@ def generate_launch_description():
         ('image_depth', '/head_camera/d455/aligned_depth_to_color/image_raw'),
         ('color_camera_info', '/head_camera/d455/color/camera_info'),
         ('depth_camera_info', '/head_camera/d455/aligned_depth_to_color/camera_info'),
-        #('execute', 'execute_person_detect')
+        ('execute', 'execute_person_detect')
     ]
 
 

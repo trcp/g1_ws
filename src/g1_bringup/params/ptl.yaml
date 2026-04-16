@@ -1,7 +1,7 @@
 pointcloud_to_laserscan:
   ros__parameters:
     target_frame: "base_footprint"
-    queue_size: 10 
+    queue_size: 10
     transform_tolerance: 0.2
     min_height: 0.15
     max_height: 2.0

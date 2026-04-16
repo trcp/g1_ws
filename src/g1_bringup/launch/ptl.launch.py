@@ -26,6 +26,7 @@ def generate_launch_description():
         parameters=[ptl_params_file],
         remappings=[
             ('cloud_in', '/utlidar/cloud_livox_mid360'),
+            #('cloud_in', '/livox/lidar'),
         ]
     )
 
