@@ -98,7 +98,10 @@ def generate_launch_description():
         # =========================
         # Lifecycle nodes
         # =========================
-        lifecycle_nodes = [
+        lifecycle_nodes = []
+        if _use_map_server:
+            lifecycle_nodes.append('map_server')
+        lifecycle_nodes += [
             'controller_server',
             'smoother_server',
             'planner_server',
@@ -108,8 +111,6 @@ def generate_launch_description():
             'velocity_smoother',
         ]
 
-        if _use_map_server:
-            lifecycle_nodes.append('map_server')
 
         # =========================
         # Map Server
