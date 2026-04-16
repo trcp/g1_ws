@@ -53,6 +53,10 @@ def generate_launch_description():
         package='erasers_g1_common_cpp',
         executable='joint_state_publisher',
     )
+    joint_state_publisher_debug = Node(
+        package='joint_state_publisher',
+        executable='joint_state_publisher',
+    )
     rviz = Node(
         package='rviz2',
         executable='rviz2',
@@ -61,7 +65,8 @@ def generate_launch_description():
         condition=IfCondition(use_rviz)
     )
     ld.add_action(robot_state_publisher)
-    ld.add_action(joint_state_publisher)
+    #ld.add_action(joint_state_publisher)
+    ld.add_action(joint_state_publisher_debug)
     ld.add_action(rviz)
 
     return ld

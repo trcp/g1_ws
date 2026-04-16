@@ -13,6 +13,7 @@ from tf2_ros import Buffer, TransformListener
 from sensor_msgs.msg import Image, CameraInfo
 from std_srvs.srv import SetBool
 from std_msgs.msg import Int16MultiArray
+from lor_interfaces.msg import Person3D, Persons3D # Light Weight Open Pose
 
 # erasers API
 from erasers_g1_api.tts import TTS
@@ -28,9 +29,182 @@ import cv2
 from faster_whisper import WhisperModel
 
 # preferences
+from typing import List
 import numpy as np
 import traceback
 import time
+
+
+'''
+人物認識
+'''
+class LOR(smach.StateMachine):
+    def __init__(self,
+                 node:Node,
+                 tts_say:TTS.say,
+                 start_msg:str='I will search the person. Please wait a moment.',
+                 timeout_msg:str='The person was not found.',
+                 failure_msg:str='An error occurred while detecting the person.',
+                 success_msg:str='The person was detected.',
+                 scan_sec:int = 5,
+                 timeout_sec:int=10,
+                 detect_condition:str='normal'):
+        """人物検出。
+
+        Parameters
+        ----------
+        node : Node
+            サービス呼び出しとログ出力に使用する ROS ノードインスタンス。
+        tts_say : TTS.say
+            音声応答に使うテキスト読み上げ関数。
+        start_msg : str, optional
+            人物検出開始時に読み上げるメッセージ。
+        timeout_msg : str, optional
+            人物が見つからなかった場合に読み上げるメッセージ。
+        failure_msg : str, optional
+            検出処理中にエラーが発生した場合に読み上げるメッセージ。
+        success_msg : str, optional
+            人物検出成功時に読み上げるメッセージ。
+        scan_sec : int, optional
+            検出処理を実行するスキャン時間（秒）。
+        timeout_sec : int, optional
+            検出処理の最大待機時間（秒）。
+        detect_condition : str, optional
+            検出条件。'normal' または 'hand_up' を指定可能。
+
+        userdata
+        --------
+        person_poses : List[Person3D]
+            見つかった人物の3Dポーズ情報。成功時に出力される。
+        """
+        
+        # init smach
+        smach.State.__init__(self,
+                             outcomes=['success', 'timeout', 'failure'],
+                             input_keys=[],
+                             output_keys=['person_poses'])
+        
+        # init values
+        self.__node:Node = node
+        self.__say:TTS.say = tts_say
+        self.__start_msg:str = start_msg
+        self.__timeout_msg:str = timeout_msg
+        self.__failure_msg:str = failure_msg
+        self.__success_msg:str = success_msg
+        self.__scan_sec:int = scan_sec
+        self.__timeout_sec:int = timeout_sec
+        self.__detect_condition:str = detect_condition # normal, hand_up 
+        self.__person_poses:List[Person3D] = []
+
+        # service
+        self.__lor_cli = self.__node.create_client(SetBool, 'execute_person_detect')
+        while not self.__lor_cli.wait_for_service(timeout_sec=5.0):
+            self.__node.get_logger().error('lightweight_openpose_ros2 not available')
+            raise RuntimeError('lightweight_openpose_ros2 not available')
+    
+    def __send_lor_req(self, req:SetBool.Request):
+        future = self.__lor_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future)
+        response:SetBool.Response = future.result()
+        self.__node.get_logger().info('lightweight_openpose_ros2 response: %s'%response.message)
+        return response.success
+    
+
+    def __person_cb(self, msg:Persons3D):
+        if self.__detect_condition == 'normal':
+            self.__person_poses = msg.persons
+        elif self.__detect_condition == 'hand_up':
+            self.__person_poses = []
+            for person in msg.persons:
+                # 0:nose, 1:neck, 
+                # 2:r_sho, 3:r_elb, 4:r_wri, 
+                # 5:l_sho, 6:l_elb, 7:l_wri
+                
+                # Check Right Hand
+                r_wri = person.keypoints[4]
+                r_sho = person.keypoints[2]
+                is_r_hand_up = r_wri.z > r_sho.z
+
+                # Check Left Hand
+                l_wri = person.keypoints[7]
+                l_sho = person.keypoints[5]
+                is_l_hand_up = l_wri.z > l_sho.z
+
+                if is_r_hand_up or is_l_hand_up:
+                    self.__person_poses.append(person)
+    
+
+    def execute(self, userdata):
+        try:
+            # declare msg
+            self.__node.get_logger().info('''
+                WAIT PERSON RECOGNITION ....
+            ''')
+            self.__person_poses:List[Person3D] = []
+
+            # request mic start
+            request = SetBool.Request()
+            request.data = True
+            if not self.__send_lor_req(request):
+                self.__node.get_logger().error('lightweight_openpose_ros2 request failed')
+                self.__say(self.__failure_msg)
+                return 'failure'
+            
+            self.__node.get_logger().info('''
+            =================================
+                PERSON RECOGNITION START ...
+            =================================
+            ''')
+
+            # detect person pose
+            with TemporarySubscriber(self.__node,
+                                    Persons3D,
+                                    f'/human_3d_poses',
+                                    10,
+                                    self.__person_cb,
+                                    ):
+                # declare msg
+                self.__node.get_logger().info('''
+                    SEARCHING ...
+                ''')
+                self.__say(self.__start_msg)
+
+                init_time = time.time()
+                while (time.time() - init_time < self.__scan_sec) or \
+                      (time.time() - init_time < self.__timeout_sec and not self.__person_poses):
+                    rclpy.spin_once(self.__node, timeout_sec=0.1)
+            
+            # request mic stop
+            request = SetBool.Request()
+            request.data = False
+            if not self.__send_lor_req(request):
+                self.__node.get_logger().error('lightweight_openpose_ros2 request failed')
+                self.__say(self.__failure_msg)
+                return 'failure'
+            else:
+                print(self.__person_poses)
+                userdata.person_poses = self.__person_poses
+                if not self.__person_poses:
+                    self.__node.get_logger().warn('Person is not detected')
+                    self.__say(self.__timeout_msg)
+                    return 'timeout'
+                else:
+                    self.__node.get_logger().info('Person is detected')
+                    self.__say(self.__success_msg)
+                    return 'success'
+        except:
+            # Ensure lor is stopped on error
+            try:
+                request = SetBool.Request()
+                request.data = False
+                self.__send_lor_req(request)
+            except:
+                pass
+                
+            self.__say('Error is occured in PersonRecongnition')
+            self.__node.get_logger().error('Error is occured in PersonRecongnition\n%s'%traceback.format_exc())
+            return 'failure'
+
 
 
 '''
@@ -53,7 +227,7 @@ class SpeechToText(smach.State):
                  max_record_duration:float=10.0,
                  max_challenge:int=3):
         """Whisper と ROS マイク音声を使った音声認識状態。
-
+        
         Parameters
         ----------
         node : Node
@@ -238,7 +412,7 @@ class SpeechToText(smach.State):
 
             # check keywords if provided
             if self.__success_keywards:
-                 if not any(keyword in text_result for keyword in self.__success_keywards):
+                 if not any(keyword in text_result.lower() for keyword in self.__success_keywards):
                     userdata.num_challenge = num_challenge + 1
                     if userdata.num_challenge >= self.__max_challenge:
                         self.__node.get_logger().error("Voice recong challenge is %d times. challenge is over."%(num_challenge))
