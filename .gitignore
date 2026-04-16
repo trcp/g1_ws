@@ -6,3 +6,6 @@ rosbag/*
 !rosbag/.gitkeepe
 map/*
 !map/.gitkeep
+# pixi environments
+.pixi/*
+!.pixi/config.toml
