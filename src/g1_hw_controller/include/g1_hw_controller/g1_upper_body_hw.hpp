@@ -13,6 +13,8 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/macros.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
+#include "std_srvs/srv/set_bool.hpp"
+#include "unitree_hg/msg/low_state.hpp"
 
 namespace g1_hw_controller
 {
@@ -39,7 +41,10 @@ private:
   // ROS 2 Node for communication
   std::shared_ptr<rclcpp::Node> node_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_command_pub_;
-  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
+  rclcpp::Subscription<unitree_hg::msg::LowState>::SharedPtr low_state_sub_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr enable_service_;
+
+  bool control_enabled_ = true;
 
   // Store joint states and commands
   std::vector<double> hw_commands_;
@@ -47,7 +52,9 @@ private:
   std::map<std::string, int> joint_map_;
   std::map<std::string, double> feedback_map_;
 
-  void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
+  void lowStateCallback(const unitree_hg::msg::LowState::SharedPtr msg);
+  void enableControlCallback(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+                             std::shared_ptr<std_srvs::srv::SetBool::Response> response);
 };
 
 }  // namespace g1_hw_controller

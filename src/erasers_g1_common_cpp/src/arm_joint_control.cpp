@@ -11,7 +11,6 @@
 #include "unitree_hg/msg/low_cmd.hpp"
 #include "unitree_hg/msg/low_state.hpp"
 #include "g1/g1.hpp"
-#include "std_srvs/srv/set_bool.hpp"
 
 using LowCmd = unitree_hg::msg::LowCmd;
 using LowState = unitree_hg::msg::LowState;
@@ -65,29 +64,11 @@ public:
       std::chrono::duration<double>(control_dt_),
       std::bind(&ArmJointControl::controlLoop, this));
 
-    // Enable Control Service
-    enable_service_ = this->create_service<std_srvs::srv::SetBool>(
-      "/enable_upper_body_control",
-      std::bind(&ArmJointControl::enableControlCallback, this, std::placeholders::_1, std::placeholders::_2));
-
     // Initialize joint mapping (URDF joint name -> G1 Motor Index)
     initializeJointMapping();
   }
 
 private:
-  void enableControlCallback(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
-                             std::shared_ptr<std_srvs::srv::SetBool::Response> response)
-  {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    if (!control_enabled_ && request->data) {
-      needs_sync_ = true;
-    }
-    control_enabled_ = request->data;
-    response->success = true;
-    response->message = control_enabled_ ? "Upper body control enabled" : "Upper body control disabled";
-    RCLCPP_INFO(this->get_logger(), "%s", response->message.c_str());
-  }
-
   void initializeJointMapping()
   {
     joint_map_["left_shoulder_pitch_joint"] = static_cast<int>(G1Arm5JointIndex::LEFT_SHOULDER_PITCH);
@@ -112,8 +93,8 @@ private:
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
     
-    // Initialize current commands with actual feedback positions only once or when sync is needed
-    if (!initialized_ || needs_sync_)
+    // Initialize current commands with actual feedback positions only once
+    if (!initialized_)
     {
       for (const auto& pair : joint_map_)
       {
@@ -125,15 +106,8 @@ private:
            target_pos_[idx] = current_pos; // Set initial target to current pos
         }
       }
-      
-      if (!initialized_) {
-         initialized_ = true;
-         RCLCPP_INFO(this->get_logger(), "Initialized joint positions from LowState.");
-      }
-      if (needs_sync_) {
-         needs_sync_ = false;
-         RCLCPP_INFO(this->get_logger(), "Synchronized joint positions from LowState to prevent jumping.");
-      }
+      initialized_ = true;
+      RCLCPP_INFO(this->get_logger(), "Initialized joint positions from LowState.");
     }
   }
 
@@ -217,7 +191,7 @@ private:
 
     // Fade logic
     double time_since_topic = (this->now() - last_topic_time_).seconds();
-    bool is_topic_active = (time_since_topic < timeout_duration_) && control_enabled_;
+    bool is_topic_active = time_since_topic < timeout_duration_;
     double fade_step = control_dt_ / fade_duration_;
 
     if (is_topic_active && !prev_topic_active_) {
@@ -233,7 +207,7 @@ private:
     }
     control_weight_ = std::clamp(control_weight_, 0.0, 1.0);
 
-    if (has_active_joints && (control_weight_ > 0.0 || (control_weight_ == 0.0 && prev_control_weight_ > 0.0)))
+    if (has_active_joints)
     {
         // Set control flag for Arm SDK
         cmd.motor_cmd[static_cast<int>(G1Arm5JointIndex::NOT_USED_JOINT)].q = static_cast<float>(control_weight_); 
@@ -251,7 +225,6 @@ private:
     prev_topic_active_ = is_topic_active;
   }
 
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr enable_service_;
   rclcpp::Publisher<LowCmd>::SharedPtr pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_target_sub_;
   rclcpp::Subscription<LowState>::SharedPtr low_state_sub_;
@@ -274,8 +247,6 @@ private:
   double control_weight_ = 0.0;
   double prev_control_weight_ = 0.0;
   bool prev_topic_active_ = false;
-  bool control_enabled_ = true;
-  bool needs_sync_ = false;
   rclcpp::Time last_topic_time_;
 };
 

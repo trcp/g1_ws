@@ -41,12 +41,17 @@ hardware_interface::CallbackReturn G1UpperBodyHW::on_init(const hardware_interfa
 
   // Initialize ROS 2 Node
   node_ = std::make_shared<rclcpp::Node>("g1_upper_body_hw_node");
+  
+  enable_service_ = node_->create_service<std_srvs::srv::SetBool>(
+    "/enable_upper_body_control",
+    std::bind(&G1UpperBodyHW::enableControlCallback, this, std::placeholders::_1, std::placeholders::_2));
+    
   joint_command_pub_ = node_->create_publisher<sensor_msgs::msg::JointState>("/upper_joints_control", 10);
   
   rclcpp::QoS qos_profile(10);
   qos_profile.best_effort();
-  joint_state_sub_ = node_->create_subscription<sensor_msgs::msg::JointState>(
-    "/joint_states", qos_profile, std::bind(&G1UpperBodyHW::jointStateCallback, this, std::placeholders::_1));
+  low_state_sub_ = node_->create_subscription<unitree_hg::msg::LowState>(
+    "/lowstate", qos_profile, std::bind(&G1UpperBodyHW::lowStateCallback, this, std::placeholders::_1));
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -104,6 +109,11 @@ hardware_interface::return_type G1UpperBodyHW::read(const rclcpp::Time & /*time*
     {
       hw_states_[i] = feedback_map_[joint_name];
     }
+    
+    // When disabled, sync commands with current physical states to prevent jumping upon re-enable
+    if (!control_enabled_) {
+      hw_commands_[i] = hw_states_[i];
+    }
   }
 
   return hardware_interface::return_type::OK;
@@ -111,6 +121,10 @@ hardware_interface::return_type G1UpperBodyHW::read(const rclcpp::Time & /*time*
 
 hardware_interface::return_type G1UpperBodyHW::write(const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
 {
+  if (!control_enabled_) {
+    return hardware_interface::return_type::OK; // Silence topic so downstream arm controller handles fading
+  }
+
   auto msg = std::make_unique<sensor_msgs::msg::JointState>();
   msg->header.stamp = node_->now();
 
@@ -131,12 +145,26 @@ hardware_interface::return_type G1UpperBodyHW::write(const rclcpp::Time & /*time
   return hardware_interface::return_type::OK;
 }
 
-void G1UpperBodyHW::jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg)
+void G1UpperBodyHW::lowStateCallback(const unitree_hg::msg::LowState::SharedPtr msg)
 {
-  for (size_t i = 0; i < msg->name.size(); ++i)
+  for (const auto & pair : joint_map_)
   {
-    feedback_map_[msg->name[i]] = msg->position[i];
+    const std::string & joint_name = pair.first;
+    int index = pair.second;
+    if (index >= 0 && index < 35)
+    {
+      feedback_map_[joint_name] = msg->motor_state[index].q;
+    }
   }
+}
+
+void G1UpperBodyHW::enableControlCallback(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+                                          std::shared_ptr<std_srvs::srv::SetBool::Response> response)
+{
+  control_enabled_ = request->data;
+  response->success = true;
+  response->message = control_enabled_ ? "Upper body control enabled" : "Upper body control disabled";
+  RCLCPP_INFO(node_->get_logger(), "%s", response->message.c_str());
 }
 
 }  // namespace g1_hw_controller

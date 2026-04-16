@@ -13,6 +13,7 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(unitree_hg REQUIRED)
 find_package(erasers_g1_common_cpp REQUIRED)
+find_package(std_srvs REQUIRED)
 
 add_library(g1_hw_controller SHARED
   src/g1_upper_body_hw.cpp
@@ -30,6 +31,7 @@ ament_target_dependencies(g1_hw_controller
   sensor_msgs
   unitree_hg
   erasers_g1_common_cpp
+  std_srvs
 )
 
 pluginlib_export_plugin_description_file(hardware_interface g1_hw_controller.xml)
