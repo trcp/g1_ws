@@ -23,6 +23,7 @@ def generate_launch_description():
     use_camera = LaunchConfiguration('use_camera')
     dx_path = LaunchConfiguration('dx_path')
     use_rviz = LaunchConfiguration('use_rviz')
+    use_emc = LaunchConfiguration('use_emc')
 
 
     # declare argument
@@ -54,6 +55,10 @@ def generate_launch_description():
         'use_rviz', default_value='false',
         description='Whether to start Rviz'
     )
+    declare_use_emc = DeclareLaunchArgument(
+        'use_emc', default_value=os.environ.get('USE_EMC', 'false'),
+        description='Whether to start EMC'
+    )
 
     ld.add_action(declare_start_message)
     ld.add_action(declare_ptl_params)
@@ -62,6 +67,7 @@ def generate_launch_description():
     ld.add_action(declare_use_camera)
     ld.add_action(declare_use_rviz)
     ld.add_action(declare_dx_path)
+    ld.add_action(declare_use_emc)
 
 
     # nodes
@@ -94,7 +100,10 @@ def generate_launch_description():
         package='head_servo_controller',
         executable='head_servo_controller',
         emulate_tty=True,
-        parameters=[{'dx_path': dx_path}],
+        parameters=[
+            os.path.join(get_package_share_directory('head_servo_controller'), 'params', 'head_servo.yaml'),
+            {'dx_path': dx_path}
+        ],
         condition=IfCondition(use_camera)
     )
     # TTS
@@ -133,7 +142,8 @@ def generate_launch_description():
     emergency_stop = Node(
         package='erasers_g1_common_cpp',
         executable='emergency_stop',
-        emulate_tty=True
+        emulate_tty=True,
+        condition=IfCondition(use_emc)
     )
     # Mic server
     mic_server = Node(

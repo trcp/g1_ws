@@ -124,6 +124,7 @@ ament_target_dependencies(arm_joint_control
     unitree_api
     sensor_msgs
     urdf
+    std_srvs
 )
 
 # arm_endeffector_control

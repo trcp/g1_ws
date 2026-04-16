@@ -6,6 +6,7 @@
 #include "sensor_msgs/msg/joy.hpp"
 #include "unitree_go/msg/wireless_controller.hpp"
 #include "g1_srvs/srv/pose_policy.hpp"
+#include "g1_srvs/srv/audio_client.hpp"
 
 using std::placeholders::_1;
 using namespace std::chrono_literals;
@@ -14,7 +15,8 @@ class EmergencyStopNode : public rclcpp::Node
 {
 public:
   EmergencyStopNode()
-  : Node("emergency_stop_node"), prev_button_state_(false), is_processing_(false)
+  : Node("emergency_stop_node"), prev_button_state_(false), is_processing_(false), 
+    is_armed_(false), initial_warning_sent_(false)
   {
     this->declare_parameter<int>("emc_button_index", 0);
     this->declare_parameter<std::string>("emc_pose", "damp");
@@ -27,6 +29,7 @@ public:
       "/wirelesscontroller", 10, std::bind(&EmergencyStopNode::wireless_callback, this, _1));
 
     pose_policy_client_ = this->create_client<g1_srvs::srv::PosePolicy>("/pose_policy");
+    audio_client_ = this->create_client<g1_srvs::srv::AudioClient>("/play_audio");
 
     RCLCPP_INFO(this->get_logger(), "Emergency Stop Node has been started.");
   }
@@ -44,6 +47,19 @@ private:
     }
 
     bool current_button_state = (msg->buttons[button_index] == 0);
+
+    if (!is_armed_) {
+      if (!current_button_state) {
+        is_armed_ = true;
+        RCLCPP_INFO(this->get_logger(), "Emergency button is released. System is now ARMED.");
+      } else if (!initial_warning_sent_) {
+        send_tts_request("Please release the emergency button");
+        initial_warning_sent_ = true;
+        RCLCPP_WARN(this->get_logger(), "Emergency button is pressed at startup. Please release it to arm the system.");
+      }
+      prev_button_state_ = current_button_state;
+      return;
+    }
 
     if (current_button_state && !prev_button_state_) {
       execute_emergency_sequence("JOY");
@@ -89,6 +105,34 @@ private:
     });
   }
 
+  void send_tts_request(const std::string & text)
+  {
+    if (!audio_client_->wait_for_service(1s)) {
+      RCLCPP_ERROR(this->get_logger(), "Service /play_audio is not available.");
+      return;
+    }
+
+    auto request = std::make_shared<g1_srvs::srv::AudioClient::Request>();
+    request->type = g1_srvs::srv::AudioClient::Request::TYPE_TTS;
+    request->text = text;
+
+    audio_client_->async_send_request(
+      request,
+      [this](rclcpp::Client<g1_srvs::srv::AudioClient>::SharedFuture future) {
+        try {
+          auto response = future.get();
+          if (response->success) {
+            RCLCPP_INFO(this->get_logger(), "Successfully sent TTS request.");
+          } else {
+            RCLCPP_ERROR(this->get_logger(), "TTS request failed: %s", response->message.c_str());
+          }
+        } catch (const std::exception & e) {
+          RCLCPP_ERROR(this->get_logger(), "TTS service call failed: %s", e.what());
+        }
+      }
+    );
+  }
+
   void call_pose_policy_service(const std::string & pose_mode, std::function<void()> on_complete = nullptr)
   {
     if (!pose_policy_client_->wait_for_service(1s)) {
@@ -120,9 +164,12 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
   rclcpp::Subscription<unitree_go::msg::WirelessController>::SharedPtr wireless_sub_;
   rclcpp::Client<g1_srvs::srv::PosePolicy>::SharedPtr pose_policy_client_;
+  rclcpp::Client<g1_srvs::srv::AudioClient>::SharedPtr audio_client_;
   
   bool prev_button_state_;
   bool is_processing_;    
+  bool is_armed_;
+  bool initial_warning_sent_;
 };
 
 int main(int argc, char * argv[])

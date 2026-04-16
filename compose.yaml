@@ -68,6 +68,8 @@ x-preferences: &preferences
     - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
     # 頭部カメラジョイントモーターのデバイスパス
     - DX_PATH="/dev/ttyCH341USB0"
+    # 緊急停止ボタンの有効
+    - USE_EMC=false
   devices:
     - /dev:/dev
   volumes:
