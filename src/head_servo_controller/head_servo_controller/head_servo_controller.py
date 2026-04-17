@@ -45,30 +45,32 @@ class PanTiltNode(Node):
         self.callback_group = ReentrantCallbackGroup()
         
         # Declare Parameters
-        self.declare_parameters(
-            namespace='',
-            parameters=[
-                ('dx_path', DEFAULT_DEVICENAME),
-                ('pan_id', 1),
-                ('tilt_id', 0),
-                ('pan_home_pulse', 2535),
-                ('tilt_home_pulse', 1895),
-                ('pan_rad_offset', 0.0),
-                ('tilt_rad_offset', 0.0),
-                ('pan_dir', 1),
-                ('tilt_dir', 1),
-                ('pan_min_pulse', 0),
-                ('pan_max_pulse', 4000),
-                ('tilt_min_pulse', 1455),
-                ('tilt_max_pulse', 4000),
-                ('moving_speed', 60),
-                ('calib_speed', 20),
-                ('control_period_sec', 0.05),
-                ('vel_timeout_sec', 0.5),
-                ('load_threshold', 400),
-                ('load_count_limit', 5)
-            ]
-        )
+        self.dx_path = self.declare_parameter('dx_path', DEFAULT_DEVICENAME).value
+        self.pan_id = self.declare_parameter('pan_id', 1).value
+        self.tilt_id = self.declare_parameter('tilt_id', 0).value
+        self.pan_home_pulse = self.declare_parameter('pan_home_pulse', 2535).value
+        self.tilt_home_pulse = self.declare_parameter('tilt_home_pulse', 1895).value
+        self.pan_rad_offset = self.declare_parameter('pan_rad_offset', 0.0).value
+        self.tilt_rad_offset = self.declare_parameter('tilt_rad_offset', 0.0).value
+        self.pan_dir = self.declare_parameter('pan_dir', 1).value
+        self.tilt_dir = self.declare_parameter('tilt_dir', 1).value
+        self.pan_min_pulse = self.declare_parameter('pan_min_pulse', 0).value
+        self.pan_max_pulse = self.declare_parameter('pan_max_pulse', 4000).value
+        self.tilt_min_pulse = self.declare_parameter('tilt_min_pulse', 1455).value
+        self.tilt_max_pulse = self.declare_parameter('tilt_max_pulse', 4000).value
+        self.moving_speed = self.declare_parameter('moving_speed', 60).value
+        self.calib_speed = self.declare_parameter('calib_speed', 20).value
+        self.control_period_sec = self.declare_parameter('control_period_sec', 0.05).value
+        self.vel_timeout_sec = self.declare_parameter('vel_timeout_sec', 0.5).value
+        self.load_threshold = self.declare_parameter('load_threshold', 400).value
+        self.load_count_limit = self.declare_parameter('load_count_limit', 5).value
+
+        self.get_logger().info(f"--- Head Servo Parameters ---")
+        self.get_logger().info(f"dx_path: {self.dx_path}")
+        self.get_logger().info(f"pan_home_pulse: {self.pan_home_pulse}")
+        self.get_logger().info(f"tilt_home_pulse: {self.tilt_home_pulse} (Default: 1895)")
+        self.get_logger().info(f"pan_dir: {self.pan_dir}, tilt_dir: {self.tilt_dir}")
+        self.get_logger().info(f"------------------------------")
 
         self.target_pan_rad = 0.0
         self.target_tilt_rad = 0.0
@@ -99,7 +101,7 @@ class PanTiltNode(Node):
 
     def try_connect(self):
         with self.lock:
-            dx_path = self.get_parameter('dx_path').value
+            dx_path = self.dx_path
             self.get_logger().info(f"Connecting to {dx_path}...")
             try:
                 if self.portHandler.is_open:
@@ -108,8 +110,8 @@ class PanTiltNode(Node):
                 if self.portHandler.openPort():
                     if self.portHandler.setBaudRate(DEFAULT_BAUDRATE):
                         self.get_logger().info(f"Connected. Initializing motors...")
-                        pan_id = self.get_parameter('pan_id').value
-                        tilt_id = self.get_parameter('tilt_id').value
+                        pan_id = self.pan_id
+                        tilt_id = self.tilt_id
                         if self.setup_motor_locked(pan_id, "Pan") and self.setup_motor_locked(tilt_id, "Tilt"):
                             self.get_logger().info("Motors Ready!")
                             self.is_connected = True
@@ -123,7 +125,7 @@ class PanTiltNode(Node):
 
     def setup_motor_locked(self, dxl_id, name):
         try:
-            moving_speed = self.get_parameter('moving_speed').value
+            moving_speed = self.moving_speed
             self.packetHandler.write1ByteTxRx(self.portHandler, dxl_id, ADDR_TORQUE_ENABLE, 0)
             time.sleep(0.02)
             self.packetHandler.write1ByteTxRx(self.portHandler, dxl_id, ADDR_OPERATING_MODE, 3)
@@ -175,10 +177,10 @@ class PanTiltNode(Node):
     def safe_write_pulse(self, dxl_id, pulse):
         if not self.is_connected: return
         pulse = int(pulse)
-        if dxl_id == self.get_parameter('pan_id').value:
-            pulse = max(self.get_parameter('pan_min_pulse').value, min(self.get_parameter('pan_max_pulse').value, pulse))
-        elif dxl_id == self.get_parameter('tilt_id').value:
-            pulse = max(self.get_parameter('tilt_min_pulse').value, min(self.get_parameter('tilt_max_pulse').value, pulse))
+        if dxl_id == self.pan_id:
+            pulse = max(self.pan_min_pulse, min(self.pan_max_pulse, pulse))
+        elif dxl_id == self.tilt_id:
+            pulse = max(self.tilt_min_pulse, min(self.tilt_max_pulse, pulse))
         
         with self.lock:
             try:
@@ -210,8 +212,8 @@ class PanTiltNode(Node):
         self.safe_write_pulse(dxl_id, pulse)
 
     def publish_current_state(self):
-        pan_id = self.get_parameter('pan_id').value
-        tilt_id = self.get_parameter('tilt_id').value
+        pan_id = self.pan_id
+        tilt_id = self.tilt_id
         pan_pulse = self.safe_read_pulse(pan_id)
         tilt_pulse = self.safe_read_pulse(tilt_id)
 
@@ -221,8 +223,8 @@ class PanTiltNode(Node):
             joint_state = JointState()
             joint_state.header.stamp = self.get_clock().now().to_msg()
             joint_state.name = ["xl330_joint", "d455_joint"]
-            p_rad = self.pulse_to_rad(pan_pulse, self.get_parameter('pan_home_pulse').value, self.get_parameter('pan_dir').value, self.get_parameter('pan_rad_offset').value)
-            t_rad = self.pulse_to_rad(tilt_pulse, self.get_parameter('tilt_home_pulse').value, self.get_parameter('tilt_dir').value, self.get_parameter('tilt_rad_offset').value)
+            p_rad = self.pulse_to_rad(pan_pulse, self.pan_home_pulse, self.pan_dir, self.pan_rad_offset)
+            t_rad = self.pulse_to_rad(tilt_pulse, self.tilt_home_pulse, self.tilt_dir, self.tilt_rad_offset)
             joint_state.position = [p_rad, t_rad]
             self.pub_joint_state.publish(joint_state)
             return p_rad, t_rad
@@ -230,9 +232,9 @@ class PanTiltNode(Node):
 
     def execute_calibration_for_joint(self, dxl_id, name):
         self.get_logger().info(f"Calibrating {name} (ID: {dxl_id})...")
-        calib_speed = self.get_parameter('calib_speed').value
-        load_threshold = self.get_parameter('load_threshold').value
-        load_count_limit = self.get_parameter('load_count_limit').value
+        calib_speed = self.calib_speed
+        load_threshold = self.load_threshold
+        load_count_limit = self.load_count_limit
         
         if not self.is_connected: return 0, 0
         self.set_profile_velocity(dxl_id, calib_speed)
@@ -282,7 +284,7 @@ class PanTiltNode(Node):
                 break
             time.sleep(0.05)
             
-        self.set_profile_velocity(dxl_id, self.get_parameter('moving_speed').value)
+        self.set_profile_velocity(dxl_id, self.moving_speed)
         center = int((detected_upper_pulse + detected_lower_pulse) / 2)
         self.safe_write_pulse(dxl_id, center)
         return detected_lower_pulse, detected_upper_pulse
@@ -312,8 +314,8 @@ class PanTiltNode(Node):
             return response
         
         self.get_logger().info("Manual Calibration: Torque OFF. You have 15 seconds to adjust the head.")
-        pan_id = self.get_parameter('pan_id').value
-        tilt_id = self.get_parameter('tilt_id').value
+        pan_id = self.pan_id
+        tilt_id = self.tilt_id
         
         # Torque OFF
         self.set_torque(pan_id, False)
@@ -355,6 +357,12 @@ class PanTiltNode(Node):
         self.safe_write_pulse(pan_id, pan_pos)
         self.safe_write_pulse(tilt_id, tilt_pos)
         
+        # Update internal variables to reflect new calibration
+        self.pan_home_pulse = pan_pos
+        self.tilt_home_pulse = tilt_pos
+        self.pan_rad_offset = 0.0
+        self.tilt_rad_offset = 0.0
+        
         self.target_pan_rad = 0.0
         self.target_tilt_rad = 0.0
         
@@ -371,11 +379,11 @@ class PanTiltNode(Node):
         self.target_pan_rad = target_pan
         self.target_tilt_rad = target_tilt
         
-        pan_id = self.get_parameter('pan_id').value
-        tilt_id = self.get_parameter('tilt_id').value
+        pan_id = self.pan_id
+        tilt_id = self.tilt_id
         
-        self.write_position_rad(pan_id, target_pan, self.get_parameter('pan_home_pulse').value, self.get_parameter('pan_dir').value, self.get_parameter('pan_rad_offset').value)
-        self.write_position_rad(tilt_id, target_tilt, self.get_parameter('tilt_home_pulse').value, self.get_parameter('tilt_dir').value, self.get_parameter('tilt_rad_offset').value)
+        self.write_position_rad(pan_id, target_pan, self.pan_home_pulse, self.pan_dir, self.pan_rad_offset)
+        self.write_position_rad(tilt_id, target_tilt, self.tilt_home_pulse, self.tilt_dir, self.tilt_rad_offset)
         
         success = self.wait_for_both_arrival(target_pan, target_tilt)
         response.success = success
@@ -387,8 +395,8 @@ class PanTiltNode(Node):
             if not self.is_connected: return False
             curr_pan, curr_tilt = self.publish_current_state()
             if curr_pan is not None and curr_tilt is not None:
-                offset_pan = self.get_parameter('pan_rad_offset').value
-                offset_tilt = self.get_parameter('tilt_rad_offset').value
+                offset_pan = self.pan_rad_offset
+                offset_tilt = self.tilt_rad_offset
                 err_pan = abs(target_pan - (curr_pan - offset_pan))
                 err_tilt = abs(target_tilt - (curr_tilt - offset_tilt))
                 if err_pan < 0.08 and err_tilt < 0.08:
@@ -410,8 +418,8 @@ class PanTiltNode(Node):
                 self.target_tilt_rad = msg.position[i]
                 self.last_vel_time = 0.0
         if self.is_connected:
-             self.write_position_rad(self.get_parameter('pan_id').value, self.target_pan_rad, self.get_parameter('pan_home_pulse').value, self.get_parameter('pan_dir').value, self.get_parameter('pan_rad_offset').value)
-             self.write_position_rad(self.get_parameter('tilt_id').value, self.target_tilt_rad, self.get_parameter('tilt_home_pulse').value, self.get_parameter('tilt_dir').value, self.get_parameter('tilt_rad_offset').value)
+             self.write_position_rad(self.pan_id, self.target_pan_rad, self.pan_home_pulse, self.pan_dir, self.pan_rad_offset)
+             self.write_position_rad(self.tilt_id, self.target_tilt_rad, self.tilt_home_pulse, self.tilt_dir, self.tilt_rad_offset)
 
     def timer_callback(self):
         if not self.is_connected:
@@ -419,14 +427,14 @@ class PanTiltNode(Node):
             return
         
         try:
-            vel_timeout = self.get_parameter('vel_timeout_sec').value
-            control_period = self.get_parameter('control_period_sec').value
+            vel_timeout = self.vel_timeout_sec
+            control_period = self.control_period_sec
             
             if (time.time() - self.last_vel_time) < vel_timeout:
                 self.target_pan_rad  += self.vel_cmd_pan  * control_period
                 self.target_tilt_rad += self.vel_cmd_tilt * control_period
-                self.write_position_rad(self.get_parameter('pan_id').value, self.target_pan_rad, self.get_parameter('pan_home_pulse').value, self.get_parameter('pan_dir').value, self.get_parameter('pan_rad_offset').value)
-                self.write_position_rad(self.get_parameter('tilt_id').value, self.target_tilt_rad, self.get_parameter('tilt_home_pulse').value, self.get_parameter('tilt_dir').value, self.get_parameter('tilt_rad_offset').value)
+                self.write_position_rad(self.pan_id, self.target_pan_rad, self.pan_home_pulse, self.pan_dir, self.pan_rad_offset)
+                self.write_position_rad(self.tilt_id, self.target_tilt_rad, self.tilt_home_pulse, self.tilt_dir, self.tilt_rad_offset)
             
             self.publish_current_state()
         except Exception as e:
@@ -435,8 +443,8 @@ class PanTiltNode(Node):
     def __del__(self):
         try:
             if self.is_connected:
-                self.packetHandler.write1ByteTxRx(self.portHandler, self.get_parameter('pan_id').value, ADDR_TORQUE_ENABLE, 0)
-                self.packetHandler.write1ByteTxRx(self.portHandler, self.get_parameter('tilt_id').value, ADDR_TORQUE_ENABLE, 0)
+                self.packetHandler.write1ByteTxRx(self.portHandler, self.pan_id, ADDR_TORQUE_ENABLE, 0)
+                self.packetHandler.write1ByteTxRx(self.portHandler, self.tilt_id, ADDR_TORQUE_ENABLE, 0)
             self.portHandler.closePort()
         except:
             pass

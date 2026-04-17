@@ -868,7 +868,7 @@
       <inertia ixx="0.0001232" ixy="-3.1E-08" ixz="3.1246E-05" iyy="0.000106321" iyz="-5E-09" izz="0.000194649"/>
     </inertial>
     <visual>
-      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <origin rpy="0 -0.65 0" xyz="0 0 0"/>
       <geometry>
         <mesh filename="package://g1_description/meshes/d455_link.STL"/>
       </geometry>

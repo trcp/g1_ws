@@ -65,8 +65,8 @@ def generate_launch_description():
         condition=IfCondition(use_rviz)
     )
     ld.add_action(robot_state_publisher)
-    #ld.add_action(joint_state_publisher)
-    ld.add_action(joint_state_publisher_debug)
+    ld.add_action(joint_state_publisher)
+    #ld.add_action(joint_state_publisher_debug)
     ld.add_action(rviz)
 
     return ld

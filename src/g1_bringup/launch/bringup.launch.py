@@ -21,6 +21,7 @@ def generate_launch_description():
     start_message = LaunchConfiguration('start_message')
     robot_model = LaunchConfiguration('robot_model')
     use_camera = LaunchConfiguration('use_camera')
+    ah_path = LaunchConfiguration('ah_path')
     dx_path = LaunchConfiguration('dx_path')
     use_rviz = LaunchConfiguration('use_rviz')
     use_emc = LaunchConfiguration('use_emc')
@@ -47,6 +48,10 @@ def generate_launch_description():
         'use_camera', default_value='true',
         description='Whether to bringup camera & servo'
     )
+    declare_ah_path = DeclareLaunchArgument(
+        'ah_path', default_value=os.environ.get('AH_PATH', '/dev/ttyACM0'),
+        description='Amazing Hand path'
+    )
     declare_dx_path = DeclareLaunchArgument(
         'dx_path', default_value=os.environ.get('DX_PATH', '/dev/ttyUSB0'),
         description='Dynamixel path'
@@ -66,6 +71,7 @@ def generate_launch_description():
     ld.add_action(declare_robot_model)
     ld.add_action(declare_use_camera)
     ld.add_action(declare_use_rviz)
+    ld.add_action(declare_ah_path)
     ld.add_action(declare_dx_path)
     ld.add_action(declare_use_emc)
 
@@ -136,6 +142,7 @@ def generate_launch_description():
     amazing_hand = Node(
         package='amazing_hand_nodes',
         executable='amazing_hand_node',
+        parameters=[{"serial_port":ah_path}],
         emulate_tty=True
     )
     # 緊急停止
@@ -167,7 +174,7 @@ def generate_launch_description():
     ld.add_action(arm_joint_control)
     #ld.add_action(arm_endeffector_control)
     #ld.add_action(cartesian_trajectory_planner)
-    #ld.add_action(amazing_hand)
+    ld.add_action(amazing_hand)
     ld.add_action(emergency_stop)
     ld.add_action(mic_server)
     ld.add_action(emc_joy_node)
