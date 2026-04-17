@@ -315,8 +315,6 @@ Visualization Manager:
           Value: true
         logo_link:
           Value: false
-        map:
-          Value: true
         mid360_link:
           Value: false
         odom:
@@ -359,67 +357,64 @@ Visualization Manager:
       Show Axes: true
       Show Names: true
       Tree:
-        base_footprint:
-          base_link:
-            pelvis:
-              imu_in_pelvis:
-                {}
-              left_hip_pitch_link:
-                left_hip_roll_link:
-                  left_hip_yaw_link:
-                    left_knee_link:
-                      left_ankle_pitch_link:
-                        left_ankle_roll_link:
-                          {}
-              pelvis_contour_link:
-                {}
-              right_hip_pitch_link:
-                right_hip_roll_link:
-                  right_hip_yaw_link:
-                    right_knee_link:
-                      right_ankle_pitch_link:
-                        right_ankle_roll_link:
-                          {}
-              torso_link:
-                d435_link:
-                  {}
-                head_link:
-                  {}
-                head_servo_link:
-                  xl330_link:
-                    d455_link:
-                      d455_color_frame:
-                        d455_color_optical_frame:
-                          {}
-                      d455_depth_frame:
-                        d455_depth_optical_frame:
-                          {}
-                imu_in_torso:
-                  {}
-                left_shoulder_pitch_link:
-                  left_shoulder_roll_link:
-                    left_shoulder_yaw_link:
-                      left_elbow_link:
-                        left_wrist_roll_rubber_hand:
-                          left_amazing_hand:
-                            {}
-                livox_frame:
-                  {}
-                logo_link:
-                  {}
-                mid360_link:
-                  {}
-                right_shoulder_pitch_link:
-                  right_shoulder_roll_link:
-                    right_shoulder_yaw_link:
-                      right_elbow_link:
-                        right_wrist_roll_rubber_hand:
-                          right_amazing_hand:
-                            {}
-        map:
-          {}
         odom:
-          {}
+          base_footprint:
+            base_link:
+              pelvis:
+                imu_in_pelvis:
+                  {}
+                left_hip_pitch_link:
+                  left_hip_roll_link:
+                    left_hip_yaw_link:
+                      left_knee_link:
+                        left_ankle_pitch_link:
+                          left_ankle_roll_link:
+                            {}
+                pelvis_contour_link:
+                  {}
+                right_hip_pitch_link:
+                  right_hip_roll_link:
+                    right_hip_yaw_link:
+                      right_knee_link:
+                        right_ankle_pitch_link:
+                          right_ankle_roll_link:
+                            {}
+                torso_link:
+                  d435_link:
+                    {}
+                  head_link:
+                    {}
+                  head_servo_link:
+                    xl330_link:
+                      d455_link:
+                        d455_color_frame:
+                          d455_color_optical_frame:
+                            {}
+                        d455_depth_frame:
+                          d455_depth_optical_frame:
+                            {}
+                  imu_in_torso:
+                    {}
+                  left_shoulder_pitch_link:
+                    left_shoulder_roll_link:
+                      left_shoulder_yaw_link:
+                        left_elbow_link:
+                          left_wrist_roll_rubber_hand:
+                            left_amazing_hand:
+                              {}
+                  livox_frame:
+                    {}
+                  logo_link:
+                    {}
+                  mid360_link:
+                    {}
+                  right_shoulder_pitch_link:
+                    right_shoulder_roll_link:
+                      right_shoulder_yaw_link:
+                        right_elbow_link:
+                          right_wrist_roll_rubber_hand:
+                            right_amazing_hand:
+                              {}
       Update Interval: 0
       Value: true
     - Alpha: 1
@@ -614,7 +609,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /head_camera/d455/aligned_depth_to_color/image_raw
+        Value: /head_camera/d455/color/image_raw
       Value: true
       Visibility:
         G1footprint: true
@@ -664,10 +659,22 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /human_pose_markers
       Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: MarkerArray
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /sam3/detect_poses_marker
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: map
+    Fixed Frame: odom
     Frame Rate: 30
   Name: root
   Tools:
@@ -710,7 +717,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 10.695171356201172
+      Distance: 3.297807216644287
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -725,10 +732,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.5697963237762451
+      Pitch: 1.0797967910766602
       Target Frame: base_link
       Value: Orbit (rviz_default_plugins)
-      Yaw: 3.0918285846710205
+      Yaw: 2.696826696395874
     Saved: ~
 Window Geometry:
   Displays:

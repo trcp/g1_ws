@@ -14,9 +14,12 @@ from sensor_msgs.msg import Image, CameraInfo
 from std_srvs.srv import SetBool
 from std_msgs.msg import Int16MultiArray
 from lor_interfaces.msg import Person3D, Persons3D # Light Weight Open Pose
+from sam3_ros_interfaces.msg import PredictArray, Predict
+from sam3_ros_interfaces.srv import ExecPredict
 
 # erasers API
 from erasers_g1_api.tts import TTS
+from erasers_g1_api.robot_control import G1Navigation, G1Control
 
 # state machine
 import smach
@@ -42,13 +45,16 @@ class LOR(smach.StateMachine):
     def __init__(self,
                  node:Node,
                  tts_say:TTS.say,
+                 robot_control:G1Control,
                  start_msg:str='I will search the person. Please wait a moment.',
                  timeout_msg:str='The person was not found.',
                  failure_msg:str='An error occurred while detecting the person.',
                  success_msg:str='The person was detected.',
-                 scan_sec:int = 5,
-                 timeout_sec:int=10,
-                 detect_condition:str='normal'):
+                 scan_sec:int = 3,
+                 timeout_sec:int=5,
+                 detect_condition:str='normal',
+                 searching_area:List[float]=[[0.0, 0.0], [0.0, 0.0]],
+                 number_of_searching:int=3):
         """人物検出。
 
         Parameters
@@ -71,11 +77,25 @@ class LOR(smach.StateMachine):
             検出処理の最大待機時間（秒）。
         detect_condition : str, optional
             検出条件。'normal' または 'hand_up' を指定可能。
+        searching_area : List[List[float, float], List[float, float]], optional
+            頭部カメラの探索範囲。[[tilt_min, pan_min], [tilt_max, pan_max]] の形式で指定。
+        number_of_searching : int, optional
+            探索ポイントの数。探索範囲内でこの数だけ頭部カメラを移動させて検出を試みる。
 
         userdata
         --------
-        person_poses : List[Person3D]
-            見つかった人物の3Dポーズ情報。成功時に出力される。
+        Output Keys:
+            person_poses : List[Person3D]
+                見つかった人物の3Dポーズ情報。成功時に出力される。
+        
+        Outcomes
+        ----------
+        success:
+            人物が検出された場合。
+        timeout:
+            人物が見つからなかった場合。
+        failure:
+            検出処理中にエラーが発生した場合。
         """
         
         # init smach
@@ -87,6 +107,7 @@ class LOR(smach.StateMachine):
         # init values
         self.__node:Node = node
         self.__say:TTS.say = tts_say
+        self.__robot_control:G1Control = robot_control
         self.__start_msg:str = start_msg
         self.__timeout_msg:str = timeout_msg
         self.__failure_msg:str = failure_msg
@@ -94,6 +115,8 @@ class LOR(smach.StateMachine):
         self.__scan_sec:int = scan_sec
         self.__timeout_sec:int = timeout_sec
         self.__detect_condition:str = detect_condition # normal, hand_up 
+        self.__searching_area:List[List[float, float], List[float, float]] = searching_area # [[tilt_min, pan_min], [tilt_max, pan_max]]
+        self.__number_of_searching:int = number_of_searching
         self.__person_poses:List[Person3D] = []
 
         # service
@@ -142,6 +165,9 @@ class LOR(smach.StateMachine):
             ''')
             self.__person_poses:List[Person3D] = []
 
+            # 探索時にロボットの頭部カメラを旋回させるポイントを作成
+            searching_points = np.linspace(self.__searching_area[0], self.__searching_area[1], self.__number_of_searching).tolist()
+
             # request mic start
             request = SetBool.Request()
             request.data = True
@@ -156,25 +182,29 @@ class LOR(smach.StateMachine):
             =================================
             ''')
 
-            # detect person pose
-            with TemporarySubscriber(self.__node,
-                                    Persons3D,
-                                    f'/human_3d_poses',
-                                    10,
-                                    self.__person_cb,
-                                    ):
-                # declare msg
-                self.__node.get_logger().info('''
-                    SEARCHING ...
-                ''')
-                self.__say(self.__start_msg)
+            for searching_point in searching_points:
+                # detect person pose
+                self.__robot_control.move_head(tilt=searching_point[0], pan=searching_point[1])
+                with TemporarySubscriber(self.__node,
+                                        Persons3D,
+                                        f'/human_3d_poses',
+                                        10,
+                                        self.__person_cb,
+                                        ):
+                    # declare msg
+                    self.__node.get_logger().info('''
+                        SEARCHING ...
+                    ''')
+                    self.__say(self.__start_msg)
 
-                init_time = time.time()
-                while (time.time() - init_time < self.__scan_sec) or \
-                      (time.time() - init_time < self.__timeout_sec and not self.__person_poses):
-                    rclpy.spin_once(self.__node, timeout_sec=0.1)
+                    init_time = time.time()
+                    while (time.time() - init_time < self.__scan_sec) or \
+                        (time.time() - init_time < self.__timeout_sec and not self.__person_poses):
+                        rclpy.spin_once(self.__node, timeout_sec=0.1)
+                    if self.__person_poses: break
             
             # request mic stop
+            self.__robot_control.move_head(tilt=0.0, pan=0.0) # move head to front
             request = SetBool.Request()
             request.data = False
             if not self.__send_lor_req(request):
@@ -261,16 +291,30 @@ class SpeechToText(smach.State):
 
         userdata
         --------
-        num_challenge : int
-            既に試行した認識リトライ回数。状態はこの値を読み書きする。
-        stt_text : str
-            認識結果のテキスト。成功時に出力される。
+        Input Keys:
+            num_challenge : int
+                既に試行した認識リトライ回数。状態はこの値を読み書きする。
+
+        Output Keys:
+            num_challenge : int
+                更新された認識リトライ回数。失敗やタイムアウト時にインクリメントされ、成功時にリセットされる。
+            stt_text : str  
+                認識結果のテキスト。成功時に出力される。
+        
+        Outcomes:
+        ----------
+        success:
+            音声認識が成功し、必要なキーワードが含まれている場合。
+        timeout:
+            音声が検出されなかった、または認識結果に必要なキーワードが含まれていなかった場合。リトライ可能。
+        failure:
+            認識処理中にエラーが発生した場合、またはリトライ回数が max_challenge を超えた場合。
         """
         
         # init smach
         smach.State.__init__(self,
                              outcomes=['success', 'timeout', 'failure'],
-                             input_keys=['num_challenge'],
+                             input_keys=['num_challenge', 'success_keywards'],
                              output_keys=['num_challenge', 'stt_text'])
         
         # init values
@@ -287,7 +331,6 @@ class SpeechToText(smach.State):
         self.__silence_duration = silence_duration # seconds
         self.__max_record_duration = max_record_duration # seconds
         self.__max_challenge = max_challenge
-        self.__success_keywards = success_keywards
         self.__max_challenge = max_challenge
 
         # mic service
@@ -411,8 +454,8 @@ class SpeechToText(smach.State):
                     return 'timeout'
 
             # check keywords if provided
-            if self.__success_keywards:
-                 if not any(keyword in text_result.lower() for keyword in self.__success_keywards):
+            if userdata.success_keywards:
+                 if not any(keyword in text_result.lower() for keyword in userdata.success_keywards):
                     userdata.num_challenge = num_challenge + 1
                     if userdata.num_challenge >= self.__max_challenge:
                         self.__node.get_logger().error("Voice recong challenge is %d times. challenge is over."%(num_challenge))
@@ -443,70 +486,91 @@ class SpeechToText(smach.State):
 
 
 '''
-Depth 画像から平面上に置かれた物体を検出する．
+SAM3 を用いた物体検出
 '''
-class SimpleObjectDetector(smach.State):
+class Sam3ObjectDetector(smach.State):
     def __init__(self,
                  node:Node,
                  tts_say:TTS.say,
+                 robot_control:G1Control,
                  timeout_sec:float=10.0,
                  start_msg:str='searching objects.',
+                 success_msg:str='I found objects.',
                  timeout_msg:str='Sorry. I can not found objects.'
                  ):
+        """SAM3 ROS を使った物体認識状態。
+
+        Userdata
+        --------
+        Input Keys:
+            objects_dict : dict
+                物体名をキー、認識信頼度を値とする辞書。状態はこの値を読み取る。
+                ```
+                objects_dict = {
+                    "object_name": 0.8,  # "物体名": 認識信頼度,
+                    "banana": 0.8,
+                    ...
+                }
+                ```
+        """
         # init smach
         smach.State.__init__(self,
                              outcomes=['success', 'timeout', 'failure'],
-                             input_keys=[],
+                             input_keys=['objects_dict'],
                              output_keys=[])
         
         # init values
-        self.node:Node = node
-        self.tts_say = tts_say
-        self.timeout_sec = timeout_sec
-        self.start_msg = start_msg
-        self.timeout_msg = timeout_msg
-        self.cv_bridge = CvBridge()
-        self.depth_camera_info:CameraInfo = None
+        self.__node:Node = node
+        self.__tts_say = tts_say
+        self.__robot_control:G1Control = robot_control
+        self.__timeout_sec = timeout_sec
+        self.__start_msg = start_msg
+        self.__timeout_msg = timeout_msg
+        
+        # init sam3 service client
+        self.__sam3_service_client = self.__node.create_client(
+            ExecPredict,
+            '/sam3/exec_predict'
+        )
+        while not self.__sam3_service_client.wait_for_service(timeout_sec=1.0):
+            self.__node.get_logger().warn('sam3_ros service not available, waiting again...')
     
 
-    def processing_cb(self, msg:Image):
-        cv_depth = self.cv_bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-    
+    def __send_sam3_request(self, execute:bool, objects_dict: dict):
+        object_name_list = list(objects_dict.keys())
+        object_conf_list = list(objects_dict.values())
+
+        req = ExecPredict.Request()
+        req.prompts = object_name_list
+        req.conf = min(object_conf_list)
+        req.execute = execute
+
+        future = self.__sam3_service_client.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future)
+        if future.result() is None:
+            self.__node.get_logger().error('Service call failed')
+            raise RuntimeError('Service call failed')
+        result = future.result()
+        if result.success:
+            self.__node.get_logger().info('Object recognition successful') if execute else self.__node.get_logger().info('Object recognition stop.')
+        else:
+            self.__node.get_logger().error('Object recognition failed')
+            raise RuntimeError('Object recognition failed')
+        return result
+
 
     def execute(self, userdata):
-        DEPTH_IMAGE_TOPIC = '/head_camera/d455/depth/image_rect_raw'
-        DEPTH_INFO_TOPIC = '/head_camera/d455/depth/camera_info'
-
-        def camera_info_cb(msg:CameraInfo):
-            self.depth_camera_info = msg
-
         try:
-            # Subscribe depth camera info
-            with TemporarySubscriber(node=self.node,
-                                     msg=CameraInfo,
-                                     topic=DEPTH_INFO_TOPIC,
-                                     qos_profile=10,
-                                     cb=camera_info_cb):
-                while not self.depth_camera_info:
-                    rclpy.spin_once(self.node, timeout_sec=0.1)
-                self.node.get_logger().info('Get depth camera info.')
-            
-            # Subscribe depth camera info
-            with TemporarySubscriber(node=self.node,
-                                     msg=Image,
-                                     topic=DEPTH_IMAGE_TOPIC,
-                                     qos_profile=10,
-                                     cb=self.processing_cb):
-                self.tts_say(self.start_msg)
-                self.node.get_logger().info('Seaching objects ...')
-                it = time.time()
-                while time.time() - it < self.timeout_sec:
-                    rclpy.spin_once(self.node, timeout_sec=0.1)
-
-            self.tts_say(self.timeout_msg)
-            self.node.get_logger().warn('Objects is not found.')
-            return 'timeout'
+            self.__robot_control.move_head(tilt=-0.5) # stop robot before object detection
+            self.__node.get_logger().info('''
+            =================================
+                OBJECT RECOGNITION START
+            =================================
+            ''')
+            self.__tts_say(self.__start_msg)
+            self.__send_sam3_request(execute=True, objects_dict=userdata.objects_dict)
+            return 'success'
         except: 
-            self.tts_say('Error is occured in SimpleObjectDetector', False)
-            self.node.get_logger().error('Error is occured in SimpleObjectDetector\n%s'%traceback.format_exc())
+            self.__tts_say('Error is occured in SimpleObjectDetector', False)
+            self.__node.get_logger().error('Error is occured in SimpleObjectDetector\n%s'%traceback.format_exc())
             return 'failure'

@@ -1,0 +1,12 @@
+repositories:
+    # 人物検出
+    lightweight_openpose_ros2:
+        type: git
+        url: https://github.com/GAI-313/lightweight_openpose_ros2.git
+        version: main
+
+    # 物体検出
+    sam3_ros:
+        type: git
+        url: https://github.com/trcp/sam3_ros.git
+        version: humble

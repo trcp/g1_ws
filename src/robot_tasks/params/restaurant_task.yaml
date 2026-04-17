@@ -1,12 +1,13 @@
 restaurant_task:
   ros_parameters:
     # 注文の品物とそれを表す単語のリスト
+    # オブジェクト名: [[日本語の単語, 英語の単語, その他フレーズ, ...], predict]
     objects:
-      apple: ["リンゴ", "apple"]
-      banana: ["バナナ", "banana"]
-      coffee: ["コーヒー", "coffee"]
-      corn_flakes: ["コーンフレーク", "cornflakes"]
-      curry: ["カレー", "curry"]
-      tomato_soup: ["トマトスープ", "tomato soup"]
-      mustard: ["マスタード", "mustard"]
-      tuna: ["ツナ", "tuna"]
+      apple: [["リンゴ", "apple"], 0.5]
+      banana: [["バナナ", "banana"], 0.5]
+      coffee: [["コーヒー", "coffee"], 0.5]
+      corn_flakes: [["コーンフレーク", "cornflakes"], 0.1]
+      curry: [["カレー", "curry"], 0.1]
+      tomato_soup: [["トマトスープ", "tomato soup"], 0.1]
+      mustard: [["マスタード", "mustard"], 0.2]
+      tuna: [["ツナ", "tuna"], 0.1]

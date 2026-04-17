@@ -63,7 +63,9 @@ RUN . /opt/ros/${ROS}/setup.bash &&\
     --skip-keys pointcloud_to_2dmap \
     --skip-keys pcl_localization_ros2 \
     --skip-keys direct_lidar_inertial_odometry \
-    --skip-keys fast_lio &&\
+    --skip-keys fast_lio \
+    --skip-keys lightweight_openpose_ros2 \
+    --skip-keys sam3_ros &&\
     rm -rf /var/lib/apt/lists/*
 
 # Fix pointcloud2_to_2dmap shared ptr ref
@@ -91,3 +93,47 @@ WORKDIR /home/${USERNAME}/colcon_ws
 RUN . /opt/ros/${ROS}/setup.bash &&\
     colcon build --symlink-install --packages-up-to erasers_g1 \
     --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble --packages-skip livox_ros_driver2
+
+
+# =================================
+# Robot Tasks
+# ROboCup@Home タスク実行用イメージ
+# =================================
+FROM main AS robot_tasks
+
+# Clone dependencies
+USER $USERNAME
+COPY ./robot_tasks.repos ./robot_tasks.repos
+RUN vcs import src < ./robot_tasks.repos
+
+# setup lightweight_openpose_ros2
+WORKDIR /home/${USERNAME}/colcon_ws/src/lightweight_openpose_ros2
+RUN pip install --index-url https://pypi.org/simple -r requirements.txt &&\
+    cd ./lightweight_openpose_ros2/datas/ &&\
+    wget https://download.01.org/opencv/openvino_training_extensions/models/human_pose_estimation/checkpoint_iter_370000.pth
+
+# setup sam3_ros
+WORKDIR /home/${USERNAME}/colcon_ws
+RUN pip install --index-url https://pypi.org/simple -U ultralytics &&\
+    pip install --index-url https://pypi.org/simple git+https://github.com/openai/CLIP.git &&\
+    pip install --index-url https://pypi.org/simple "numpy==1.22.4"
+
+# resolve depends
+USER root
+RUN . /opt/ros/${ROS}/setup.bash &&\
+    apt-get update &&\
+    rosdep install -y -i --from-path .\
+    --skip-keys pointcloud_to_2dmap \
+    --skip-keys pcl_localization_ros2 \
+    --skip-keys direct_lidar_inertial_odometry \
+    --skip-keys fast_lio \
+    --skip-keys lightweight_openpose_ros2 \
+    --skip-keys sam3_ros &&\
+    rm -rf /var/lib/apt/lists/*
+
+# build workspace
+USER $USERNAME
+COPY assets/sam3.pt /tmp/sam3.pt
+WORKDIR /home/${USERNAME}/colcon_ws
+RUN . /opt/ros/${ROS}/setup.bash &&\
+    colcon build --symlink-install --packages-up-to robot_tasks

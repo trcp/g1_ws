@@ -50,6 +50,14 @@ except ImportError:
 
 class G1Control():
     def __init__(self, node:Node):
+        """
+        G1Control クラスのコンストラクタ
+
+        Parameters
+        ----------
+        node : Node
+            ROS2 ノードオブジェクト。サービスクライアントの作成と呼び出しに使用する。
+        """
         self.__node = node
 
         self.__servo_cli = self.__node.create_client(MoveServo, '/move_servo')
@@ -68,6 +76,19 @@ class G1Control():
 
 
     def __send_angle_req(self, req:MoveServo.Request):
+        """
+        サーボ角度移動リクエストを送信する内部メソッド
+
+        Parameters
+        ----------
+        req : MoveServo.Request
+            サーボ移動の要求メッセージ。
+
+        Returns
+        -------
+        bool
+            サービス呼び出しが成功した場合は True、失敗した場合は False。
+        """
         future = self.__servo_cli.call_async(req)
         rclpy.spin_until_future_complete(self.__node, future)
         response:MoveServo.Response = future.result()
@@ -75,6 +96,19 @@ class G1Control():
     
 
     def __send_hand_req(self, req:HandCommand.Request):
+        """
+        ハンド操作リクエストを送信する内部メソッド
+
+        Parameters
+        ----------
+        req : HandCommand.Request
+            ハンド操作の要求メッセージ。
+
+        Returns
+        -------
+        bool
+            サービス呼び出しが成功した場合は True、失敗した場合は False。
+        """
         future = self.__hand_cli.call_async(req)
         rclpy.spin_until_future_complete(self.__node, future)
         response:HandCommand.Response = future.result()
@@ -82,6 +116,19 @@ class G1Control():
     
 
     def __send_pose_req(self, req:PosePolicy.Request):
+        """
+        ポーズポリシー要求を送信する内部メソッド
+
+        Parameters
+        ----------
+        req : PosePolicy.Request
+            ポーズポリシーの要求メッセージ。
+
+        Returns
+        -------
+        bool
+            サービス呼び出しが成功した場合は True、失敗した場合は False。
+        """
         future = self.__pose_cli.call_async(req)
         rclpy.spin_until_future_complete(self.__node, future)
         response:PosePolicy.Response = future.result()
@@ -89,6 +136,21 @@ class G1Control():
 
 
     def move_head(self, tilt:float=0.0, pan:float=0.0):
+        """
+        頭部を傾けて旋回させる。
+
+        Parameters
+        ----------
+        tilt : float, optional
+            頭部の上下角度(rad)。
+        pan : float, optional
+            頭部の左右角度(rad)。
+
+        Returns
+        -------
+        bool
+            サーボコマンド送信に成功した場合は True、失敗した場合は False。
+        """
         req = MoveServo.Request()
         req.tilt = -tilt
         req.pan = pan
@@ -96,13 +158,40 @@ class G1Control():
 
 
     def hand_control(self, command:str='walk', hand='both'):
-        req = HandCommand.Request()
+        """
+        ハンド操作コマンドを送信する。
+
+        Parameters
+        ----------
+        command : str, optional
+            HandCommand サービスに渡す命令文字列。
+        hand : str, optional
+            操作対象の手。'left', 'right', 'both' などを指定する。
+
+        Returns
+        -------
+        bool
+            サービス呼び出しが成功した場合は True、失敗した場合は False。
+        """
         req.command = command
         req.hand = hand
         return self.__send_hand_req(req)
     
 
     def pose_policy(self, pose:str):
+        """
+        ポーズポリシーを設定する。
+
+        Parameters
+        ----------
+        pose : str
+            適用するポーズポリシーの識別子。
+
+        Returns
+        -------
+        bool
+            サービス呼び出しが成功した場合は True、失敗した場合は False。
+        """
         req = PosePolicy.Request()
         req.pose = pose
         return self.__send_pose_req(req)
