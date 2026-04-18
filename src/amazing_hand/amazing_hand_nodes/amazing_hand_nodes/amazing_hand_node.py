@@ -49,8 +49,8 @@ class AmazingHandControllerNode(Node):
 
         # calibration values
         self.middle_pos = {
-            "right": [25, -15, 15, -15, 30, -15, 15, -25],
-            "left": [30, -22, 22, -18, 32, -22, 15, -12],
+            "right": [25, -20, 25, -15, 20, -25, 15, -15],
+            "left": [20, -10, 33, -35, 30, -10, 20, -8],
         }
 
         # servo id map
