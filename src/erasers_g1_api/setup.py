@@ -47,10 +47,12 @@ setup(
             'sample_tts = samples.sample_tts:main',
             'sample_head_control = samples.sample_head_control:main',
             'sample_hand_control = samples.sample_hand_control:main',
+            'sample_amazing_hand_control = samples.sample_amazing_hand_control:main',
             'sample_arm_control = samples.sample_arm_control:main',
             'sample_navigation = samples.sample_navigation:main',
             'sample_audio_capture = samples.sample_audio_capture:main',
-            'sample_voice_recongnition = samples.sample_state_voice_recong:main'
+            'sample_voice_recongnition = samples.sample_state_voice_recong:main',
+            'sample_gemini = samples.sample_state_gemini:main',
         ],
     },
 )

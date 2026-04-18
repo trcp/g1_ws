@@ -118,6 +118,9 @@ RUN pip install --index-url https://pypi.org/simple -U ultralytics &&\
     pip install --index-url https://pypi.org/simple git+https://github.com/openai/CLIP.git &&\
     pip install --index-url https://pypi.org/simple "numpy==1.22.4"
 
+# setup robotics ER
+RUN pip install --index-url https://pypi.org/simple -q google-genai
+
 # resolve depends
 USER root
 RUN . /opt/ros/${ROS}/setup.bash &&\
