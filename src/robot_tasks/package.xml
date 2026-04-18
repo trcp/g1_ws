@@ -12,6 +12,9 @@
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
 
+  <depend>lightweight_openpose_ros2</depend>
+  <depend>sam3_ros</depend>
+
   <depend>erasers_g1_api</depend>
   <depend>smach_ros</depend>
 

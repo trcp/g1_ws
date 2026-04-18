@@ -21,6 +21,7 @@ map/*
 .pixi/*
 !.pixi/config.toml
 
+assets/sam3.pt
 
 # backup file
 *~

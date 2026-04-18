@@ -209,6 +209,14 @@ ament_target_dependencies(vui_diagnostic
     g1_srvs
 )
 
+# camera_bridge
+add_executable(camera_bridge src/camera_bridge.cpp)
+ament_target_dependencies(camera_bridge
+    rclcpp
+    sensor_msgs
+    std_srvs
+)
+
 
 
 install(TARGETS
@@ -226,6 +234,7 @@ install(TARGETS
   cartesian_trajectory_planner
   mic_server
   vui_diagnostic
+  camera_bridge
   DESTINATION lib/${PROJECT_NAME}
 )
 install(

@@ -11,6 +11,7 @@ def generate_launch_description():
 
     # configures
     device = LaunchConfiguration('device')
+    checkpoint_path = LaunchConfiguration('checkpoint_path')
     
 
     # arguments
@@ -19,7 +20,13 @@ def generate_launch_description():
         description='use device cpu or cuda'
     )
 
+    declare_checkpoint_path = DeclareLaunchArgument(
+        'checkpoint_path', default_value='/tmp/human-pose-estimation-0005-final.pth',
+        description='path to the checkpoint file'
+    )
+
     ld.add_action(declare_device)
+    ld.add_action(declare_checkpoint_path)
 
 
     # remappings
@@ -38,7 +45,9 @@ def generate_launch_description():
         executable='lightweight_openpose_ros2',
         emulate_tty=True,
         parameters=[
-            {'device': device}
+            {'device': device},
+            #{'qos.reliability': 'BEST_EFFORT'},
+            #{'checkpoint_path': checkpoint_path}
         ],
         remappings=remappings
     )
@@ -47,7 +56,8 @@ def generate_launch_description():
         executable='lor_transformer',
         emulate_tty=True,
         parameters=[
-            {'target_frame': 'd455_link'}
+            {'target_frame': 'd455_link'},
+            #{'qos.reliability': 'BEST_EFFORT'},
         ],
         remappings=remappings
     )

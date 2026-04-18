@@ -15,7 +15,7 @@ from lor_interfaces.msg import Person3D, Persons3D # Light Weight Open Pose
 # eraasers g1 APIs
 from erasers_g1_api.tts import TTS
 from erasers_g1_api.robot_control import G1Navigation, G1Control
-from erasers_g1_api.state_skills.recongnition import SpeechToText, LOR
+from erasers_g1_api.state_skills.recongnition import SpeechToText, LOR, Sam3ObjectDetector
 
 # preferences
 from ament_index_python.packages import get_package_share_directory
@@ -36,7 +36,11 @@ def load_params(node:Node, params_file:str):
             objects = params['restaurant_task']['ros_parameters']['objects']
             objects_str = "\n".join(objects.keys())
             node.get_logger().info(f"Objects list:\n{objects_str}")
-            return [item for items in objects.values() for item in items]
+            # キーワードリストを生成
+            keywords_list = [kw for obj in objects.values() for kw in obj[0]]
+            # オブジェクト辞書を生成: {object_name: confidence}
+            objects_dict = {key: value[1] for key, value in objects.items()}
+            return keywords_list, objects_dict
     except Exception as e:
         node.get_logger().error(f"Failed to load params: {e}")
         node.get_logger().error(traceback.format_exc())
@@ -183,8 +187,7 @@ def main():
     # 注文品リストを取得する
     default_params_file_path = os.path.join(get_package_share_directory('robot_tasks'), 'params', 'restaurant_task.yaml')
     node.declare_parameter('task_params', default_params_file_path)
-    object_keywards = load_params(node, node.get_parameter('task_params').value)
-
+    object_keywards, objects_dict = load_params(node, node.get_parameter('task_params').value)
 
     # init APIs
     tts = TTS(node)
@@ -199,7 +202,9 @@ def main():
     sm.userdata.num_challenge = 0
     sm.userdata.stt_text = "" # 音声認識の結果
     sm.userdata.order_list = [] # 注文品リスト
-    sm.userdata.object_keywards = object_keywards
+    sm.userdata.object_keywards = object_keywards # 注文品のキーワードリスト
+    sm.userdata.apply_keywards = ['yes', 'no'] # 注文確認のキーワードリスト
+    sm.userdata.objects_dict = objects_dict
 
 
     with sm:
@@ -209,11 +214,13 @@ def main():
         #                                      'failure': 'failure'})
         smach.StateMachine.add('SEARCH_CUSTOMER', LOR(node=node,
                                                       tts_say=SAY,
+                                                      robot_control=CONROL,
+                                                      searching_area=[[0.0, -1.0], [0.0, 1.0]],
                                                       start_msg='Hi customers! Please raise your hand if you want to order.',
                                                       timeout_msg="Sorry, I couldn't find any customers.",
                                                       success_msg="I found a customer!",
                                                       detect_condition='hand_up'),
-                               transitions={'success': 'MOVE_TO_CUSTOMER', 
+                               transitions={'success': 'MOVE_TO_CUSTOMER', #'success', 
                                             'timeout': 'SEARCH_CUSTOMER',
                                             'failure': 'failure'})
         
@@ -227,12 +234,13 @@ def main():
                                                              start_msg="hi customer. What is your order ?",
                                                              success_msg="OK",
                                                              timeout_msg="Sorry, I didn't hear your order.",
-                                                             success_keywards=object_keywards,
                                                              device="cpu",
                                                              lang="en"),
                                 transitions={'success': 'REQUEST_CHECK',
+                                             #'success': 'success',
                                              'timeout': 'REQUEST_ORDER',
-                                             'failure': 'failure'})
+                                             'failure': 'failure'},
+                                remapping={'success_keywards': 'object_keywards'})
 
         smach.StateMachine.add('REQUEST_CHECK', smach.CBState(cb=cb_state_check_order,
                                                                   cb_kwargs={'node': node, 'tts_say': SAY},),
@@ -245,12 +253,12 @@ def main():
                                                              start_msg="Is this correct ? Please say yes or no.",
                                                              success_msg="OK",
                                                              timeout_msg="OK. I will go back to the bar counter.",
-                                                             success_keywards=['yes', 'no'],
                                                              device="cpu",
                                                              lang="en"),
                                 transitions={'success': 'ORDER_CONFIRMATION',
                                              'timeout': 'MOVE_TO_BARCOUNTER',
-                                             'failure': 'failure'})
+                                             'failure': 'failure'},
+                                remapping={'success_keywards': 'apply_keywards'})
 
         smach.StateMachine.add('ORDER_CONFIRMATION', smach.CBState(cb=cb_state_check_order_confirmation,
                                                                   cb_kwargs={'node': node, 'tts_say': SAY},),
@@ -267,6 +275,14 @@ def main():
                                                                   cb_kwargs={'node': node, 'tts_say': SAY},),
                                 transitions={'success': 'success', 
                                              'failure': 'failure'})
+        
+        smach.StateMachine.add('OBJECT_DETECTION', Sam3ObjectDetector(node=node,
+                                                                      tts_say=SAY,
+                                                                      robot_control=CONROL,),
+                                transitions={'success': 'success',
+                                             'timeout': 'OBJECT_DETECTION',
+                                             'failure': 'failure'})
+        
     
     # execute smach states
     outcome = sm.execute()
