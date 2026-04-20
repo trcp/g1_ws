@@ -863,6 +863,7 @@
   </joint>
   <link name="d455_link">
     <inertial>
+      <!-- <origin rpy="0 0 0" xyz="0.030219 -0.000416 -0.011779"/> -->
       <origin rpy="0 0 0" xyz="0.030219 -0.000416 -0.011779"/>
       <mass value="0.096"/>
       <inertia ixx="0.0001232" ixy="-3.1E-08" ixz="3.1246E-05" iyy="0.000106321" iyz="-5E-09" izz="0.000194649"/>
@@ -883,7 +884,8 @@
     </collision>
   </link>
   <joint name="d455_joint" type="revolute">
-    <origin rpy="0 0 0" xyz="0.0295 0 0.013"/>
+    <!-- <origin rpy="0 0 0" xyz="0.0295 0 0.013"/> -->
+    <origin rpy="0 0.1 0" xyz="0.0295 0 0.013"/>
     <parent link="xl330_link"/>
     <child link="d455_link"/>
     <axis xyz="0 1 0"/>

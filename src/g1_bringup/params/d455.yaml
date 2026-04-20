@@ -37,7 +37,7 @@
       enable: true
       stream_filter: 2
       allow_no_texture_points: true
-      ordered_pc: false
+      ordered_pc: true 
       stream_index_filter: 0
     hdr_merge:
       enable: false
