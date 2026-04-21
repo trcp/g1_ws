@@ -33,10 +33,12 @@ import cv2
 from faster_whisper import WhisperModel
 
 # preferences
+from ament_index_python.packages import get_package_share_directory 
 from typing import List
 import numpy as np
 import traceback
 import time
+import os
 
 
 '''
@@ -244,7 +246,7 @@ class LOR(smach.StateMachine):
 class SpeechToText(smach.State):
     def __init__(self,
                  node:Node,
-                 tts_say:TTS.say,
+                 tts:TTS,
                  timeout_sec:float=10.0,
                  start_msg:str='Please task for me.',
                  success_msg:str='I can hear! Please wait.',
@@ -252,7 +254,7 @@ class SpeechToText(smach.State):
                  device:str='cpu',
                  model_size:str='small',
                  lang:str='en',
-                 success_keywards:list=[],
+                 beep_sound_path:str=os.path.join(get_package_share_directory('erasers_g1_api'), 'config', 'req_sound.wav'),
                  speech_threshold:float=1000.0,
                  silence_duration:float=1.5,
                  max_record_duration:float=10.0,
@@ -279,8 +281,6 @@ class SpeechToText(smach.State):
             Whisper モデルサイズ、デフォルトは 'small'。
         lang : str, optional
             音声認識に使用する言語コード、デフォルトは 'en'。
-        success_keywards : list, optional
-            認識結果に含まれている必要があるキーワードのリスト、デフォルトは []。
         speech_threshold : float, optional
             音声を検出する VAD の RMS 閾値、デフォルトは 1000.0。
         silence_duration : float, optional
@@ -295,6 +295,8 @@ class SpeechToText(smach.State):
         Input Keys:
             num_challenge : int
                 既に試行した認識リトライ回数。状態はこの値を読み書きする。
+            success_keywards : list
+                認識結果に含まれている必要があるキーワードのリスト。
 
         Output Keys:
             num_challenge : int
@@ -320,8 +322,9 @@ class SpeechToText(smach.State):
         
         # init values
         self.__node:Node = node
-        self.__say:TTS.say = tts_say
+        self.__tts:TTS = tts
         self.__timeout_sec = timeout_sec
+        self.__beep_sound_path = beep_sound_path
         self.__start_msg = start_msg
         self.__success_msg = success_msg
         self.__timeout_msg = timeout_msg
@@ -380,13 +383,14 @@ class SpeechToText(smach.State):
                 self.__node.get_logger().warn('Voice recong challenge is %d times. Remaining %d times.'%(num_challenge, self.__max_challenge - num_challenge))
 
             # bringup mic
-            self.__say(self.__start_msg)
+            self.__tts.say(self.__start_msg)
             request = SetBool.Request()
             request.data = True
             if not self.__send_mic_req(request):
                 self.__node.get_logger().error('mic_service request failed')
-                self.__say(self.__failure_msg)
+                self.__tts.say(self.__failure_msg)
                 return 'failure'
+            self.__tts.audio(self.__beep_sound_path, wait=False)
             self.__node.get_logger().info('''
             =================================
                 VOICE RECOGNITION START
@@ -426,12 +430,12 @@ class SpeechToText(smach.State):
                 userdata.num_challenge = num_challenge + 1
                 if userdata.num_challenge >= self.__max_challenge:
                     self.__node.get_logger().error("Voice recong challenge is %d times. challenge is over."%(num_challenge))
-                    self.__say(self.__failure_msg)
+                    self.__tts.say(self.__failure_msg)
                     userdata.num_challenge = 0  # init challenge count
                     return 'failure'
                 else:
                     self.__node.get_logger().warn("No audio data recorded")
-                    self.__say(self.__timeout_msg)
+                    self.__tts.say(self.__timeout_msg)
                     return 'timeout'
             audio_np = np.array(self.__audio_buffer, dtype=np.float32)
             audio_np = audio_np / 32768.0
@@ -446,12 +450,12 @@ class SpeechToText(smach.State):
                 userdata.num_challenge = num_challenge + 1
                 if userdata.num_challenge >= self.__max_challenge:
                     self.__node.get_logger().error("Voice recong challenge is %d times. challenge is over."%(num_challenge))
-                    self.__say(self.__failure_msg)
+                    self.__tts.say(self.__failure_msg)
                     userdata.num_challenge = 0  # init challenge count
                     return 'failure'
                 else:
                     self.__node.get_logger().warn("Recong text is empty.")
-                    self.__say(self.__timeout_msg)
+                    self.__tts.say(self.__timeout_msg)
                     return 'timeout'
 
             # check keywords if provided
@@ -460,17 +464,17 @@ class SpeechToText(smach.State):
                     userdata.num_challenge = num_challenge + 1
                     if userdata.num_challenge >= self.__max_challenge:
                         self.__node.get_logger().error("Voice recong challenge is %d times. challenge is over."%(num_challenge))
-                        self.__say(self.__failure_msg)
+                        self.__tts.say(self.__failure_msg)
                         userdata.num_challenge = 0  # init challenge count
                         return 'failure'
                     else:
                         self.__node.get_logger().warn(f"Keywords not detected in: {text_result}")
-                        self.__say(self.__timeout_msg)
+                        self.__tts.say(self.__timeout_msg)
                         return 'timeout'
 
             userdata.stt_text = text_result
             userdata.num_challenge = 0  # init challenge count
-            self.__say(self.__success_msg)
+            self.__tts.say(self.__success_msg)
             return 'success'
 
         except:
