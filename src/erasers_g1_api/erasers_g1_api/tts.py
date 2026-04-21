@@ -60,3 +60,10 @@ class TTS:
         req = AudioClient.Request()
         req.text = text
         return self.__send_req(req, logger, wait)
+    
+    
+    def audio(self, audio_path:str, logger:str="info", wait:bool=True) -> bool:
+        req = AudioClient.Request()
+        req.audio_path = audio_path
+        return self.__send_req(req, logger, wait)
+    

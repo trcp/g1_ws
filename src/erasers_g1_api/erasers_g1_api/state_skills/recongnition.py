@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 
 # ROS2
-from rclpy_util.util import TemporarySubscriber
+from rclpy_util.util import TemporarySubscriber, TemporaryApproximateTimeSynchronizer
 from rclpy.node import Node
 from rclpy import qos
 import rclpy
 
 # TF
 from tf2_ros import Buffer, TransformListener
+import tf2_geometry_msgs
 
 # interfaces
 from sensor_msgs.msg import Image, CameraInfo
@@ -19,7 +20,7 @@ from sam3_ros_interfaces.srv import ExecPredict
 
 # erasers API
 from erasers_g1_api.tts import TTS
-from erasers_g1_api.robot_control import G1Navigation, G1Control
+from erasers_g1_api.robot_control import G1Navigation, G1Control, Grasp
 
 # state machine
 import smach
@@ -493,39 +494,80 @@ class Sam3ObjectDetector(smach.State):
                  node:Node,
                  tts_say:TTS.say,
                  robot_control:G1Control,
+                 arm_control:Grasp,
                  timeout_sec:float=10.0,
                  start_msg:str='searching objects.',
                  success_msg:str='I found objects.',
                  timeout_msg:str='Sorry. I can not found objects.'
                  ):
-        """SAM3 ROS を使った物体認識状態。
+        """
+        SAM3 ROS を使った物体認識状態。
+
+        Parameters
+        ----------
+        node : Node
+            ROS2ノードインスタンス。
+        tts_say : TTS.say
+            TTS（Text-to-Speech）の発話関数。
+        robot_control : G1Control
+            ロボット制御インスタンス。
+        arm_control : Grasp
+            アーム制御インスタンス。
+        timeout_sec : float, optional
+            認識のタイムアウト時間（秒）, by default 10.0
+        start_msg : str, optional
+            認識開始時の発話メッセージ, by default 'searching objects.'
+        success_msg : str, optional
+            認識成功時の発話メッセージ, by default 'I found objects.'
+        timeout_msg : str, optional
+            タイムアウト時の発話メッセージ, by default 'Sorry. I can not found objects.'
 
         Userdata
         --------
         Input Keys:
             objects_dict : dict
-                物体名をキー、認識信頼度を値とする辞書。状態はこの値を読み取る。
-                ```
-                objects_dict = {
-                    "object_name": 0.8,  # "物体名": 認識信頼度,
-                    "banana": 0.8,
-                    ...
+                物体名をキー、認識信頼度を値とする辞書。
+                例: {"banana": 0.5, "apple": 0.8}
+
+        Output Keys:
+            object_poses_dict_list : list of dict
+                検出された物体の情報リスト。
+                各要素は以下の形式:
+                {
+                    'name': str,
+                    'pose': {'ref_frame': str, 'xyz': list, 'rpy': list},
+                    'conf': float,
+                    'shape': str,
+                    'size': list,
+                    'grasp_approach': str
                 }
-                ```
+
+        Outcomes
+        --------
+        success : str
+            物体認識に成功した場合。
+        timeout : str
+            物体が見つからなかった、またはタイムアウトした場合。
+        failure : str
+            エラーが発生した場合。
         """
         # init smach
         smach.State.__init__(self,
                              outcomes=['success', 'timeout', 'failure'],
                              input_keys=['objects_dict'],
-                             output_keys=[])
+                             output_keys=['object_poses_dict_list'])
         
         # init values
         self.__node:Node = node
         self.__tts_say = tts_say
         self.__robot_control:G1Control = robot_control
+        self.__arm_control:Grasp = arm_control
         self.__timeout_sec = timeout_sec
         self.__start_msg = start_msg
+        self.__success_msg = success_msg
         self.__timeout_msg = timeout_msg
+        self.__object_poses_dict_list = []
+        self.__target_conf_map = {}
         
         # init sam3 service client
         self.__sam3_service_client = self.__node.create_client(
@@ -558,8 +600,85 @@ class Sam3ObjectDetector(smach.State):
             raise RuntimeError('Object recognition failed')
         return result
 
+    def pose_callback(self, predict_msg: PredictArray, depth_msg: Image, camera_info_msg: CameraInfo):
+        """
+        SAM3の予測結果から物体の3Dポーズを算出し、リストに保存するコールバック関数。
+
+        Parameters
+        ----------
+        predict_msg : PredictArray
+            物体検出結果のメッセージ。
+        depth_msg : Image
+            深度画像メッセージ。
+        camera_info_msg : CameraInfo
+            カメラ情報メッセージ。
+        """
+        self.__object_poses_dict_list = []
+        try:
+            for predict in predict_msg.predicts:
+                label = predict.label
+                conf = predict.conf
+                
+                # Confidence フィルタ
+                if label in self.__target_conf_map:
+                    if conf < self.__target_conf_map[label]:
+                        continue
+
+                pose_stamped = predict.pose
+                try:
+                    tf_buffer = self.__arm_control.arm.tf_buffer
+                    transform = tf_buffer.lookup_transform(
+                        'base_link',
+                        pose_stamped.header.frame_id,
+                        rclpy.time.Time()
+                    )
+                    
+                    pose_transformed = tf2_geometry_msgs.do_transform_pose(pose_stamped.pose, transform)
+                    xyz = [pose_transformed.position.x, pose_transformed.position.y, pose_transformed.position.z]
+                    
+                    from scipy.spatial.transform import Rotation as R
+                    quat = [
+                        pose_transformed.orientation.x,
+                        pose_transformed.orientation.y,
+                        pose_transformed.orientation.z,
+                        pose_transformed.orientation.w
+                    ]
+                    rpy = R.from_quat(quat).as_euler('xyz').tolist()
+                except Exception as e:
+                    self.__node.get_logger().warn(f"TF Transform failed for {label}: {e}")
+                    continue
+
+                size = [predict.size.x, predict.size.y, predict.size.z]
+
+                self.__object_poses_dict_list.append({
+                    'name': label,
+                    'pose': {
+                        'ref_frame': 'base_link',
+                        'xyz': xyz,
+                        'rpy': rpy
+                    },
+                    'conf': float(conf),
+                    'shape': 'box',
+                    'size': size,
+                    'grasp_approach': 'top'
+                })
+        except Exception as e:
+            self.__node.get_logger().error(f"Error in pose_callback: {e}")
 
     def execute(self, userdata):
+        """
+        ステートの実行メソッド。
+
+        Parameters
+        ----------
+        userdata : smach.user_data.Remapper
+            共有データを管理する機構。
+        
+        Returns
+        -------
+        str
+            'success', 'timeout', または 'failure'。
+        """
         try:
             self.__robot_control.move_head(tilt=-0.5) # stop robot before object detection
             self.__node.get_logger().info('''
@@ -568,9 +687,42 @@ class Sam3ObjectDetector(smach.State):
             =================================
             ''')
             self.__tts_say(self.__start_msg)
+            
+            self.__target_conf_map = userdata.objects_dict
             self.__send_sam3_request(execute=True, objects_dict=userdata.objects_dict)
-            return 'success'
+            
+            self.__object_poses_dict_list = []
+
+            with TemporaryApproximateTimeSynchronizer(
+                node=self.__node,
+                sub_topics=[
+                    (PredictArray, '/sam3/predicts'),
+                    (Image, '/head_camera/d455/aligned_depth_to_color/image_raw'),
+                    (CameraInfo, '/head_camera/d455/aligned_depth_to_color/camera_info'),
+                ],
+                qos_profile=10,
+                slop=0.1,
+                callback=self.pose_callback,
+            ):
+                it = time.time()
+                while time.time() - it < self.__timeout_sec:
+                    rclpy.spin_once(self.__node, timeout_sec=0.1)
+                    if self.__object_poses_dict_list:
+                        break
+
+            self.__send_sam3_request(execute=False, objects_dict=userdata.objects_dict)
+
+            if self.__object_poses_dict_list:
+                userdata.object_poses_dict_list = self.__object_poses_dict_list
+                self.__tts_say(self.__success_msg)
+                import json
+                self.__node.get_logger().info(f"Detected objects: {json.dumps(self.__object_poses_dict_list)}")
+                return 'success'
+            else:
+                self.__tts_say(self.__timeout_msg)
+                return 'timeout'
+                
         except: 
             self.__tts_say('Error is occured in SimpleObjectDetector', False)
-            self.__node.get_logger().error('Error is occured in SimpleObjectDetector\n%s'%traceback.format_exc())
+            self.__node.get_logger().error('Error is occured in SimpleObjectDetector\\n%s'%traceback.format_exc())
             return 'failure'
