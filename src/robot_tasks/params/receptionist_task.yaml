@@ -1,0 +1,7 @@
+receptionist_task:
+  ros_parameters:
+    # 各ロケーション座標
+    # ロケーション名: [x(m), y(m), yaw(rad)]
+    locations:
+      entrance: [0.0, 0.0, 0.0]
+      living_room: [0.0, 0.0, 0.0]

@@ -684,6 +684,7 @@ class Sam3ObjectDetector(smach.State):
             'success', 'timeout', または 'failure'。
         """
         try:
+            self.__arm_control.collision.clear_all()
             self.__robot_control.move_head(tilt=-0.5) # stop robot before object detection
             self.__node.get_logger().info('''
             =================================

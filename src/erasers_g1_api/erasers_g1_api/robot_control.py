@@ -61,6 +61,8 @@ try:
 except ImportError:
     netifaces = None
 
+from scipy.spatial.transform import Rotation as R
+
 
 class G1Control:
     def __init__(self, node: Node):
@@ -626,6 +628,389 @@ class G1Navigation:
         )
 
 
+class Collision:
+    """
+    MoveItのプランニングシーンにおけるコリジョン(障害物)を管理するクラス。
+    """
+
+    def __init__(self, node: Node):
+        self.node = node
+
+        # Publisher for PlanningScene (more robust for MoveIt diffs)
+        self.__scene_pub = self.node.create_publisher(
+            PlanningScene, "/planning_scene", 10
+        )
+
+        # Service client for getting planning scene
+        self.__get_scene_cli = self.node.create_client(
+            GetPlanningScene, "/get_planning_scene"
+        )
+
+    def _publish_scene(self, co: CollisionObject):
+        scene_msg = PlanningScene()
+        scene_msg.is_diff = True
+        scene_msg.world.collision_objects.append(co)
+        self.__scene_pub.publish(scene_msg)
+
+    def _create_collision_object(
+        self,
+        name: str,
+        ref: str,
+        x: float,
+        y: float,
+        z: float,
+        roll: float,
+        pitch: float,
+        yaw: float,
+        shape_type: int,
+        dimensions: list,
+        operation: int = CollisionObject.ADD,
+    ) -> CollisionObject:
+        co = CollisionObject()
+        co.id = name
+        co.header.frame_id = ref
+        co.header.stamp = self.node.get_clock().now().to_msg()
+        co.operation = operation
+
+        if operation == CollisionObject.REMOVE:
+            return co
+
+        primitive = SolidPrimitive()
+        primitive.type = shape_type
+        primitive.dimensions = dimensions
+        co.primitives.append(primitive)
+
+        pose = Pose()
+        pose.position.x = x
+        pose.position.y = y
+        pose.position.z = z
+
+        q = quaternion_from_euler(roll, pitch, yaw)
+        pose.orientation.x = q[0]
+        pose.orientation.y = q[1]
+        pose.orientation.z = q[2]
+        pose.orientation.w = q[3]
+        co.primitive_poses.append(pose)
+
+        return co
+
+    def add_box(
+        self,
+        name: str,
+        ref: str = "base_link",
+        x=0.0,
+        y=0.0,
+        z=0.0,
+        roll=0.0,
+        pitch=0.0,
+        yaw=0.0,
+        size=(0.1, 0.1, 0.1),
+    ):
+        co = self._create_collision_object(
+            name, ref, x, y, z, roll, pitch, yaw, SolidPrimitive.BOX, list(size)
+        )
+        self._publish_scene(co)
+
+    def add_sphere(
+        self,
+        name: str,
+        ref: str = "base_link",
+        x=0.0,
+        y=0.0,
+        z=0.0,
+        radius=0.05,
+    ):
+        co = self._create_collision_object(
+            name, ref, x, y, z, 0, 0, 0, SolidPrimitive.SPHERE, [radius]
+        )
+        self._publish_scene(co)
+
+    def add_cylinder(
+        self,
+        name: str,
+        ref: str = "base_link",
+        x=0.0,
+        y=0.0,
+        z=0.0,
+        roll=0.0,
+        pitch=0.0,
+        yaw=0.0,
+        height=0.1,
+        radius=0.05,
+    ):
+        co = self._create_collision_object(
+            name, ref, x, y, z, roll, pitch, yaw, SolidPrimitive.CYLINDER, [height, radius]
+        )
+        self._publish_scene(co)
+
+    def remove_near_objects(self, x: float, y: float, z: float, radius: float = 0.05):
+        """指定された座標の近くにあるすべてのオブジェクトを削除する。"""
+        if not self.__get_scene_cli.wait_for_service(timeout_sec=1.0):
+            return
+        req = GetPlanningScene.Request()
+        req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY | PlanningSceneComponents.WORLD_OBJECT_NAMES
+        future = self.__get_scene_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+        if not future.done():
+            return
+        
+        res = future.result()
+        removed_count = 0
+        for co in res.scene.world.collision_objects:
+            # global_pose check
+            gp = co.pose.position
+            dist = math.sqrt((x - gp.x)**2 + (y - gp.y)**2 + (z - gp.z)**2)
+            if dist < radius:
+                self.remove_collision(co.id)
+                removed_count += 1
+        
+        if removed_count > 0:
+            self.node.get_logger().info(f"Removed {removed_count} near objects (ghosts) around ({x:.3f}, {y:.3f}, {z:.3f})")
+
+    def remove_collision(self, name: str):
+        co = CollisionObject()
+        co.id = name
+        co.operation = CollisionObject.REMOVE
+
+        scene_msg = PlanningScene()
+        scene_msg.is_diff = True
+        scene_msg.world.collision_objects.append(co)
+
+        # Also remove if attached
+        aco = AttachedCollisionObject()
+        aco.object.id = name
+        aco.object.operation = CollisionObject.REMOVE
+        scene_msg.robot_state.attached_collision_objects.append(aco)
+        scene_msg.robot_state.is_diff = True
+
+        self.__scene_pub.publish(scene_msg)
+
+    def get_object_pose(self, name: str):
+        if not self.__get_scene_cli.wait_for_service(timeout_sec=1.0):
+            return None
+        req = GetPlanningScene.Request()
+        req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY | PlanningSceneComponents.WORLD_OBJECT_NAMES
+        future = self.__get_scene_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+        if not future.done():
+            return None
+        res = future.result()
+        for co in res.scene.world.collision_objects:
+            if co.id == name:
+                global_pose = co.pose
+                if len(co.primitive_poses) > 0:
+                    p = co.primitive_poses[0]
+                    # Simplified combine
+                    fx = global_pose.position.x + p.position.x
+                    fy = global_pose.position.y + p.position.y
+                    fz = global_pose.position.z + p.position.z
+                    r, pt, y = euler_from_quaternion([global_pose.orientation.x, global_pose.orientation.y, global_pose.orientation.z, global_pose.orientation.w])
+                    return (fx, fy, fz, r, pt, y)
+        return None
+
+    def get_object(self, name: str):
+        if not self.__get_scene_cli.wait_for_service(timeout_sec=1.0):
+            return None
+        req = GetPlanningScene.Request()
+        req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY | PlanningSceneComponents.WORLD_OBJECT_NAMES
+        future = self.__get_scene_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+        if not future.done():
+            return None
+        res = future.result()
+        for co in res.scene.world.collision_objects:
+            if co.id == name:
+                return co
+        return None
+
+    def attach_collision(self, name: str, link_name: str, touch_links: list = None, collision_object: CollisionObject = None):
+        co = CollisionObject()
+        co.id = name
+        co.operation = CollisionObject.REMOVE
+
+        aco = AttachedCollisionObject()
+        aco.link_name = link_name
+        if collision_object:
+            aco.object = collision_object
+            aco.object.id = name
+            aco.object.operation = CollisionObject.ADD
+        else:
+            aco.object.id = name
+            aco.object.operation = CollisionObject.ADD
+
+        aco.touch_links = touch_links or [link_name]
+
+        scene_msg = PlanningScene()
+        scene_msg.is_diff = True
+        scene_msg.world.collision_objects.append(co)
+        scene_msg.robot_state.attached_collision_objects.append(aco)
+        scene_msg.robot_state.is_diff = True
+
+        self.__scene_pub.publish(scene_msg)
+
+    def allow_collision(self, name1: str, name2: str):
+        """ACMを更新して衝突を許可する"""
+        if not self.__get_scene_cli.wait_for_service(timeout_sec=1.0):
+            return
+        req = GetPlanningScene.Request()
+        req.components.components = PlanningSceneComponents.ALLOWED_COLLISION_MATRIX
+        future = self.__get_scene_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+        if not future.done():
+            return
+        acm = future.result().scene.allowed_collision_matrix
+        
+        # Add if missing, and set enabled=False (allow collision)
+        from moveit_msgs.msg import AllowedCollisionEntry
+        def ensure_entry(name):
+            if name not in acm.entry_names:
+                acm.entry_names.append(name)
+                for entry in acm.entry_values:
+                    entry.enabled.append(True)
+                new_entry = AllowedCollisionEntry()
+                new_entry.enabled = [True] * len(acm.entry_names)
+                acm.entry_values.append(new_entry)
+
+        if name2 == "all":
+            ensure_entry(name1)
+            for existing in acm.entry_names:
+                if existing != name1:
+                    idx1 = acm.entry_names.index(name1)
+                    idx2 = acm.entry_names.index(existing)
+                    acm.entry_values[idx1].enabled[idx2] = False
+                    acm.entry_values[idx2].enabled[idx1] = False
+        else:
+            ensure_entry(name1)
+            ensure_entry(name2)
+            idx1 = acm.entry_names.index(name1)
+            idx2 = acm.entry_names.index(name2)
+            acm.entry_values[idx1].enabled[idx2] = False
+            acm.entry_values[idx2].enabled[idx1] = False
+
+        msg = PlanningScene()
+        msg.is_diff = True
+        msg.allowed_collision_matrix = acm
+        self.__scene_pub.publish(msg)
+
+    def clear_all(self):
+        """全てのオブジェクトをプランニングシーンから削除する"""
+        if not self.__get_scene_cli.wait_for_service(timeout_sec=1.0):
+            return
+        req = GetPlanningScene.Request()
+        req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+        future = self.__get_scene_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+        if not future.done():
+            return
+            
+        scene = future.result().scene
+        msg = PlanningScene()
+        msg.is_diff = True
+        
+        for obj in scene.world.collision_objects:
+            co = CollisionObject()
+            co.id = obj.id
+            co.header.frame_id = obj.header.frame_id
+            co.operation = CollisionObject.REMOVE
+            msg.world.collision_objects.append(co)
+            
+        self.__scene_pub.publish(msg)
+        self.node.get_logger().info(f"Cleared {len(scene.world.collision_objects)} objects from planning scene.")
+
+
+class Grasp:
+    """
+    把持動作シーケンスを管理するクラス。
+    """
+    def __init__(self, arm, collision: Collision):
+        self.arm = arm
+        self.collision = collision
+
+    def grasp(self, target_name: str, arm: str = None) -> bool:
+        """
+        指定されたオブジェクトを把持する。複数の姿勢（角度）を試行し、到達可能な解を探す。
+        """
+        # 1. オブジェクト情報を取得
+        pose = self.collision.get_object_pose(target_name)
+        if not pose:
+            self.arm.node.get_logger().error(f"Object {target_name} not found in planning scene")
+            return False
+
+        ox, oy, oz, _, _, _ = pose
+        self.arm.node.get_logger().info(f"Grasp target: {target_name} at {ox:.3f}, {oy:.3f}, {oz:.3f}")
+
+        # 2. 腕の選択
+        if not arm:
+            arm = "arm_right" if oy < 0 else "arm_left"
+        tip_link = "right_amazing_hand" if arm == "arm_right" else "left_amazing_hand"
+        hand_side = "right" if arm == "arm_right" else "left"
+
+        # 3. アプローチ方向の計算 (Robot-to-Object)
+        dist_xy = math.sqrt(ox**2 + oy**2)
+        nx, ny = (ox/dist_xy, oy/dist_xy) if dist_xy > 1e-6 else (1.0, 0.0)
+        base_yaw = math.atan2(ny, nx)
+
+        # 試行する姿勢リスト (ピッチ角: 0.0=水平, 0.8=斜め, 1.57=真上)
+        # G1のリーチ制約（腰ピッチなし）のため、水平に近いほうが届きやすい
+        pitches = [1.0, 0.5, 0.0, 1.57]
+        
+        self.arm.hand_control(command="open", hand=hand_side)
+        time.sleep(0.5)
+
+        for pitch in pitches:
+            self.arm.node.get_logger().info(f"Trying grasp with pitch={pitch:.2f}")
+            
+            # 手をオブジェクトにぶつけないためのプリポーズ (15cm手前)
+            pre_offset = 0.15
+            px = ox - nx * pre_offset
+            py = oy - ny * pre_offset
+            pz = oz + 0.15
+
+            # 姿勢 (AmazingHandのロール軸: Right=-1.57, Left=1.57)
+            roll = -1.57 if arm == "arm_right" else 1.57
+            yaw = base_yaw
+
+            # A. Pre-grasp (到達可能性確認)
+            self.arm.node.get_logger().info(f"Step A: Pre-grasp move to {px:.3f}, {py:.3f}, {pz:.3f}")
+            # arm_left/arm_right グループは腰(waist_yaw)を含むため、こちらでIKを解く
+            if not self.arm.move_abs(px, py, pz, roll, pitch, yaw, planning_group=arm, tip_link=tip_link, position_only=True):
+                continue
+
+            # B. コリジョン一時無効化
+            self.collision.allow_collision(tip_link, "all")
+            self.collision.remove_near_objects(ox, oy, oz, radius=0.1)
+            self.collision.remove_collision(target_name)
+            time.sleep(0.3)
+
+            # ターゲット位置の計算 (ピッチに合わせて手前オフセットを微調整)
+            grasp_offset = 0.03
+            tx = ox - nx * grasp_offset * math.sin(pitch) if pitch > 0.1 else ox - 0.06
+            ty = oy - ny * grasp_offset * math.sin(pitch) if pitch > 0.1 else oy
+            tz = oz + grasp_offset * math.cos(pitch) if pitch > 0.1 else oz
+
+            # C. Final Grasp
+            self.arm.node.get_logger().info(f"Step C: Final grasp move to {tx:.3f}, {ty:.3f}, {tz:.3f}")
+            if not self.arm.move_abs(tx, ty, tz, roll, pitch, yaw, planning_group=arm, tip_link=tip_link, orientation_tolerance=0.5):
+                # 失敗したらコリジョンを戻して次へ
+                self.arm.node.get_logger().warn(f"Final grasp failed at pitch {pitch:.2f}, trying next...")
+                continue
+
+            # D. Close & Attach
+            self.arm.hand_control(command="close", hand=hand_side)
+            time.sleep(1.0)
+            self.collision.attach_collision(target_name, link_name=tip_link)
+            
+            # E. Lift
+            self.arm.move_rel(z=0.1, planning_group="upper_body")
+            self.arm.node.get_logger().info(f"Grasp success at pitch {pitch:.2f}!")
+            return True
+
+        self.arm.node.get_logger().error("Grasp failed with all pitch candidates.")
+        return False
+
+        return False
+
+
 class ArmControl:
     def __init__(self, node: Node, wait_time: int = 5, tf_buffer: Buffer = None):
         """
@@ -669,6 +1054,10 @@ class ArmControl:
         while not self.__hand_cli.wait_for_service(timeout_sec=5.0):
             self.node.get_logger().error("Hand Service Servers are not running ...")
             break
+
+        # New Infrastructure
+        self.collision = Collision(self.node)
+        self.grasp_manager = Grasp(self, self.collision)
 
     def __joint_state_callback(self, msg: JointState):
         for name, pos in zip(msg.name, msg.position):
@@ -748,32 +1137,16 @@ class ArmControl:
         return None
 
     def move_to_pose(
-        self, pose, planning_group: str = "upper_body", wait: bool = True, **kwargs
+        self, pose, planning_group: str = "upper_body", wait: bool = True, tip_link: str = None, **kwargs
     ) -> bool:
         """
         与えられた目標姿勢に向けてエンドエフェクタを自律移動させる．
-
-        Parameters
-        ----------
-        pose : PoseStamped or Pose
-            目標とする姿勢情報。
-        planning_group : str, optional
-            使用するプランニンググループ名。デフォルトは 'upper_body'。
-        wait : bool, optional
-            移動完了まで処理をブロックするかどうか。デフォルトは True。
-        **kwargs
-            planning_attempts: 計画試行回数 (default: 10)
-            planning_time: 許容計画時間 (default: 5.0)
-
-        Returns
-        -------
-        bool
-            動作が成功した場合は True、失敗した場合は False。
         """
         # Determine tip link (assuming standard names for G1)
-        tip_link = (
-            "left_amazing_hand" if "left" in planning_group else "right_amazing_hand"
-        )
+        if tip_link is None:
+            tip_link = (
+                "left_amazing_hand" if "left" in planning_group else "right_amazing_hand"
+            )
 
         # Formulate goal constraints
         target_pose = pose
@@ -783,7 +1156,7 @@ class ArmControl:
             target_pose.pose = pose
 
         # Deletage to joint goal by solving IK first, as it is more robust than task-space planning in G1
-        joints = self._solve_ik(target_pose, planning_group)
+        joints = self._solve_ik(target_pose, planning_group, tip_link=tip_link)
         if joints:
             return self.joint_control(
                 **joints,
@@ -812,6 +1185,41 @@ class ArmControl:
         goal_msg.request.goal_constraints[0].orientation_constraints = []
         return self._send_move_group_goal(goal_msg, wait)
 
+    def place(self, x: float, y: float, z: float, planning_group: str = "arm_right", wait: bool = True) -> bool:
+        """
+        指定された位置に物体を配置する（Position Constraintのみを使用）。
+        """
+        self.node.get_logger().info(f"Placing object at {x:.3f}, {y:.3f}, {z:.3f}")
+        
+        tip_link = "left_amazing_hand" if "left" in planning_group else "right_amazing_hand"
+        
+        goal_msg = MoveGroup.Goal()
+        goal_msg.request.group_name = planning_group
+        goal_msg.request.num_planning_attempts = 15
+        goal_msg.request.allowed_planning_time = 5.0
+        
+        constraints = Constraints()
+        pc = PositionConstraint()
+        pc.header.frame_id = "base_link"
+        pc.link_name = tip_link
+        
+        target_pose = Pose()
+        target_pose.position.x = x
+        target_pose.position.y = y
+        target_pose.position.z = z
+        pc.constraint_region.primitive_poses.append(target_pose)
+        
+        box = SolidPrimitive()
+        box.type = SolidPrimitive.BOX
+        box.dimensions = [0.05, 0.05, 0.05] # 5cm tolerance (Relaxed for G1 reliability)
+        pc.constraint_region.primitives.append(box)
+        pc.weight = 1.0
+        
+        constraints.position_constraints.append(pc)
+        goal_msg.request.goal_constraints.append(constraints)
+        
+        return self._send_move_group_goal(goal_msg, wait)
+
     def _create_pose_constraints(self, target_pose: PoseStamped, tip_link: str):
         """
         PoseStamped から PositionConstraint と OrientationConstraint を生成する内部ヘルパー。
@@ -825,7 +1233,7 @@ class ArmControl:
 
         box = SolidPrimitive()
         box.type = SolidPrimitive.BOX
-        box.dimensions = [0.01, 0.01, 0.01]  # 1cm tolerance
+        box.dimensions = [0.05, 0.05, 0.05]
         pc.constraint_region.primitives.append(box)
         pc.weight = 1.0
 
@@ -834,19 +1242,19 @@ class ArmControl:
         oc.header.frame_id = target_pose.header.frame_id
         oc.link_name = tip_link
         oc.orientation = target_pose.pose.orientation
-        oc.absolute_x_axis_tolerance = 1.5
-        oc.absolute_y_axis_tolerance = 1.5
-        oc.absolute_z_axis_tolerance = 1.5
+        oc.absolute_x_axis_tolerance = 0.1
+        oc.absolute_y_axis_tolerance = 0.1
+        oc.absolute_z_axis_tolerance = 0.1
         oc.weight = 1.0
 
         return pc, oc
 
-    def _solve_ik(self, pose_stamped: PoseStamped, group_name: str) -> dict:
+    def _solve_ik(self, pose_stamped: PoseStamped, group_name: str, tip_link: str = None) -> dict:
         """
         MoveIt の /compute_ik サービスを使用して特定のグループの逆運動学を解く。
         """
         self.node.get_logger().info(
-            f"Solving IK for {group_name} at pose: {pose_stamped.pose.position.x:.3f}, {pose_stamped.pose.position.y:.3f}, {pose_stamped.pose.position.z:.3f}"
+            f"Solving IK for {group_name} (tip: {tip_link}) at pose: {pose_stamped.pose.position.x:.3f}, {pose_stamped.pose.position.y:.3f}, {pose_stamped.pose.position.z:.3f}"
         )
 
         leg_joints = [
@@ -867,10 +1275,12 @@ class ArmControl:
         def call_ik(seed_joint_positions=None):
             req = GetPositionIK.Request()
             req.ik_request.group_name = group_name
+            if tip_link:
+                req.ik_request.ik_link_name = tip_link
             req.ik_request.pose_stamped = pose_stamped
             req.ik_request.timeout.sec = 1
-            req.ik_request.timeout.nanosec = 0  # 1.0s
-            req.ik_request.avoid_collisions = True
+            req.ik_request.timeout.nanosec = 0 
+            req.ik_request.avoid_collisions = False # RELAXED: Handle collisions in planning
 
             # Populate joint states (including missing legs to avoid MoveIt warnings/errors)
             all_joint_names = list(self.__joint_states.keys())
@@ -894,8 +1304,8 @@ class ArmControl:
             req.ik_request.robot_state.joint_state.position = all_joint_positions
 
             future = self.__ik_cli.call_async(req)
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-            return future.result() if future.done() else None
+            rclpy.spin_until_future_complete(self.node, future, timeout_sec=3.0)
+            return future.result()
 
         # Attempt 1: Current state
         res = call_ik()
@@ -904,20 +1314,46 @@ class ArmControl:
                 zip(res.solution.joint_state.name, res.solution.joint_state.position)
             )
 
-        # Attempt 2-21: Retry with more random noise
-        for i in range(20):
-            self.node.get_logger().info(f"Retrying IK with noise (Attempt {i + 2})")
-            noisy_seed = {
-                name: pos + random.uniform(-0.2, 0.2)
-                for name, pos in self.__joint_states.items()
-            }
-            res = call_ik(noisy_seed)
-            if res and res.error_code.val == MoveItErrorCodes.SUCCESS:
-                return dict(
-                    zip(
-                        res.solution.joint_state.name, res.solution.joint_state.position
-                    )
-                )
+        # Attempt 2: Relaxed timeout and internal search
+        # MoveIt solver usually handles seeds better internally if given time.
+        # We also increase the timeout for the internal solver.
+        req = GetPositionIK.Request()
+        req.ik_request.group_name = group_name
+        if tip_link:
+            req.ik_request.ik_link_name = tip_link
+        req.ik_request.pose_stamped = pose_stamped
+        req.ik_request.timeout.sec = 2 # Increase to 2s
+        req.ik_request.timeout.nanosec = 0 
+        req.ik_request.avoid_collisions = True
+        
+        # Populate joint states
+        all_joint_names = list(self.__joint_states.keys())
+        all_joint_positions = list(self.__joint_states.values())
+        for lj in leg_joints:
+            if lj not in self.__joint_states:
+                all_joint_names.append(lj)
+                all_joint_positions.append(0.0)
+        req.ik_request.robot_state.joint_state.name = all_joint_names
+        req.ik_request.robot_state.joint_state.position = all_joint_positions
+
+        future = self.__ik_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=3.0)
+        res = future.result() if future.done() else None
+
+        if res and res.error_code.val == MoveItErrorCodes.SUCCESS:
+            return dict(
+                zip(res.solution.joint_state.name, res.solution.joint_state.position)
+            )
+
+        if res:
+            self.node.get_logger().error(
+                f"IK failed for {group_name} with error: {res.error_code.val}"
+            )
+        else:
+            self.node.get_logger().error(
+                f"IK service call timed out for {group_name}"
+            )
+        return None
 
         if res:
             self.node.get_logger().error(
@@ -940,6 +1376,7 @@ class ArmControl:
         planning_group: str = "upper_body",
         wait: bool = True,
         reference_frame: str = "base_link",
+        tip_link: str = None,
         **kwargs,
     ) -> bool:
         """
@@ -977,7 +1414,7 @@ class ArmControl:
         pose.pose.orientation.w = q[3]
 
         return self.move_to_pose(
-            pose, planning_group=planning_group, wait=wait, **kwargs
+            pose, planning_group=planning_group, wait=wait, tip_link=tip_link, **kwargs
         )
 
     def move_rel(
@@ -1405,258 +1842,6 @@ class ArmControl:
         req.hand = hand
         return self.__send_hand_req(req)
 
-
-class Collision:
-    """
-    MoveItのプランニングシーンにおけるコリジョン(障害物)を管理するクラスです。
-    PlanningSceneメッセージを使用して更新を行います。
-    """
-
-    def __init__(self, node: Node):
-        self.node = node
-        topic_name = '/planning_scene'
-        self.__scene_pub = self.node.create_publisher(
-            PlanningScene,
-            topic_name,
-            10
-        )
-        # Added for advanced collision management
-        self.__get_scene_cli = self.node.create_client(GetPlanningScene, '/get_planning_scene')
-
-    def get_object_pose(self, name: str):
-        if not self.__get_scene_cli.wait_for_service(timeout_sec=2.0):
-            self.node.get_logger().error("GetPlanningScene service not available")
-            return None
-        
-        req = GetPlanningScene.Request()
-        req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY | PlanningSceneComponents.WORLD_OBJECT_NAMES
-        
-        future = self.__get_scene_cli.call_async(req)
-        rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-        
-        if not future.done():
-            return None
-        
-        res = future.result()
-        for co in res.scene.world.collision_objects:
-            if co.id == name:
-                # Assuming the first primitive represents the object
-                if co.primitive_poses:
-                    p = co.primitive_poses[0]
-                    # We should compose global pose and primitive pose, but usually primitive is relative to co.header.frame_id
-                    # If co.pose is also set, we need to combine them. MoveIt objects often use identity co.pose and put location in primitive_poses.
-                    # Or vice-versa.
-                    gx, gy, gz = co.pose.position.x, co.pose.position.y, co.pose.position.z
-                    px, py, pz = p.position.x, p.position.y, p.position.z
-                    
-                    # Euler from quat
-                    q = co.pose.orientation
-                    r, pt, y = euler_from_quaternion([q.x, q.y, q.z, q.w])
-                    return (gx + px, gy + py, gz + pz, r, pt, y)
-        return None
-
-    def add_box(self, name: str, ref: str, x: float, y: float, z: float, roll: float, pitch: float, yaw: float, size: tuple):
-        co = CollisionObject()
-        co.id = name
-        co.header.frame_id = ref
-        co.header.stamp = self.node.get_clock().now().to_msg()
-        co.operation = CollisionObject.ADD
-        primitive = SolidPrimitive()
-        primitive.type = SolidPrimitive.BOX
-        primitive.dimensions = [size[0], size[1], size[2]]
-        co.primitives.append(primitive)
-        
-        q = quaternion_from_euler(roll, pitch, yaw)
-        pose = Pose()
-        pose.position.x = float(x)
-        pose.position.y = float(y)
-        pose.position.z = float(z)
-        pose.orientation.x = q[0]
-        pose.orientation.y = q[1]
-        pose.orientation.z = q[2]
-        pose.orientation.w = q[3]
-        co.primitive_poses.append(pose)
-        
-        scene_msg = PlanningScene()
-        scene_msg.is_diff = True
-        scene_msg.world.collision_objects.append(co)
-        self.__scene_pub.publish(scene_msg)
-        rclpy.spin_once(self.node, timeout_sec=0.1)
-
-    def remove_collision(self, name: str):
-        scene_msg = PlanningScene()
-        scene_msg.is_diff = True
-        co = CollisionObject()
-        co.id = name
-        co.operation = CollisionObject.REMOVE
-        scene_msg.world.collision_objects.append(co)
-        self.__scene_pub.publish(scene_msg)
-        # rclpy.spin_once(self.node, timeout_sec=0.1)
-
-    def all_remove_collisions(self):
-        # Note: This is a simplified version as MoveIt 2 Python API for scene is limited without MoveItPy
-        # In a real scenario, we might want to track added objects
-        pass
-
-    def attach_collision(self, name: str, link_name: str, touch_links: list = None):
-        aco = AttachedCollisionObject()
-        aco.link_name = link_name
-        aco.object.id = name
-        aco.object.operation = CollisionObject.ADD
-        if touch_links:
-            aco.touch_links = touch_links
-        else:
-            aco.touch_links = [link_name]
-
-        scene_msg = PlanningScene()
-        scene_msg.is_diff = True
-        scene_msg.robot_state.attached_collision_objects.append(aco)
-        scene_msg.robot_state.is_diff = True
-        
-        # Also remove from world
-        co = CollisionObject()
-        co.id = name
-        co.operation = CollisionObject.REMOVE
-        scene_msg.world.collision_objects.append(co)
-
-        self.__scene_pub.publish(scene_msg)
-        self.node.get_logger().info(f"[Collision] Attached '{name}' to '{link_name}'")
-
-    def detach_collision(self, name: str):
-        aco = AttachedCollisionObject()
-        aco.object.id = name
-        aco.object.operation = CollisionObject.REMOVE
-        
-        scene_msg = PlanningScene()
-        scene_msg.is_diff = True
-        scene_msg.robot_state.attached_collision_objects.append(aco)
-        
-        self.__scene_pub.publish(scene_msg)
-        self.node.get_logger().info(f"[Collision] Detached '{name}'")
-
-    def allow_collision(self, name1: str, name2: str):
-        # This requires GetPlanningScene -> Modify ACM -> Publish PlanningScene
-        pass
-
-
-class Grasp:
-    """
-    双腕アームを用いた物体把持操作を統合的におこなうクラス。
-
-    Parameters
-    ----------
-    arm : ArmControl
-        アーム制御インスタンス
-    collision : Collision
-        コリジョン管理インスタンス
-    """
-    def __init__(self, arm: ArmControl, collision: Collision):
-        self.arm = arm
-        self.collision = collision
-
-    def grasp(self, target_name: str, size: tuple = (0.05, 0.05, 0.05)):
-        """
-        指定されたオブジェクトを最適な腕で把持します。
-        """
-        try:
-            self.arm.node.get_logger().info(f"[Grasp] Starting grasp sequence for '{target_name}'")
-            
-            # オブジェクトの座標を取得
-            obj_pose = self.collision.get_object_pose(target_name)
-            if obj_pose is None:
-                self.arm.node.get_logger().error(f"[Grasp] Failed to find object '{target_name}' in planning scene")
-                return False
-            
-            ox, oy, oz, oroll, opitch, oyaw = obj_pose
-            self.arm.node.get_logger().info(f"[Grasp] Target object '{target_name}' found at: ({ox:.3f}, {oy:.3f}, {oz:.3f})")
-
-            # 腕の選択
-            l_ee_pose = self.arm.get_current_pose(simple=True, planning_group="arm_left")
-            r_ee_pose = self.arm.get_current_pose(simple=True, planning_group="arm_right")
-            
-            if l_ee_pose is None or r_ee_pose is None:
-                self.arm.node.get_logger().error("[Grasp] Failed to get end-effector poses")
-                return False
-
-            dist_l = math.sqrt((ox - l_ee_pose[0])**2 + (oy - l_ee_pose[1])**2 + (oz - l_ee_pose[2])**2)
-            dist_r = math.sqrt((ox - r_ee_pose[0])**2 + (oy - r_ee_pose[1])**2 + (oz - r_ee_pose[2])**2)
-            
-            side = "left" if dist_l < dist_r else "right"
-            planning_group = "arm_left" if side == "left" else "arm_right"
-            tip_link = "left_amazing_hand" if side == "left" else "right_amazing_hand"
-            
-            self.arm.node.get_logger().info(f"[Grasp] Choosing {side} arm (dist_l={dist_l:.2f}, dist_r={dist_r:.2f})")
-
-            #把持戦略の計算とリトライ (水平アプローチ + 動的オフセット)
-            dist_to_obj_xy = math.sqrt(ox**2 + oy**2)
-            nx, ny, nz = ox/dist_to_obj_xy, oy/dist_to_obj_xy, 0.0
-            
-            success = False
-            # 優先順位: 大型グリッパーを活かし、様々な高さと距離の関係を試行
-            # x_off がマイナスの場合は、手首をオブジェクトより先に置く（奥から掴む）
-            trial_params = [
-                (0.12, 0.05), (0.15, 0.02), (0.08, 0.08),
-                (0.18, 0.00), (0.22, -0.05), (0.10, 0.12),
-                (0.25, 0.05), (0.15, -0.08), (0.20, -0.10)
-            ]
-            
-            for z_off, x_off in trial_params:
-                z_offset = z_off
-                
-                # アプローチ点 (x_off + 15cm手前)
-                ax, ay, az = ox - nx * (x_off + 0.15), oy - ny * (x_off + 0.15), oz + z_offset + 0.05
-                # 把持点
-                gx, gy, gz = ox - nx * x_off, oy - ny * x_off, oz + z_offset
-                
-                # 目標姿勢 (オブジェクトの方を向くが、ピッチは水平を維持)
-                ayaw = math.atan2(ny, nx)
-                apitch = 0.0 # 物理的限界を考慮し水平を優先
-                aroll = 0.0
-                
-                self.arm.node.get_logger().info(f"[Grasp] [Trial] Trying offsets z={z_offset}, x_dist={x_off}")
-                
-                # 腕を開く
-                self.arm.hand_control("open", side)
-                
-                self.arm.node.get_logger().info(f"[Grasp] [Planning] Moving to approach point: ({ax:.3f}, {ay:.3f}, {az:.3f})")
-                if self.arm.move_abs(ax, ay, az, aroll, apitch, ayaw, planning_group=planning_group):
-                    self.arm.node.get_logger().info(f"[Grasp] [Planning] Moving to grasp point: ({gx:.3f}, {gy:.3f}, {gz:.3f})")
-                    if self.arm.move_abs(gx, gy, gz, aroll, apitch, ayaw, planning_group=planning_group):
-                        success = True
-                        break
-                    else:
-                        self.arm.node.get_logger().warn(f"[Grasp] [Retry] Failed to reach grasp point with z={z_offset}, x={x_off}")
-                else:
-                    self.arm.node.get_logger().warn(f"[Grasp] [Retry] Failed to reach approach point with z={z_offset}, x={x_off}")
-                
-                if success:
-                    break
-
-            if not success:
-                self.arm.node.get_logger().error(f"[Grasp] [Failed] All grasp strategies failed for '{target_name}'")
-                return False
-
-            # 把持
-            self.arm.node.get_logger().info(f"[Grasp] [Planning] Closing {side} hand")
-            self.arm.hand_control("close", side)
-            time.sleep(1.5)
-
-            # アタッチ
-            self.arm.node.get_logger().info(f"[Grasp] [Planning] Attaching '{target_name}' to {tip_link}")
-            self.collision.attach_collision(target_name, tip_link)
-            
-            # リフトアップ
-            self.arm.node.get_logger().info(f"[Grasp] [Planning] Lifting object '{target_name}' by 10cm")
-            self.arm.move_rel(z=0.1, planning_group=planning_group)
-            
-            self.arm.node.get_logger().info(f"[Grasp] [Success] Grasp sequence for '{target_name}' completed")
-            return True
-
-        except Exception as e:
-            self.arm.node.get_logger().error(f"[Grasp] Exception: {str(e)}")
-            import traceback
-            self.arm.node.get_logger().error(traceback.format_exc())
-            return False
 
 
 class G1Mic:

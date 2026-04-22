@@ -30,7 +30,7 @@ class WaitDoorOpen(smach.State):
         
         # init smach
         smach.State.__init__(self,
-                             outcomes=['open', 'timeout', 'failure'])
+                             outcomes=['success', 'timeout', 'failure'])
 
         # init values
         self.__node:Node = node
@@ -102,7 +102,7 @@ class WaitDoorOpen(smach.State):
                 ''')
                 self.__say(self.__success_msg)
 
-                return 'open'
+                return 'success'
 
             # Timeout
             else:

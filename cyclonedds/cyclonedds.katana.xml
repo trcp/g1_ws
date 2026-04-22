@@ -9,7 +9,7 @@
         </General>
         
         <Internal>
-        	<!--MinimumSocketReceiveBufferSize>50MB</MinimumSocketReceiveBufferSize-->
+        	<MinimumSocketReceiveBufferSize>10MB</MinimumSocketReceiveBufferSize>
         </Internal>
     </Domain>
 </CycloneDDS>

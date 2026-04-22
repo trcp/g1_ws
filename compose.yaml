@@ -66,7 +66,7 @@ x-preferences: &preferences
     - LC_TIME
     - TZ=Asia/Tokyo
     - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-    - CYCLONEDDS_URI=file:///tmp/cyclonedds/cyclonedds.g1.xml
+    - CYCLONEDDS_URI=file:///tmp/cyclonedds/cyclonedds.katana.xml
     # Amazing Hand のデバイスパス
     - AH_PATH="/dev/ttyACM0"
     # 頭部カメラジョイントモーターのデバイスパス

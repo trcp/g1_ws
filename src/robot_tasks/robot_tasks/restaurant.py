@@ -14,8 +14,9 @@ from lor_interfaces.msg import Person3D, Persons3D # Light Weight Open Pose
 
 # eraasers g1 APIs
 from erasers_g1_api.tts import TTS
-from erasers_g1_api.robot_control import G1Navigation, G1Control
+from erasers_g1_api.robot_control import G1Navigation, G1Control, ArmControl, Collision, Grasp
 from erasers_g1_api.state_skills.recongnition import SpeechToText, LOR, Sam3ObjectDetector
+from erasers_g1_api.state_skills.grasping import object_grasping
 
 # preferences
 from ament_index_python.packages import get_package_share_directory
@@ -191,7 +192,10 @@ def main():
 
     # init APIs
     tts = TTS(node)
+    arm = ArmControl(node)
+    collision = Collision(node)
     CONROL = G1Control(node)
+    ARM = Grasp(arm, collision)
     SAY = tts.say
     NAVIGATION = G1Navigation(node)
 
@@ -206,81 +210,90 @@ def main():
     sm.userdata.apply_keywards = ['yes', 'no'] # 注文確認のキーワードリスト
     sm.userdata.objects_dict = objects_dict
 
+    SAY('restaurant task start!')
+
 
     with sm:
         # smach.StateMachine.add('CREATE_AROUND_MAP', smach.CBState(cb=cb_state_create_around_map,
         #                                                           cb_kwargs={'node': node, 'tts_say': SAY, 'navigation': NAVIGATION, 'control': CONROL},),
         #                         transitions={'success': 'SEARCH_CUSTOMER', 
         #                                      'failure': 'failure'})
-        smach.StateMachine.add('SEARCH_CUSTOMER', LOR(node=node,
-                                                      tts_say=SAY,
-                                                      robot_control=CONROL,
-                                                      searching_area=[[0.0, -1.0], [0.0, 1.0]],
-                                                      start_msg='Hi customers! Please raise your hand if you want to order.',
-                                                      timeout_msg="Sorry, I couldn't find any customers.",
-                                                      success_msg="I found a customer!",
-                                                      detect_condition='hand_up'),
-                               transitions={'success': 'MOVE_TO_CUSTOMER', #'success', 
-                                            'timeout': 'SEARCH_CUSTOMER',
-                                            'failure': 'failure'})
         
-        smach.StateMachine.add('MOVE_TO_CUSTOMER', smach.CBState(cb=cb_state_move_to_customer,
-                                                                  cb_kwargs={'node': node, 'tts_say': SAY, 'navigation': NAVIGATION, 'control': CONROL},),
-                                transitions={'success': 'REQUEST_ORDER', 
-                                             'failure': 'failure'})
+        # smach.StateMachine.add('SEARCH_CUSTOMER', LOR(node=node,
+        #                                               tts_say=SAY,
+        #                                               robot_control=CONROL,
+        #                                               searching_area=[[0.0, -1.0], [0.0, 1.0]],
+        #                                               start_msg='Hi customers! Please raise your hand if you want to order.',
+        #                                               timeout_msg="Sorry, I couldn't find any customers.",
+        #                                               success_msg="I found a customer!",
+        #                                               detect_condition='hand_up'),
+        #                        transitions={'success': 'MOVE_TO_CUSTOMER', #'success', 
+        #                                     'timeout': 'SEARCH_CUSTOMER',
+        #                                     'failure': 'failure'})
         
-        smach.StateMachine.add('REQUEST_ORDER', SpeechToText(node=node,
-                                                             tts_say=SAY,
-                                                             start_msg="hi customer. What is your order ?",
-                                                             success_msg="OK",
-                                                             timeout_msg="Sorry, I didn't hear your order.",
-                                                             device="cpu",
-                                                             lang="en"),
-                                transitions={'success': 'REQUEST_CHECK',
-                                             #'success': 'success',
-                                             'timeout': 'REQUEST_ORDER',
-                                             'failure': 'failure'},
-                                remapping={'success_keywards': 'object_keywards'})
-
-        smach.StateMachine.add('REQUEST_CHECK', smach.CBState(cb=cb_state_check_order,
-                                                                  cb_kwargs={'node': node, 'tts_say': SAY},),
-                                transitions={'success': 'REQUEST_APPLY', 
-                                             'timeout': 'REQUEST_ORDER',
-                                             'failure': 'failure'})
-
-        smach.StateMachine.add('REQUEST_APPLY', SpeechToText(node=node,
-                                                             tts_say=SAY,
-                                                             start_msg="Is this correct ? Please say yes or no.",
-                                                             success_msg="OK",
-                                                             timeout_msg="OK. I will go back to the bar counter.",
-                                                             device="cpu",
-                                                             lang="en"),
-                                transitions={'success': 'ORDER_CONFIRMATION',
-                                             'timeout': 'MOVE_TO_BARCOUNTER',
-                                             'failure': 'failure'},
-                                remapping={'success_keywards': 'apply_keywards'})
-
-        smach.StateMachine.add('ORDER_CONFIRMATION', smach.CBState(cb=cb_state_check_order_confirmation,
-                                                                  cb_kwargs={'node': node, 'tts_say': SAY},),
-                                transitions={'apply': 'MOVE_TO_BARCOUNTER', 
-                                             'reject': 'REQUEST_ORDER',
-                                             'failure': 'failure'})
+        # smach.StateMachine.add('MOVE_TO_CUSTOMER', smach.CBState(cb=cb_state_move_to_customer,
+        #                                                           cb_kwargs={'node': node, 'tts_say': SAY, 'navigation': NAVIGATION, 'control': CONROL},),
+        #                         transitions={'success': 'REQUEST_ORDER', 
+        #                                      'failure': 'failure'})
         
-        smach.StateMachine.add('MOVE_TO_BARCOUNTER', smach.CBState(cb=cb_state_move_to_bar_counter,
-                                                                  cb_kwargs={'node': node, 'navigation': NAVIGATION, 'control': CONROL},),
-                                transitions={'success': 'ORDER_REPORT', 
-                                             'failure': 'failure'})
+        # smach.StateMachine.add('REQUEST_ORDER', SpeechToText(node=node,
+        #                                                      tts=tts,
+        #                                                      start_msg="hi customer. What is your order ? Please speak after the beep sound.",
+        #                                                      success_msg="OK",
+        #                                                      timeout_msg="Sorry, I didn't hear your order.",
+        #                                                      device="cpu",
+        #                                                      lang="en"),
+        #                         transitions={'success': 'REQUEST_CHECK',
+        #                                      #'success': 'success',
+        #                                      'timeout': 'REQUEST_ORDER',
+        #                                      'failure': 'failure'},
+        #                         remapping={'success_keywards': 'object_keywards'})
 
-        smach.StateMachine.add('ORDER_REPORT', smach.CBState(cb=cb_state_order_report,
-                                                                  cb_kwargs={'node': node, 'tts_say': SAY},),
-                                transitions={'success': 'success', 
-                                             'failure': 'failure'})
+        # smach.StateMachine.add('REQUEST_CHECK', smach.CBState(cb=cb_state_check_order,
+        #                                                           cb_kwargs={'node': node, 'tts_say': SAY},),
+        #                         transitions={'success': 'REQUEST_APPLY', 
+        #                                      'timeout': 'REQUEST_ORDER',
+        #                                      'failure': 'failure'})
+
+        # smach.StateMachine.add('REQUEST_APPLY', SpeechToText(node=node,
+        #                                                      tts=tts,
+        #                                                      start_msg="Is this correct ? Please say yes or no after the beep sound.",
+        #                                                      success_msg="OK",
+        #                                                      timeout_msg="OK. I will go back to the bar counter.",
+        #                                                      device="cpu",
+        #                                                      lang="en"),
+        #                         transitions={'success': 'ORDER_CONFIRMATION',
+        #                                      'timeout': 'MOVE_TO_BARCOUNTER',
+        #                                      'failure': 'failure'},
+        #                         remapping={'success_keywards': 'apply_keywards'})
+
+        # smach.StateMachine.add('ORDER_CONFIRMATION', smach.CBState(cb=cb_state_check_order_confirmation,
+        #                                                           cb_kwargs={'node': node, 'tts_say': SAY},),
+        #                         transitions={'apply': 'MOVE_TO_BARCOUNTER', 
+        #                                      'reject': 'REQUEST_ORDER',
+        #                                      'failure': 'failure'})
+        
+        # smach.StateMachine.add('MOVE_TO_BARCOUNTER', smach.CBState(cb=cb_state_move_to_bar_counter,
+        #                                                           cb_kwargs={'node': node, 'navigation': NAVIGATION, 'control': CONROL},),
+        #                         transitions={'success': 'ORDER_REPORT', 
+        #                                      'failure': 'failure'})
+
+        # smach.StateMachine.add('ORDER_REPORT', smach.CBState(cb=cb_state_order_report,
+        #                                                           cb_kwargs={'node': node, 'tts_say': SAY},),
+        #                         transitions={'success': 'success', 
+        #                                      'failure': 'failure'})
         
         smach.StateMachine.add('OBJECT_DETECTION', Sam3ObjectDetector(node=node,
-                                                                      tts_say=SAY,
-                                                                      robot_control=CONROL,),
-                                transitions={'success': 'success',
+                                                                      tts_say=tts.say,
+                                                                      robot_control=CONROL,
+                                                                      arm_control=ARM,),
+                                transitions={'success': 'OBJECT_GRASPING',
                                              'timeout': 'OBJECT_DETECTION',
+                                             'failure': 'failure'})
+
+        smach.StateMachine.add('OBJECT_GRASPING', smach.CBState(cb=object_grasping,
+                                                                cb_kwargs={'node': node, 'arm_control': ARM, 'tts_say': SAY},),
+                                transitions={'success': 'success', 
                                              'failure': 'failure'})
         
     

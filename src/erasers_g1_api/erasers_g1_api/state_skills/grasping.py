@@ -59,7 +59,7 @@ def object_grasping(userdata, node: Node, arm_control: Grasp, tts_say: TTS.say, 
         
         # 把持の実行（新メソッド grasp() は自動的に最適な腕を選択します）
         node.get_logger().info(f"Initiating dynamic grasp for '{name}'")
-        success = arm_control.grasp(target_name=name, size=size)
+        success = arm_control.grasp(target_name=name)
 
         if success:
             tts_say("Grasping finished.")

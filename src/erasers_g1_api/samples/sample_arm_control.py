@@ -21,30 +21,28 @@ def main():
 
     # init
     arm = ArmControl(node)
+    tts = TTS(node)
+    say = tts.say
 
     # init arm pose
+    say("Init pose")
     arm.move_groupstate()
-    '''
-    arm.joint_control(
-        left_shoulder_pitch_joint=1.57,
-        right_shoulder_pitch_joint=1.57,
-        left_shoulder_roll_joint=0.5,
-        right_shoulder_roll_joint=-0.5,
-        left_elbow_joint=-1.0,
-        right_elbow_joint=-1.0
-    )
+
+    # Add a small target object
+    obj_name = "target_cube"
+    arm.collision.add_box(obj_name, x=0.4, y=0.1, z=0.0, size=(0.04, 0.04, 0.04))
+    say(f"Target object {obj_name} added. Starting grasp sequence")
+    if arm.grasp_manager.grasp(obj_name):
+        say("Grasp sequence completed successfully")
+        # Lift and move
+        arm.move_rel(z=0.1)
+    else:
+        say("Grasp sequence failed")
+
+    say("Verification finished. Cleaning up")
+    arm.collision.remove_collision("obstacle")
+    arm.collision.remove_collision(obj_name)
     arm.move_groupstate()
-    '''
-    arm.joint_control(
-        waist_yaw_joint=0.0,
-        left_shoulder_pitch_joint=math.radians(-110),
-        left_shoulder_roll_joint=math.radians(75),
-        left_shoulder_yaw_joint=math.radians(-120),
-        left_elbow_joint=math.radians(25),
-        left_wrist_roll_joint=math.radians(-30),
-        right_shoulder_pitch_joint=math.radians(-110),
-        right_shoulder_roll_joint=math.radians(-75),
-        right_shoulder_yaw_joint=math.radians(120),
-        right_elbow_joint=math.radians(25),
-        right_wrist_roll_joint=math.radians(30),
-    )
+
+if __name__ == '__main__':
+    main()

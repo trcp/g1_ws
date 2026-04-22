@@ -1,89 +1,108 @@
+"""
+Receptionist タスク
+"""
+
 #!/usr/bin/env python3
+
+# ROS2
 from rclpy.node import Node
 import rclpy
-
-# smach state
 import smach
 
-# msgs
-from geometry_msgs.msg import Twist
+# interfaces
+from lor_interfaces.msg import Person3D, Persons3D # Light Weight Open Pose
 
-# G1 API
+# eraasers g1 APIs
 from erasers_g1_api.tts import TTS
-from erasers_g1_api.robot_control import G1Control
-from erasers_g1_api.state_skills.wait_door_open import WaitDoorOpen
+from erasers_g1_api.robot_control import G1Navigation, G1Control, ArmControl, Collision, Grasp
+from erasers_g1_api.state_skills.recongnition import SpeechToText, LOR, Sam3ObjectDetector
+from erasers_g1_api.state_skills.grasping import object_grasping
 
-# general
-import time
+# preferences
+from ament_index_python.packages import get_package_share_directory
+from typing import List
+import traceback
+import yaml
+import os
 
 
+"""
+パラメータを読み込む
+"""
+def load_params(node:Node, params_file:str):
+    node.get_logger().info("Get tasks parameter from: %s"%params_file)
+    try:
+        with open(params_file, 'r') as f:
+            params = yaml.safe_load(f)
+            locations:dict = params['receptionist_task']['ros_parameters']['locations']
+            locations_str = "\n".join(locations.keys())
+            node.get_logger().info(f"Locations list:\n{locations_str}")
+            return locations
+    except Exception as e:
+        node.get_logger().error(f"Failed to load params: {e}")
+        node.get_logger().error(traceback.format_exc())
+
+
+"""
+指定されたロケーションに移動する
+"""
+@smach.cb_interface(outcomes=['success', 'timeout', 'failure'],
+                    input_keys=['locations'],
+                    output_keys=[])
+def move_to_location_cb(userdata, node:Node, tts_say:TTS.say, navigation:G1Navigation, control:G1Control, location:str):
+    try:
+        locations = userdata.locations
+        control.pose_policy('running')
+        tts_say(f"go to the {location}.")
+        navigation.move_abs(locations[location][0], locations[location][1], locations[location][2])
+        control.pose_policy('start')
+        return 'success'
+
+    except Exception as e:
+        node.get_logger().error(f"Error in move_to_location_cb: {e}\n{traceback.format_exc()}")
+        return 'failure'
+
+
+"""
+main
+"""
 def main():
     # init ROS
     rclpy.init()
     node = Node('receptionist_task')
 
+    # ロケーションリストを取得
+    default_params_file_path = os.path.join(get_package_share_directory('robot_tasks'), 'params', 'receptionist_task.yaml')
+    node.declare_parameter('task_params', default_params_file_path)
+    locations = load_params(node, node.get_parameter('task_params').value)
+
     # init API
     tts = TTS(node)
-    control = G1Control(node)
     SAY = tts.say
+    CONROL = G1Control(node)
+    NAVIGATION = G1Navigation(node)
 
-    # init sys
-    control.move_head(tilt=0.0)
-
-    # declare start task
-    node.get_logger().info('''
-    =======================
-    RECEPTIONIST TASK START
-    =======================
-    ''')
-    SAY('Receptionist task start')
-
-    control.move_head(tilt=-0.5)
-    control.move_velosity(yaw=0.7, time_sec=1.0)
-    SAY('Hi What your name?')
-    time.sleep(10)
-    SAY('I am thinking ...')
-    time.sleep(10)
-    SAY('Ok. Please back for me.')
-    SAY('We will go to the drinnking area. Please follow me.')
-    control.move_head(tilt=0.0)
-    control.move_velosity(yaw=-0.7, time_sec=1.0)
-    time.sleep(5)
-    control.move_velosity(x=0.2, time_sec=1.0)
-
-    # init pub
-    SAY('Please follow me.')
-    control.move_velosity(yaw=0.7, time_sec=1.0)
-
-    SAY('What your favorite drink?')
-    time.sleep(10)
-    SAY('OK!')
-    SAY('Please wait. I will serch')
-    control.move_velosity(yaw=-0.35, time_sec=1.0)
-    control.move_head(tilt=0.5)
-    SAY('Serching now.')
-    time.sleep(5)
-
-    '''
+    # init smach
     sm = smach.StateMachine(outcomes=['success', 'failure'])
 
+    # userdata
+    sm.userdata.locations = locations
 
-    # states
-    with sm:
-        smach.StateMachine.add('WAIT_OPEN_DOOR', WaitDoorOpen(node,
-                                                              SAY,
-                                                              threshold=1.2),
-                                transitions={
-                                    'open': 'success',
-                                    'timeout': 'WAIT_OPEN_DOOR',
-                                    'failure': 'failure'}
-                                )
+    SAY('receptionist task start!')
+
     
+    with sm:
+        smach.StateMachine.add('MOVE_TO_ENTRANCE', smach.CBState(cb=move_to_location_cb,
+                                                                 cb_kwargs={'node': node, 'tts_say': SAY, 'navigation': NAVIGATION, 'control': CONROL,
+                                                                            'location': 'entrance'}),
+                               transitions={'success': 'success',
+                                            'timeout': 'failure',
+                                            'failure': 'failure'})
+    
+    # execute smach states
     outcome = sm.execute()
-    '''
-
-
-    # finish task
-    node.get_logger().info('Finish the task.')
-    SAY('Finish the task.')
+    if outcome == 'success':
+        SAY("I finished the task.")
+    else:
+        SAY("I failed to finish the task.")
     node.destroy_node()
