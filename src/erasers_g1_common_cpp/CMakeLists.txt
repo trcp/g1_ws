@@ -217,7 +217,12 @@ ament_target_dependencies(camera_bridge
     std_srvs
 )
 
-
+# fix_lidar_time
+add_executable(fix_lidar_time src/fix_lidar_time.cpp)
+ament_target_dependencies(fix_lidar_time
+    rclcpp
+    sensor_msgs
+)
 
 install(TARGETS
   cmd_vel
@@ -234,7 +239,7 @@ install(TARGETS
   cartesian_trajectory_planner
   mic_server
   vui_diagnostic
-  camera_bridge
+  fix_lidar_time
   DESTINATION lib/${PROJECT_NAME}
 )
 install(

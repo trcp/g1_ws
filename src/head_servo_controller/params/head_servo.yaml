@@ -3,7 +3,7 @@ head_servo_controller:
     dx_path: "/dev/ttyCH341USB0"
     pan_id: 1
     tilt_id: 0
-    pan_home_pulse: 2141
+    pan_home_pulse: 2548
     tilt_home_pulse: 2529
     pan_rad_offset: 0.0
     tilt_rad_offset: 0.0

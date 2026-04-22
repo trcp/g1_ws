@@ -89,22 +89,6 @@ def generate_launch_description():
     ld.add_action(declare_use_navigation)
     
 
-    # nodes
-    pointcloud_to_laserscan = Node(
-        package='pointcloud_to_laserscan',
-        executable='pointcloud_to_laserscan_node',
-        name='pointcloud_to_laserscan',
-        emulate_tty=True,
-        parameters=[
-            pointcloud_to_laserscan_config,
-            {'use_sim_time': False},
-        ],
-        remappings=[
-            ('cloud_in', '/utlidar/cloud_livox_mid360'),
-            ('scan', '/scan'),
-        ],
-    )
-
     map_saver = Node(
         package='g1_cartographer',
         executable='auto_map_saver',
@@ -132,7 +116,6 @@ def generate_launch_description():
         ],        
     )
 
-    #ld.add_action(pointcloud_to_laserscan)
     ld.add_action(map_saver)
     ld.add_action(slam_toolbox)
 
