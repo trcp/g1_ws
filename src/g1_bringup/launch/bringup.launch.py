@@ -164,6 +164,11 @@ def generate_launch_description():
         executable='joy_node',
         namespace='emc'
     )
+    # LiDAR センサーの時刻を修正するノード
+    fix_lidar_time = Node(
+        package="erasers_g1_common_cpp",
+        executable="fix_lidar_time",
+    )
 
     ld.add_action(loco_service_client)
     ld.add_action(audio_client)
@@ -178,6 +183,7 @@ def generate_launch_description():
     ld.add_action(emergency_stop)
     ld.add_action(mic_server)
     ld.add_action(emc_joy_node)
+    ld.add_action(fix_lidar_time)
 
 
     pointcloud_to_laserscan = Node(
@@ -190,7 +196,7 @@ def generate_launch_description():
             {'use_sim_time': False},
         ],
         remappings=[
-            ('cloud_in', '/utlidar/cloud_livox_mid360'),
+            ('cloud_in', '/utlidar/cloud_livox_mid360_fixed'),
             ('scan', '/scan'),
         ],
     )
@@ -343,6 +349,31 @@ def generate_launch_description():
     )
 
     ld.add_action(init_head_cam_pose_handler)
+
+
+    # 起動時に手を握る
+    start_init_hand_pose_cmd = ExecuteProcess(
+        cmd=[
+            'ros2', 'service', 'call',
+            '/hand_command',
+            'amazing_hand_interfaces/srv/HandCommand',
+            ['{command: walk, hand: both}']
+        ],
+        output='screen'
+    )
+    init_hand_pose_handler = RegisterEventHandler(
+        event_handler=OnProcessStart(
+            target_action=audio_client,
+            on_start=[
+                TimerAction(
+                    period=5.0,
+                    actions=[start_init_hand_pose_cmd]
+                )
+            ]
+        )
+    )
+
+    ld.add_action(init_hand_pose_handler)
 
 
     # send launch description to ROS2

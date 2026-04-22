@@ -32,7 +32,7 @@
     # Post-Processing Filters
     align_depth.enable: true
     colorizer:
-      enable: false
+      enable: false\
     pointcloud__neon_:
       enable: true
       stream_filter: 2
