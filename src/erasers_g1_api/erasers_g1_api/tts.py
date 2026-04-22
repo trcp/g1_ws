@@ -3,6 +3,7 @@
 # ROS
 from rclpy.node import Node
 import rclpy
+import os
 
 # TTS interface
 from g1_srvs.srv import AudioClient
@@ -63,8 +64,14 @@ class TTS:
     
     
     def audio(self, audio_path:str, logger:str="info", wait:bool=True) -> bool:
+        # 外部PC（katana）のパスをロボット（Unitree G1）内部のパスに変換する
+        # /home/roboworks/ -> /home/unitree/
+        abs_path = os.path.abspath(audio_path)
+        if abs_path.startswith('/home/roboworks/'):
+            abs_path = abs_path.replace('/home/roboworks/', '/home/unitree/', 1)
+        
         req = AudioClient.Request()
         req.type = AudioClient.Request.TYPE_WAV
-        req.audio_path = audio_path
+        req.audio_path = abs_path
         return self.__send_req(req, logger, wait)
     
