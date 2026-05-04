@@ -1,17 +1,24 @@
-/src/nakalab_realsense
-/src/rclpy_util
+# Dependencies Packages
+src/depends/*
+!src/depends/.gitkeep
 
 # ros workspace
 build/
 install/
 log/
 
+# Python
 __pycache__/
+
+# ROSBAG
 rosbag/*
 !rosbag/.gitkeepe
+
+# MAP
 map/*
 !map/.gitkeep
 
+# EDITOR & AGENT LLM
 .devcontainer
 .antigravity
 .vscode
