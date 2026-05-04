@@ -1,0 +1,17 @@
+{
+  "global": {
+    "config_global_mapping": "config_global_mapping_gpu.json",
+    "config_logging": "config_logging.json",
+    "config_odometry": "config_odometry_gpu.json",
+    "config_path": "/home/roboworks/glim/config",
+    "config_preprocess": "config_preprocess.json",
+    "config_ros": "config_ros.json",
+    "config_sensors": "config_sensors.json",
+    "config_sub_mapping": "config_sub_mapping_gpu.json",
+    "config_viewer": "config_viewer.json"
+  },
+  "meta": {
+    "imu_frame_id": "livox_frame",
+    "lidar_frame_id": "livox_frame"
+  }
+}
