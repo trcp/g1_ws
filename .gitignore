@@ -1,6 +1,6 @@
 # Dependencies Packages
-src/depends/*
-!src/depends/.gitkeep
+src/thirdparty/*
+!src/thirdparty/.gitkeep
 
 # ros workspace
 build/
