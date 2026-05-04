@@ -164,11 +164,6 @@ def generate_launch_description():
         executable='joy_node',
         namespace='emc'
     )
-    # LiDAR センサーの時刻を修正するノード
-    fix_lidar_time = Node(
-        package="erasers_g1_common_cpp",
-        executable="fix_lidar_time",
-    )
 
     ld.add_action(loco_service_client)
     ld.add_action(audio_client)
@@ -183,7 +178,6 @@ def generate_launch_description():
     ld.add_action(emergency_stop)
     ld.add_action(mic_server)
     #ld.add_action(emc_joy_node)
-    ld.add_action(fix_lidar_time)
 
 
     pointcloud_to_laserscan = Node(
