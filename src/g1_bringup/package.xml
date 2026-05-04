@@ -13,8 +13,9 @@
   <test_depend>ament_lint_common</test_depend>
 
   <depend>erasers_g1_common_cpp</depend>
-  <depend>livox_ros_driver2</depend>
+  <!--depend>livox_ros_driver2</depend-->
   <depend>g1_description</depend>
+  <depend>joint_state_publisher_gui</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

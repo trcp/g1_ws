@@ -1,0 +1,56 @@
+# ompl_planning.yaml
+# G1 ヒューマノイドロボット OMPL 設定
+# ROS2 Humble / MoveIt2 2.5.x 対応形式
+# 注意: request_adapters / response_adapters は string 型（スペース区切り）が必要
+
+planning_plugins:
+  - ompl_interface/OMPLPlanner
+
+# スペース区切りの単一文字列として設定すること（string_array は不可）
+# ※ 正しいプレフィクスは default_planner_request_adapters/ (planning → planner)
+request_adapters: >-
+  default_planner_request_adapters/ResolveConstraintFrames
+  default_planner_request_adapters/FixWorkspaceBounds
+  default_planner_request_adapters/FixStartStateBounds
+  default_planner_request_adapters/FixStartStateCollision
+  default_planner_request_adapters/AddTimeOptimalParameterization
+
+response_adapters: >-
+  default_planning_response_adapters/ValidateSolution
+  default_planning_response_adapters/DisplayMotionPlans
+  default_planning_response_adapters/PublishMotionPlanningDisplay
+
+planner_configs:
+  RRTConnectkConfigDefault:
+    type: geometric::RRTConnect
+    range: 0.0
+
+  RRTkConfigDefault:
+    type: geometric::RRT
+    range: 0.0
+    goal_bias: 0.05
+
+  RRTstarkConfigDefault:
+    type: geometric::RRTstar
+    range: 0.0
+
+arm_left:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+    - RRTConnectkConfigDefault
+    - RRTkConfigDefault
+    - RRTstarkConfigDefault
+
+arm_right:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+    - RRTConnectkConfigDefault
+    - RRTkConfigDefault
+    - RRTstarkConfigDefault
+
+upper_body:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+    - RRTConnectkConfigDefault
+    - RRTkConfigDefault
+    - RRTstarkConfigDefault

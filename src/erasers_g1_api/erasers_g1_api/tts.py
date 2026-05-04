@@ -3,6 +3,7 @@
 # ROS
 from rclpy.node import Node
 import rclpy
+import os
 
 # TTS interface
 from g1_srvs.srv import AudioClient
@@ -10,6 +11,13 @@ from g1_srvs.srv import AudioClient
 
 class TTS:
     def __init__(self, node:Node):
+        """TTS クラスの初期化。
+
+        Parameters
+        ----------
+        node : Node
+            サービス呼び出しとログ出力に使用する ROS ノードインスタンス。
+        """
         self.__node = node
 
         # create TTS client
@@ -19,15 +27,51 @@ class TTS:
             raise RuntimeError('May be erasers_g1 is not running ...')
 
 
-    def __send_req(self, req:AudioClient.Request, wait:bool):
+    def __send_req(self, req:AudioClient.Request, logger:str, wait:bool):
         future = self.__tts_cli.call_async(req)
+        if logger == "info":
+            self.__node.get_logger().info("G1 SAY::::::::::::\n>> %s"%req.text)
+        elif logger == "warn":
+            self.__node.get_logger().warn("G1 SAY::::::::::::\n>> %s"%req.text)
+        elif logger == "error":
+            self.__node.get_logger().error("G1 SAY::::::::::::\n>> %s"%req.text)
+        elif logger == "debug":
+            self.__node.get_logger().debug("G1 SAY::::::::::::\n>> %s"%req.text)
         if wait:
             rclpy.spin_until_future_complete(self.__node, future)
             res:AudioClient.Response = future.result()
             return res.success
 
 
-    def say(self, text:str, wait:bool=True) -> bool:
+    def say(self, text:str, logger:str="info", wait:bool=True) -> bool:
+        """テキストを音声で読み上げる。
+
+        Parameters
+        ----------
+        text : str
+            読み上げるテキスト。
+        wait : bool, optional
+            読み上げ完了を待つかどうか、デフォルトは True。
+
+        Returns
+        -------
+        bool
+            読み上げが成功したかどうか。
+        """
         req = AudioClient.Request()
         req.text = text
-        return self.__send_req(req, wait)
+        return self.__send_req(req, logger, wait)
+    
+    
+    def audio(self, audio_path:str, logger:str="info", wait:bool=True) -> bool:
+        # 外部PC（katana）のパスをロボット（Unitree G1）内部のパスに変換する
+        # /home/roboworks/ -> /home/unitree/
+        abs_path = os.path.abspath(audio_path)
+        if abs_path.startswith('/home/roboworks/'):
+            abs_path = abs_path.replace('/home/roboworks/', '/home/unitree/', 1)
+        
+        req = AudioClient.Request()
+        req.type = AudioClient.Request.TYPE_WAV
+        req.audio_path = abs_path
+        return self.__send_req(req, logger, wait)
+    

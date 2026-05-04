@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>g1_navigation</name>
+  <version>0.0.0</version>
+  <description>TODO: Package description</description>
+  <maintainer email="nakartogawa.drone@gmail.com">GAI-313</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <exec_depend>g1_cartographer</exec_depend>
+  <exec_depend>cartographer_ros</exec_depend>
+  <exec_depend>emcl2</exec_depend>
+  <exec_depend>nav2_amcl</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>pointcloud_to_laserscan</exec_depend>
+  <exec_depend>obstacle_detection</exec_depend>
+
+  <depend>nav2_bringup</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

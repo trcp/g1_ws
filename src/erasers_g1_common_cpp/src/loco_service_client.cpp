@@ -9,24 +9,23 @@
 #include "common/ut_errror.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "g1_srvs/srv/pose_policy.hpp"
-#include "g1_srvs/srv/audio_client.hpp"
 
 class LocoServiceClientNode : public rclcpp::Node {
  public:
   using PosePolicy = g1_srvs::srv::PosePolicy;
-  using AudioClient = g1_srvs::srv::AudioClient;
 
   /**
    * @brief コンストラクタ
    */
   explicit LocoServiceClientNode()
       : Node("loco_service_client"), client_(this) {
+    callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
     service_ = this->create_service<PosePolicy>(
         "pose_policy",
         std::bind(&LocoServiceClientNode::handle_pose_request, this,
-                  std::placeholders::_1, std::placeholders::_2));
-
-    audio_client_ptr_ = this->create_client<AudioClient>("/play_audio");
+                  std::placeholders::_1, std::placeholders::_2),
+        rmw_qos_profile_services_default,
+        callback_group_);
 
     RCLCPP_INFO(this->get_logger(),
                 "Loco Service Client Node started. Ready to receive pose "
@@ -58,20 +57,6 @@ class LocoServiceClientNode : public rclcpp::Node {
   }
 
  private:
-  void send_speech_request(const std::string& text) {
-      if (!audio_client_ptr_->service_is_ready()) {
-          RCLCPP_WARN(this->get_logger(), "Audio service is not available. Skipping speech.");
-          return;
-      }
-
-      auto request = std::make_shared<AudioClient::Request>();
-      request->type = 0; // TTS mode
-      request->text = text; 
-      request->audio_path = "";
-
-      // 非同期で呼び出す
-      audio_client_ptr_->async_send_request(request);
-  }
   
   void handle_pose_request(
       const std::shared_ptr<PosePolicy::Request> request,
@@ -82,19 +67,29 @@ class LocoServiceClientNode : public rclcpp::Node {
     int32_t ret = -1; 
     const std::string& pose = request->pose;
     bool reset_shake_state = true;
+    int target_fsm_id = -1;
 
     if (pose == PosePolicy::Request::DAMP) {
       ret = client_.Damp();
+      target_fsm_id = 1;
     } else if (pose == PosePolicy::Request::START) {
       ret = client_.Start();
+      target_fsm_id = 500;
+    } else if (pose == PosePolicy::Request::RUNNING) {
+      ret = client_.RunningMode();
+      target_fsm_id = 801;
     } else if (pose == PosePolicy::Request::SQUAT) {
-      ret = client_.Squat();
+      ret = client_.SetFsmId(706);
+      target_fsm_id = 706;
     } else if (pose == PosePolicy::Request::SIT) {
       ret = client_.Sit();
+      target_fsm_id = 3;
     } else if (pose == PosePolicy::Request::STAND_UP) {
       ret = client_.StandUp();
+      target_fsm_id = 4;
     } else if (pose == PosePolicy::Request::ZERO_TORQUE) {
       ret = client_.ZeroTorque();
+      target_fsm_id = 0;
     } else if (pose == PosePolicy::Request::STOP_MOVE) {
       ret = client_.StopMove();
     } else if (pose == PosePolicy::Request::HIGH_STAND) {
@@ -136,31 +131,35 @@ class LocoServiceClientNode : public rclcpp::Node {
         is_shaking_hands_ = false;
     }
 
-    response->success = handleActionError(ret);
+    // 基本命令の成功を確認
+    bool success = handleActionError(ret);
+
+    // モード遷移が指定されている場合、遷移完了を待機
+    if (success && target_fsm_id != -1) {
+      RCLCPP_INFO(this->get_logger(), "Waiting for transition to FSM ID: %d", target_fsm_id);
+      ret = client_.WaitFsmId(target_fsm_id);
+      if (ret != 0) {
+        RCLCPP_ERROR(this->get_logger(), "Transition to FSM ID %d failed or timed out. Current ID might not match.", target_fsm_id);
+        success = false;
+      } else {
+        RCLCPP_INFO(this->get_logger(), "Transition to FSM ID %d completed successfully.", target_fsm_id);
+      }
+    }
+
+    response->success = success;
 
     if (response->success) {
       RCLCPP_INFO(this->get_logger(), "Successfully executed pose: [%s]",
                   pose.c_str());
-      
-      if (pose.find("hand") == std::string::npos) {
-          std::string speech_text = pose;
-          std::replace(speech_text.begin(), speech_text.end(), '_', ' ');
-          speech_text = speech_text + " mode.";
-          send_speech_request(speech_text);
-      } else {
-          RCLCPP_INFO(this->get_logger(), "Skipping speech for pose with 'hand': [%s]", pose.c_str());
-      }
-      
     } else {
       RCLCPP_ERROR(this->get_logger(), "Failed to execute pose: [%s]",
                    pose.c_str());
-      send_speech_request("Failed to change pose.");
     }
   }
 
   unitree::robot::g1::LocoClient client_;
   rclcpp::Service<PosePolicy>::SharedPtr service_;
-  rclcpp::Client<AudioClient>::SharedPtr audio_client_ptr_;
+  rclcpp::CallbackGroup::SharedPtr callback_group_;
   
   bool is_shaking_hands_ = false;
 };
@@ -169,7 +168,12 @@ int main(int argc, char const* argv[]) {
   rclcpp::init(argc, argv);
   auto loco_service_client_node =
       std::make_shared<LocoServiceClientNode>();
-  rclcpp::spin(loco_service_client_node);
+  
+  // Use MultiThreadedExecutor to allow concurrent execution of service and topic callbacks
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(loco_service_client_node);
+  executor.spin();
+  
   rclcpp::shutdown();
   return 0;
 }

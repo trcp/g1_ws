@@ -11,13 +11,18 @@
 
   <depend>rosbag2_storage_mcap</depend>
   <depend>rosidl_generator_dds_idl</depend>
-  <depend>unitree_ros2_example</depend>
+  <!--depend>unitree_ros2_example</depend-->
   <depend>nakalab_realsense</depend>
+  <depend>amazing_hand_nodes</depend>
   <depend>erasers_g1_common_cpp</depend>
   <depend>erasers_g1_api</depend>
+  <depend>g1_hw_controller</depend>
   <depend>g1_description</depend>
   <depend>g1_bringup</depend>
-  <depend>g1_slam</depend>
+  <depend>g1_cartographer</depend>
+  <depend>g1_navigation</depend>
+  <depend>g1_moveit</depend>
+  <!--depend>g1_slam</depend-->
   <depend>head_servo_controller</depend>
 
   <test_depend>ament_lint_auto</test_depend>

@@ -3,6 +3,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess, RegisterEventHandler, TimerAction
 from launch.substitutions import LaunchConfiguration
 from launch.event_handlers import OnProcessStart
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
@@ -18,6 +19,12 @@ def generate_launch_description():
     ptl_params = LaunchConfiguration('ptl_params')
     camera_params = LaunchConfiguration('camera_params')
     start_message = LaunchConfiguration('start_message')
+    robot_model = LaunchConfiguration('robot_model')
+    use_camera = LaunchConfiguration('use_camera')
+    ah_path = LaunchConfiguration('ah_path')
+    dx_path = LaunchConfiguration('dx_path')
+    use_rviz = LaunchConfiguration('use_rviz')
+    use_emc = LaunchConfiguration('use_emc')
 
 
     # declare argument
@@ -26,17 +33,47 @@ def generate_launch_description():
         description='Bringup robot message.'
     )
     declare_ptl_params = DeclareLaunchArgument(
-        'ptl_params', default_value=os.path.join(get_package_share_directory('g1_slam'), 'param', 'ptl.yaml'),
+        'ptl_params', default_value=os.path.join(get_package_share_directory('g1_bringup'), 'params', 'ptl.yaml'),
         description='Full path for 2d png map'
     )
     declare_camera_params = DeclareLaunchArgument(
         'camera_params', default_value=os.path.join(get_package_share_directory('g1_bringup'), 'params', 'd455.yaml'),
         description='Full path for 2d png map'
     )
+    declare_robot_model = DeclareLaunchArgument(
+        'robot_model', default_value=os.path.join(get_package_share_directory('g1_description'), 'urdf', 'erasers_g1.urdf'),
+        description='Full path for URDF'
+    )
+    declare_use_camera = DeclareLaunchArgument(
+        'use_camera', default_value='true',
+        description='Whether to bringup camera & servo'
+    )
+    declare_ah_path = DeclareLaunchArgument(
+        'ah_path', default_value=os.environ.get('AH_PATH', '/dev/ttyACM0'),
+        description='Amazing Hand path'
+    )
+    declare_dx_path = DeclareLaunchArgument(
+        'dx_path', default_value=os.environ.get('DX_PATH', '/dev/ttyUSB0'),
+        description='Dynamixel path'
+    )
+    declare_use_rviz = DeclareLaunchArgument(
+        'use_rviz', default_value='false',
+        description='Whether to start Rviz'
+    )
+    declare_use_emc = DeclareLaunchArgument(
+        'use_emc', default_value=os.environ.get('USE_EMC', 'false'),
+        description='Whether to start EMC'
+    )
 
     ld.add_action(declare_start_message)
     ld.add_action(declare_ptl_params)
     ld.add_action(declare_camera_params)
+    ld.add_action(declare_robot_model)
+    ld.add_action(declare_use_camera)
+    ld.add_action(declare_use_rviz)
+    ld.add_action(declare_ah_path)
+    ld.add_action(declare_dx_path)
+    ld.add_action(declare_use_emc)
 
 
     # nodes
@@ -68,13 +105,69 @@ def generate_launch_description():
     head_joints = Node(
         package='head_servo_controller',
         executable='head_servo_controller',
-        emulate_tty=True
+        emulate_tty=True,
+        parameters=[
+            os.path.join(get_package_share_directory('head_servo_controller'), 'params', 'head_servo.yaml'),
+            {'dx_path': dx_path}
+        ],
+        condition=IfCondition(use_camera)
     )
     # TTS
     audio_client = Node(
         package='erasers_g1_common_cpp',
         executable='audio_client',
         emulate_tty=True
+    )
+    # ジョイント制御
+    arm_joint_control = Node(
+        package='erasers_g1_common_cpp',
+        executable='arm_joint_control',
+        emulate_tty=True,
+        parameters=[{'urdf': robot_model}]
+    )
+    # Pinoccio IK
+    arm_endeffector_control = Node(
+        package='erasers_g1_common_cpp',
+        executable='arm_endeffector_control',
+        emulate_tty=True,
+        parameters=[{'urdf': robot_model}]
+    )
+    # Cartesian trajectory planner
+    cartesian_trajectory_planner = Node(
+        package='erasers_g1_common_cpp',
+        executable='cartesian_trajectory_planner',
+        emulate_tty=True
+    )
+    # Amazing Hand
+    amazing_hand = Node(
+        package='amazing_hand_nodes',
+        executable='amazing_hand_node',
+        parameters=[{"serial_port":ah_path}],
+        emulate_tty=True
+    )
+    # 緊急停止
+    emergency_stop = Node(
+        package='erasers_g1_common_cpp',
+        executable='emergency_stop',
+        emulate_tty=True,
+        condition=IfCondition(use_emc)
+    )
+    # Mic server
+    mic_server = Node(
+        package='erasers_g1_common_cpp',
+        executable='mic_server',
+        emulate_tty=True
+    )
+    # 緊急停止用 joy_node
+    emc_joy_node = Node(
+        package='joy',
+        executable='joy_node',
+        namespace='emc'
+    )
+    # LiDAR センサーの時刻を修正するノード
+    fix_lidar_time = Node(
+        package="erasers_g1_common_cpp",
+        executable="fix_lidar_time",
     )
 
     ld.add_action(loco_service_client)
@@ -83,48 +176,63 @@ def generate_launch_description():
     ld.add_action(odom_publisher)
     ld.add_action(cmd_vel)
     ld.add_action(head_joints)
-
-
-    # TF: base_link -> pelvis
-    base_link_to_pelvis =  Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        arguments=["0", "0", "0", "0", "0", "0", "base_link", "pelvis"],
-        output="screen"
-    )
-
-    ld.add_action(base_link_to_pelvis)
+    ld.add_action(arm_joint_control)
+    #ld.add_action(arm_endeffector_control)
+    #ld.add_action(cartesian_trajectory_planner)
+    ld.add_action(amazing_hand)
+    ld.add_action(emergency_stop)
+    ld.add_action(mic_server)
+    #ld.add_action(emc_joy_node)
+    ld.add_action(fix_lidar_time)
 
 
     pointcloud_to_laserscan = Node(
         package='pointcloud_to_laserscan',
         executable='pointcloud_to_laserscan_node',
-        name='pointcloud_to_laserscan_node',
+        name='pointcloud_to_laserscan',
         emulate_tty=True,
         parameters=[
             ptl_params,
             {'use_sim_time': False},
         ],
         remappings=[
-            ('cloud_in', '/livox/lidar'),
+            #('cloud_in', '/utlidar/cloud_livox_mid360_fixed'),
+            ('cloud_in', '/utlidar/cloud_livox_mid360'),
             ('scan', '/scan'),
         ],
     )
-    #ld.add_action(pointcloud_to_laserscan)
+    ld.add_action(pointcloud_to_laserscan)
 
 
 
     # launchers
     # 頭部カメラの起動
-    head_camera = IncludeLaunchDescription(
+    head_camera = Node(
+        package='realsense2_camera',
+        executable='realsense2_camera_node',
+        name='d455',
+        parameters=[
+            camera_params,
+            {'camera_name': 'd455'}
+        ],
+        output='screen',
+        namespace='head_camera',
+        emulate_tty=True,
+        condition=IfCondition(use_camera)
+    )
+    head_camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             os.path.join(
-                get_package_share_directory('nakalab_realsense'),
-                'launch', 'd455_launch.py'
+                get_package_share_directory('realsense2_camera'),
+                'launch', 'rs_launch.py'
             )
         ]),
-        launch_arguments = {
-            'params_file' : camera_params
+        launch_arguments={
+            'camera_name': 'd455',
+            'camera_namespace': 'head_camera',
+            'rgb_camera.profile': "640,480,15",
+            'depth_module.profile': "640,480,15",
+            'pointcloud.enable': 'true',
         }.items()
     )
     # LiDAR センサーを起動する
@@ -143,21 +251,30 @@ def generate_launch_description():
                 get_package_share_directory('g1_description'),
                 'launch', 'display.launch.py'
             )
-        ])
+        ]),
+        launch_arguments={
+            'use_rviz': use_rviz,
+            'robot_description': robot_model
+        }.items()
     )
 
     ld.add_action(head_camera)
-    ld.add_action(lidar)
+    #ld.add_action(head_camera_launch)
+    #ld.add_action(lidar)
     ld.add_action(display)
 
 
     # 起動時にロボットが発話する
+    audio_path = os.path.join(
+        get_package_share_directory('erasers_g1_api'), 'config/unitree.wav'
+    )
     start_speech_cmd = ExecuteProcess(
         cmd=[
             'ros2', 'service', 'call',
             '/play_audio',
             'g1_srvs/srv/AudioClient',
-            ['{type: 0, text: "', start_message, '", audio_path: ""}']
+            #['{type: 0, text: "', start_message, '", audio_path: ""}']
+            ['{type: 1, text: "", audio_path: "', audio_path,'"}']
         ],
         output='screen'
     )
@@ -166,7 +283,7 @@ def generate_launch_description():
             target_action=audio_client,
             on_start=[
                 TimerAction(
-                    period=5.0,
+                    period=15.0,
                     actions=[start_speech_cmd]
                 )
             ]
@@ -175,6 +292,44 @@ def generate_launch_description():
 
     ld.add_action(speech_handler)
 
+    # コマンド経由で d455 を起動
+    launch_d455_cmd = ExecuteProcess(
+        cmd=[
+            'ros2', 'launch',
+            'realsense2_camera',
+            'rs_launch.py',
+            'camera_name:=d455',
+            'camera_namespace:=head_camera',
+            'rgb_camera.color_profile:=640x480x30',
+            'depth_module.depth_profile:=640x480x30',
+            #'pointcloud.enable:=true',
+            'pointcloud__neon_.enable:=true',
+        ],
+        output='screen'
+    )
+    enable_pointcloud_cmd = TimerAction(
+        period=3.0,
+        actions=[
+            ExecuteProcess(
+                cmd=['ros2', 'param', 'set', '/head_camera/d455', 'pointcloud__neon_.enable', 'true'],
+                output='screen'
+            )
+        ]
+    )
+    launch_d455_handler = RegisterEventHandler(
+        event_handler=OnProcessStart(
+            target_action=head_joints,
+            on_start=[
+                TimerAction(
+                    period=1.0,
+                    actions=[launch_d455_cmd, enable_pointcloud_cmd]
+                )
+            ]
+        )
+    )
+    #ld.add_action(launch_d455_handler)
+
+
 
     # 起動時に頭部カメラ初期位置に戻す
     start_init_head_cam_pose_cmd = ExecuteProcess(
@@ -182,7 +337,7 @@ def generate_launch_description():
             'ros2', 'service', 'call',
             '/move_servo',
             'g1_srvs/srv/MoveServo',
-            ['{pan: 0.0, tilt: 0.5}']
+            ['{pan: 0.0, tilt: 0.0}']
         ],
         output='screen'
     )
@@ -199,6 +354,31 @@ def generate_launch_description():
     )
 
     ld.add_action(init_head_cam_pose_handler)
+
+
+    # 起動時に手を握る
+    start_init_hand_pose_cmd = ExecuteProcess(
+        cmd=[
+            'ros2', 'service', 'call',
+            '/hand_command',
+            'amazing_hand_interfaces/srv/HandCommand',
+            ['{command: walk, hand: both}']
+        ],
+        output='screen'
+    )
+    init_hand_pose_handler = RegisterEventHandler(
+        event_handler=OnProcessStart(
+            target_action=audio_client,
+            on_start=[
+                TimerAction(
+                    period=5.0,
+                    actions=[start_init_hand_pose_cmd]
+                )
+            ]
+        )
+    )
+
+    ld.add_action(init_hand_pose_handler)
 
 
     # send launch description to ROS2

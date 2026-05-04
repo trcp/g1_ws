@@ -1,26 +1,25 @@
 /**:
   ros__parameters:
-    # Parameters that can be modified during runtime
-    depth_module.profile: "640,480,30"
-    depth_module.enable_auto_exposure: true
-    rgb_camera.profile: "640,480,30"
-    rgb_camera.enable_auto_exposure: true
+    rgb_camera.color_profile: 640x480x30
+    depth_module.depth_profile: 640x480x30
+
+    # Flags
     enable_depth: true
     enable_color: true
-    enable_infra1: true
-    enable_infra2: true
+    enable_infra1: false
+    enable_infra2: false
     enable_fisheye1: false
     enable_fisheye2: false
     enable_gyro: true
     enable_accel: true
     enable_pose: true
-    enable_sync: true
+    enable_sync: false
     tf_publish_rate: 0.0
 
     # Parameters that cannot be changed in runtime:
     serial_no: ""
     usb_port_id: ""
-    device_type': ""
+    device_type: ""
     reconnect_timeout: 6.0
     wait_for_device_timeout: -1.0
     rosbag_filename: ""
@@ -30,19 +29,18 @@
     publish_tf: true
     diagnostics_period: 0.0
 
-    # Post-Processing Filters 
+    # Post-Processing Filters
     align_depth.enable: true
-    colorizer.enable: trye
-    pointcloud.enable: false
-    pointcloud.stream_filter: 2
-    pointcloud.allow_no_texture_points: true
-    pointcloud.ordered_pc: false
-    pointcloud.stream_index_filter: 0
-    hdr_merge.enable: false
-    depth_module.exposure.1: 7500
-    depth_module.gain.1: 16
-    depth_module.exposure.2: 1
-    depth_module.gain.2: 16
+    colorizer:
+      enable: false\
+    pointcloud__neon_:
+      enable: true
+      stream_filter: 2
+      allow_no_texture_points: true
+      ordered_pc: true 
+      stream_index_filter: 0
+    hdr_merge:
+      enable: false
 
     # Other
     camera_name: "d455"

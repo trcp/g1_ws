@@ -16,7 +16,7 @@
   <depend>joint_state_publisher</depend>
   <depend>joint_state_publisher_gui</depend>
 
-  <depend>erasers_g1_common_cpp</depend>
+  <!--depend>erasers_g1_common_cpp</depend-->
 
   <export>
     <build_type>ament_cmake</build_type>

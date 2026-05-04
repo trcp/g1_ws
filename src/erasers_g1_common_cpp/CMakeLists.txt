@@ -10,13 +10,32 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(unitree_api REQUIRED)
 find_package(unitree_hg REQUIRED)
+find_package(ros_environment REQUIRED)
+
 find_package(unitree_go REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(urdf REQUIRED)
 find_package(g1_srvs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(interactive_markers REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
+find_package(ros_environment REQUIRED)
+find_package(control_msgs REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(pinocchio QUIET)
+
+if(NOT pinocchio_FOUND)
+  message(STATUS "Pinocchio not found via find_package, trying standard paths...")
+  set(PINOCCHIO_INCLUDE_DIRS /opt/ros/humble/include /usr/include/eigen3)
+  set(PINOCCHIO_LIBRARIES pinocchio)
+else()
+  message(STATUS "Found Pinocchio: ${pinocchio_VERSION}")
+endif()
+
 
 
 # cmd_vel
@@ -93,6 +112,117 @@ ament_target_dependencies(audio_client
     g1_srvs
 )
 
+# arm_joint_control
+add_executable(arm_joint_control src/arm_joint_control.cpp)
+target_include_directories(arm_joint_control PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(arm_joint_control
+    rclcpp
+    unitree_hg
+    unitree_api
+    sensor_msgs
+    urdf
+)
+
+# arm_endeffector_control
+add_executable(arm_endeffector_control src/arm_endeffector_control.cpp)
+target_include_directories(arm_endeffector_control PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_include_directories(arm_endeffector_control PUBLIC
+  ${PINOCCHIO_INCLUDE_DIRS}
+)
+
+target_link_libraries(arm_endeffector_control
+  ${PINOCCHIO_LIBRARIES}
+)
+
+ament_target_dependencies(arm_endeffector_control
+  rclcpp
+  unitree_go
+  unitree_api
+  unitree_hg
+  sensor_msgs
+  urdf
+  std_srvs
+  interactive_markers
+  tf2_geometry_msgs
+  tf2_ros
+  tf2
+)
+
+
+
+# emergency_stop
+add_executable(emergency_stop src/emergency_stop.cpp)
+ament_target_dependencies(emergency_stop
+    rclcpp
+    unitree_go
+    g1_srvs
+    sensor_msgs
+)
+
+# cartesian_trajectory_planner
+add_executable(cartesian_trajectory_planner src/cartesian_trajectory_planner.cpp)
+target_include_directories(cartesian_trajectory_planner PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${EIGEN3_INCLUDE_DIR}
+)
+ament_target_dependencies(cartesian_trajectory_planner 
+  rclcpp 
+  rclcpp_action
+  geometry_msgs 
+  tf2_ros 
+  tf2_geometry_msgs 
+  g1_srvs
+)
+
+# mic_server
+add_executable(mic_server src/mic_server.cpp)
+target_include_directories(mic_server PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(mic_server 
+  rclcpp 
+  std_msgs 
+  std_srvs
+  unitree_api
+  unitree_hg
+  g1_srvs
+)
+
+# vui_diagnostic
+add_executable(vui_diagnostic src/vui_diagnostic.cpp)
+target_include_directories(vui_diagnostic PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(vui_diagnostic
+    rclcpp
+    unitree_hg
+    unitree_api
+    g1_srvs
+)
+
+# camera_bridge
+add_executable(camera_bridge src/camera_bridge.cpp)
+ament_target_dependencies(camera_bridge
+    rclcpp
+    sensor_msgs
+    std_srvs
+)
+
+# fix_lidar_time
+add_executable(fix_lidar_time src/fix_lidar_time.cpp)
+ament_target_dependencies(fix_lidar_time
+    rclcpp
+    sensor_msgs
+)
 
 install(TARGETS
   cmd_vel
@@ -103,6 +233,13 @@ install(TARGETS
   scan_relay
   pcd_map_qos_connv
   audio_client
+  arm_joint_control
+  arm_endeffector_control
+  emergency_stop
+  cartesian_trajectory_planner
+  mic_server
+  vui_diagnostic
+  fix_lidar_time
   DESTINATION lib/${PROJECT_NAME}
 )
 install(

@@ -1,0 +1,5 @@
+string command
+string hand
+---
+bool success
+string message

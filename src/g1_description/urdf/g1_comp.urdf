@@ -18,6 +18,14 @@
     <child link="pelvis"/>
   </joint> -->
 
+  <link name="base_link"></link>
+
+  <joint name="base_link_to_pelvis" type="fixed">
+    <parent link="base_link"/>
+    <child link="pelvis"/>
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+  </joint>
+
   <link name="pelvis">
     <inertial>
       <origin xyz="0 0 -0.07605" rpy="0 0 0"/>
@@ -529,9 +537,15 @@
   <!-- mid360 -->
   <link name="mid360_link"></link>
   <joint name="mid360_joint" type="fixed">
-    <origin xyz="0.0002835 0.00003 0.41618" rpy="3.14 0.04014257279586953 0"/>
+    <origin xyz="0.0002835 0.00003 0.41618" rpy="0 0.04014257279586953 0"/>
     <parent link="torso_link"/>
     <child link="mid360_link"/>
+  </joint>
+  <link name="livox_frame"></link>
+  <joint name="livox_joint" type="fixed">
+    <origin xyz="0.0002835 0.00003 0.40618" rpy="3.14 0.04014257279586953 0"/>
+    <parent link="torso_link"/>
+    <child link="livox_frame"/>
   </joint>
 
   <!-- Arm -->
@@ -867,7 +881,7 @@
       <inertia ixx="0.0001232" ixy="-3.1E-08" ixz="3.1246E-05" iyy="0.000106321" iyz="-5E-09" izz="0.000194649"/>
     </inertial>
     <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0 0 0" rpy="0 -0.26 0"/>
       <geometry>
         <mesh filename="package://g1_description/meshes/d455_link.STL"/>
       </geometry>

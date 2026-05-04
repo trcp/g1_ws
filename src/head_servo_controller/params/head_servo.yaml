@@ -1,0 +1,17 @@
+head_servo_controller:
+  ros__parameters:
+    dx_path: "/dev/ttyCH341USB0"
+    pan_id: 1
+    tilt_id: 0
+    pan_home_pulse: 2411
+    tilt_home_pulse: 2216
+    pan_rad_offset: 0.0
+    tilt_rad_offset: 0.0
+    pan_dir: 1
+    tilt_dir: 1
+    pan_min_pulse: 0
+    pan_max_pulse: 4000
+    tilt_min_pulse: 1455
+    tilt_max_pulse: 4000
+    moving_speed: 60
+    calib_speed: 20
