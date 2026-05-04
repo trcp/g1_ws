@@ -19,6 +19,7 @@
   <exec_depend>nav2_map_server</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>
   <exec_depend>pointcloud_to_laserscan</exec_depend>
+  <exec_depend>obstacle_detection</exec_depend>
 
   <depend>nav2_bringup</depend>
 
