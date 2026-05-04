@@ -249,6 +249,7 @@ class G1Navigation:
         tolerance: float = 0.05,
         reference_frame: str = "map",
         wait: bool = True,
+        timeout: float = None,
     ) -> bool:
         """
         与えられた目標姿勢に基づいてロボットを自律移動させる．
@@ -264,6 +265,8 @@ class G1Navigation:
             pose が Pose 型の場合の基準フレーム。デフォルトは 'map'。
         wait : bool, optional
             移動完了まで処理をブロックするかどうか。デフォルトは True。
+        timeout : float, optional
+            ナビゲーションのタイムアウト時間(秒)。指定時間を超えた場合はキャンセルして False を返す。デフォルトは None (タイムアウトなし)。
 
         Returns
         -------
@@ -331,7 +334,19 @@ class G1Navigation:
             result_future = goal_handle.get_result_async()
 
             nav_success = False
+            start_time = time.time()
             while rclpy.ok() and not result_future.done():
+                if timeout is not None and timeout > 0:
+                    if time.time() - start_time > timeout:
+                        self.node.get_logger().warn(
+                            f"Navigation timed out after {timeout} seconds. Canceling goal."
+                        )
+                        cancel_future = goal_handle.cancel_goal_async()
+                        rclpy.spin_until_future_complete(
+                            self.node, cancel_future, timeout_sec=5.0
+                        )
+                        return False
+
                 rclpy.spin_once(self.node, timeout_sec=0.1)
 
                 if tolerance is not None:
@@ -482,6 +497,7 @@ class G1Navigation:
         tolerance: float = 0.05,
         reference_frame: str = "map",
         wait: bool = True,
+        timeout: float = None,
     ) -> bool:
         """
         基準フレームでの絶対座標を指定してロボットを自律移動させる．
@@ -501,6 +517,8 @@ class G1Navigation:
             座標系の基準フレーム。デフォルトは 'map'。
         wait : bool, optional
             移動完了まで処理をブロックするかどうか。デフォルトは True。
+        timeout : float, optional
+            ナビゲーションのタイムアウト時間(秒)。デフォルトは None (タイムアウトなし)。
 
         Returns
         -------
@@ -521,7 +539,7 @@ class G1Navigation:
         pose.pose.orientation.w = q[3]
 
         return self.move_to_pose(
-            pose, tolerance=tolerance, reference_frame=reference_frame, wait=wait
+            pose, tolerance=tolerance, reference_frame=reference_frame, wait=wait, timeout=timeout
         )
 
     def move_rel(
@@ -531,6 +549,7 @@ class G1Navigation:
         yaw: float = 0.0,
         tolerance: float = 0.05,
         wait: bool = True,
+        timeout: float = None,
     ) -> bool:
         """
         ロボットの現在の位置・姿勢からの相対座標で自律移動させる．
@@ -548,6 +567,8 @@ class G1Navigation:
             目標からの許容誤差半径(m)。指定値以内に到達すれば終了する。
         wait : bool, optional
             移動完了まで処理をブロックするかどうか。デフォルトは True。
+        timeout : float, optional
+            ナビゲーションのタイムアウト時間(秒)。デフォルトは None (タイムアウトなし)。
 
         Returns
         -------
@@ -574,6 +595,7 @@ class G1Navigation:
             tolerance=tolerance,
             reference_frame="map",
             wait=wait,
+            timeout=timeout,
         )
 
     def set_initialpose(self, pose, reference_frame: str = "map"):
