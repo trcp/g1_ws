@@ -1,17 +1,35 @@
+# head_servo_controller/params/head_servo.yaml
 head_servo_controller:
   ros__parameters:
+    # 通信設定
     dx_path: "/dev/ttyCH341USB0"
+    baudrate: 1000000
+    protocol_version: 2.0
+    
+    # servo 設定
     pan_id: 1
-    tilt_id: 0
-    pan_home_pulse: 2411
-    tilt_home_pulse: 2216
+    tilt_id: 0  # ※ ID:0 はブロードキャスト用。個別制御なら 1〜253 を推奨
+    
+    # Homing Offset 適用後は home_pulse=0, offset=0, dir=1 で統一
+    # 初回のみ manual_calibration 実行で EEPROM に自動設定
+    pan_home_pulse: 0
+    tilt_home_pulse: 0
     pan_rad_offset: 0.0
     tilt_rad_offset: 0.0
     pan_dir: 1
     tilt_dir: 1
+    
+    # 物理制限（pulse 単位、XL330: 0~4095）
     pan_min_pulse: 0
     pan_max_pulse: 4000
-    tilt_min_pulse: 1455
+    tilt_min_pulse: 1455  # 物理ストッパー考慮
     tilt_max_pulse: 4000
-    moving_speed: 60
-    calib_speed: 20
+    
+    # 動作パラメータ
+    moving_speed: 60       # Profile Velocity [pulse/s]
+    control_period_sec: 0.02  # 50Hz 制御ループ
+    vel_timeout_sec: 0.5   # 速度指令のタイムアウト
+    
+    # 安全設定
+    bus_watchdog_ms: 100   # 100ms 通信断で自動ストップ
+    use_sync_read: true    # GroupSyncRead 有効化
