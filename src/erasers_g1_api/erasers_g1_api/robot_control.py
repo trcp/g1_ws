@@ -192,7 +192,7 @@ class G1Navigation:
         )
         if not self.__action_client.wait_for_server(timeout_sec=wait_time):
             self.node.get_logger().fatal("Nav2 action server not available...")
-            raise RuntimeError("Nav2 action server not available")
+            #raise RuntimeError("Nav2 action server not available")
 
         # Initial pose publisher
         self.__initial_pose_pub = self.node.create_publisher(
@@ -966,15 +966,15 @@ class Grasp:
             py = oy - ny * pre_offset
             pz = oz + 0.15
 
-            # 姿勢 (AmazingHandのロール軸: Right=-1.57, Left=1.57)
-            roll = -1.57 if arm == "arm_right" else 1.57
+            # 姿勢 (AmazingHandのロール軸: Right=1.57, Left=-1.57)
+            roll = 1.57 if arm == "arm_right" else -1.57
             yaw = base_yaw
 
-            # A. Pre-grasp (到達可能性確認)
-            self.arm.node.get_logger().info(f"Step A: Pre-grasp move to {px:.3f}, {py:.3f}, {pz:.3f}")
-            # arm_left/arm_right グループは腰(waist_yaw)を含むため、こちらでIKを解く
-            if not self.arm.move_abs(px, py, pz, roll, pitch, yaw, planning_group=arm, tip_link=tip_link, position_only=True):
-                continue
+            # # A. Pre-grasp (到達可能性確認)
+            # self.arm.node.get_logger().info(f"Step A: Pre-grasp move to {px:.3f}, {py:.3f}, {pz:.3f}")
+            # # arm_left/arm_right グループは腰(waist_yaw)を含むため、こちらでIKを解く
+            # if not self.arm.move_abs(px, py, pz, roll, pitch, yaw, planning_group=arm, tip_link=tip_link, position_only=True):
+            #     continue
 
             # B. コリジョン一時無効化
             self.collision.allow_collision(tip_link, "all")
@@ -1055,13 +1055,31 @@ class ArmControl:
             self.node.get_logger().error("Hand Service Servers are not running ...")
             break
 
+        # upper body control
+        self.__ubc_cli = self.node.create_client(SetBool, "/enable_upper_body_control")
+        while not self.__ubc_cli.wait_for_service(timeout_sec=5.0):
+            self.node.get_logger().error("eR@sers G1 Service Servers are not running ...")
+            break
+
         # New Infrastructure
         self.collision = Collision(self.node)
         self.grasp_manager = Grasp(self, self.collision)
+    
+    def __send_ubc_req(self, req: SetBool.Request):
+        future = self.__ubc_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.node, future)
+        response: MoveServo.Response = future.result()
+        return response.success
 
     def __joint_state_callback(self, msg: JointState):
         for name, pos in zip(msg.name, msg.position):
             self.__joint_states[name] = pos
+    
+    def enable_upper_body_control(self, enable:bool=True):
+        req = SetBool.Request()
+        req.data = enable
+        return self.__send_ubc_req(req)
+
 
     def get_current_joints_pose(self, planning_group: str = "upper_body"):
         """

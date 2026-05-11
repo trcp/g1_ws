@@ -73,6 +73,7 @@ x-preferences: &preferences
     - DX_PATH="/dev/ttyCH341USB0"
     # 緊急停止ボタンの有効
     - USE_EMC=false
+    - GEMINI_API_KEY=${GEMINI_API_KEY}
   devices:
     - /dev:/dev
   volumes:
@@ -131,6 +132,7 @@ services:
         - PASSWORD
     <<: [*preferences, *gpu ]
     command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py & terminator\""
+    #command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py\""
   
   # =============
   # L4T 36.4

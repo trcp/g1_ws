@@ -34,16 +34,14 @@ MODEL_ID = "gemini-robotics-er-1.6-preview"
 class GeminiVLMState(smach.State):
     def __init__(self,
                  node: Node,
-                 tts_say: TTS.say,
                  model_id: str = MODEL_ID):
         
         smach.State.__init__(self,
                              outcomes=['success', 'failure'],
-                             input_keys=['prompt_message'],
-                             output_keys=[])
+                             input_keys=['prompt_message', 'ud_prompt'],
+                             output_keys=['result'])
         
         self.__node = node
-        self.__tts_say = tts_say
         self.__model_id = model_id
         self.__cv_bridge = CvBridge()
         self.__image = None
@@ -79,6 +77,7 @@ class GeminiVLMState(smach.State):
 
             # Gemini に投げる
             prompt_message = userdata.prompt_message + "\nin English."
+            ud_prompt_message = userdata.ud_prompt
             self.__node.get_logger().info("""
             ASK Gemini with image and text prompt...
             =========================================
@@ -86,20 +85,18 @@ class GeminiVLMState(smach.State):
             """%userdata.prompt_message)
             response = self.__gemini_client.models.generate_content(
                 model=self.__model_id,
-                contents=[prompt_message, pil_image]
+                contents=[prompt_message, ud_prompt_message, pil_image]
             )
             self.__node.get_logger().info("""
             Gemini response is received!
             =========================================
             message: %s
             """%response.text)
-            self.__tts_say(response.text)
-
+            userdata.result = response.text
             
             return 'success'
                                 
         except:
-            self.__tts_say('Error is occured in RoboticsERState')
             self.__node.get_logger().error('Error is occured in RoboticsERState\n%s'%traceback.format_exc())
             return 'failure'
 

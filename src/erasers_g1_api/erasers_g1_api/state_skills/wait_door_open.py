@@ -52,8 +52,8 @@ class WaitDoorOpen(smach.State):
             
             arr = np.array(msg.ranges)
             cen_ind = int(len(arr)/2)
-            start_ind = max(0, cen_ind - 50)
-            end_ind = min(len(arr), cen_ind + 50)
+            start_ind = max(0, cen_ind - 25)
+            end_ind = min(len(arr), cen_ind + 25)
             center_data = arr[start_ind:end_ind]
             valid_data = center_data[np.isfinite(center_data)]
             if len(valid_data) == 0:

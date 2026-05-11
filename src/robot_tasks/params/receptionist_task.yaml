@@ -3,5 +3,10 @@ receptionist_task:
     # 各ロケーション座標
     # ロケーション名: [x(m), y(m), yaw(rad)]
     locations:
-      entrance: [0.0, 0.0, 0.0]
-      living_room: [0.0, 0.0, 0.0]
+      entrance: [1.96, 0.0, 3.14]
+      living_room: [2.14, 3.2, -0.8]
+    
+    # 注文の品物とそれを表す単語のリスト
+    # オブジェクト名: [[日本語の単語, 英語の単語, その他フレーズ, ...], predict]
+    objects:
+      bag: [["bag"], 0.5]
