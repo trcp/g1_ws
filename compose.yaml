@@ -66,14 +66,18 @@ x-preferences: &preferences
     - LC_TIME
     - TZ=Asia/Tokyo
     - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-    - CYCLONEDDS_URI=file:///tmp/cyclonedds/cyclonedds.katana.xml
+    - CYCLONEDDS_URI=file:///tmp/cyclonedds/cyclonedds.g1.xml
     # Amazing Hand のデバイスパス
     - AH_PATH="/dev/ttyACM0"
     # 頭部カメラジョイントモーターのデバイスパス
     - DX_PATH="/dev/ttyCH341USB0"
     # 緊急停止ボタンの有効
+<<<<<<< HEAD
     - USE_EMC=false
     - GEMINI_API_KEY=${GEMINI_API_KEY}
+=======
+    - USE_EMC=true
+>>>>>>> f2124b89606c40f45315e93ae62511520e88542f
   devices:
     - /dev:/dev
   volumes:

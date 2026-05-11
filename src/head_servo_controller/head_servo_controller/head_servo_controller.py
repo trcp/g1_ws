@@ -1,468 +1,625 @@
+# src/head_servo_controller/head_servo_controller/head_servo_controller.py
+
 import sys
 import math
 import time
-import os
-import yaml
 import threading
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from std_msgs.msg import Float32, Int32
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Trigger
 from dynamixel_sdk import *
-from serial import SerialException
-
-# Import custom service
-from g1_srvs.srv import MoveServo
-
 
 # ==========================================
-#               Default Constants (Fallback)
+#               Dynamixel Constants
 # ==========================================
-DEFAULT_DEVICENAME = '/dev/ttyUSB0'
-DEFAULT_BAUDRATE   = 1000000
-PROTOCOL_VERSION   = 2.0
+PROTOCOL_VERSION = 2.0
 
-ADDR_OPERATING_MODE   = 11
-ADDR_TORQUE_ENABLE    = 64
-ADDR_PROFILE_VELOCITY = 112
-ADDR_GOAL_POSITION    = 116
-ADDR_PRESENT_LOAD     = 126
-ADDR_PRESENT_POSITION = 132
+# XL330/XC330 Control Table Addresses (Protocol 2.0)
+ADDR_OPERATING_MODE    = 11    # RW, 1 byte
+ADDR_TORQUE_ENABLE     = 64    # RW, 1 byte
+ADDR_BUS_WATCHDOG      = 98    # RW, 2 byte
+ADDR_PROFILE_VELOCITY  = 112   # RW, 4 byte
+ADDR_GOAL_POSITION     = 116   # RW, 4 byte
+ADDR_MOVING            = 122   # RO, 1 byte
+ADDR_MOVING_STATUS     = 123   # RO, 1 byte
+ADDR_PRESENT_POSITION  = 132   # RO, 4 byte
+ADDR_HOMING_OFFSET     = 20    # RW, 4 byte, EEPROM
+ADDR_CURRENT_LIMIT     = 38    # RW, 2 byte, EEPROM
+ADDR_PRESENT_CURRENT   = 126   # RO, 2 byte
+ADDR_PRESENT_VOLTAGE   = 144   # RO, 2 byte  ← [NEW]
+ADDR_PRESENT_TEMPERATURE = 146 # RO, 1 byte  ← [NEW]
+
+# Operating Modes
+OPMODE_CURRENT = 0
+OPMODE_VELOCITY = 1
+OPMODE_POSITION = 3
+
+# Torque values
+TORQUE_OFF = 0
+TORQUE_ON = 1
+
+# XL330/XC330 mechanical specs
+XL330_PULSE_PER_REV = 4096
+XL330_RAD_PER_PULSE = 2.0 * math.pi / XL330_PULSE_PER_REV
+
+# [FIX] XC330-M288: Current Limit unit = 2.69mA (NOT 1.17mA!)
+XC330_CURRENT_UNIT_mA = 2.69
+
+# Dynamixel Protocol 2.0 Error Codes (for debugging)
+DXL_ERRORS = {
+    0x01: "InputVoltage",
+    0x02: "HallSensor",
+    0x04: "Overheat",
+    0x08: "MotorShaft",
+    0x10: "ElectronicShock",
+    0x20: "ControlTable",
+    0x40: "Overload",
+}
+
+def decode_dxl_error(err_code: int) -> str:
+    """Decode Dynamixel hardware error code to human-readable string"""
+    if err_code == 0:
+        return "OK"
+    errors = [name for bit, name in DXL_ERRORS.items() if err_code & bit]
+    return f"{err_code}(0x{err_code:02X}): {', '.join(errors)}"
+
 
 class PanTiltNode(Node):
     def __init__(self):
         super().__init__('head_servo_controller')
-        
-        # Communication lock for thread-safety
+
         self.lock = threading.Lock()
-        
-        # Callback Group for concurrent execution
         self.callback_group = ReentrantCallbackGroup()
+
+        # ===== Parameter Declaration =====
+        self.declare_parameter('dx_path', '/dev/ttyUSB0')
+        self.declare_parameter('baudrate', 1000000)
+        self.declare_parameter('protocol_version', 2.0)
+        self.declare_parameter('pan_id', 1)
+        self.declare_parameter('tilt_id', 2)
+        self.declare_parameter('pan_home_pulse', 0)
+        self.declare_parameter('tilt_home_pulse', 0)
+        self.declare_parameter('pan_rad_offset', 0.0)
+        self.declare_parameter('tilt_rad_offset', 0.0)
+        self.declare_parameter('pan_dir', 1)
+        self.declare_parameter('tilt_dir', 1)
+        self.declare_parameter('pan_min_pulse', 0)
+        self.declare_parameter('pan_max_pulse', 4095)
+        self.declare_parameter('tilt_min_pulse', 0)
+        self.declare_parameter('tilt_max_pulse', 4095)
         
-        # Declare Parameters
-        self.dx_path = self.declare_parameter('dx_path', DEFAULT_DEVICENAME).value
-        self.pan_id = self.declare_parameter('pan_id', 1).value
-        self.tilt_id = self.declare_parameter('tilt_id', 0).value
-        self.pan_home_pulse = self.declare_parameter('pan_home_pulse', 2535).value
-        self.tilt_home_pulse = self.declare_parameter('tilt_home_pulse', 1895).value
-        self.pan_rad_offset = self.declare_parameter('pan_rad_offset', 0.0).value
-        self.tilt_rad_offset = self.declare_parameter('tilt_rad_offset', 0.0).value
-        self.pan_dir = self.declare_parameter('pan_dir', 1).value
-        self.tilt_dir = self.declare_parameter('tilt_dir', 1).value
-        self.pan_min_pulse = self.declare_parameter('pan_min_pulse', 0).value
-        self.pan_max_pulse = self.declare_parameter('pan_max_pulse', 4000).value
-        self.tilt_min_pulse = self.declare_parameter('tilt_min_pulse', 1455).value
-        self.tilt_max_pulse = self.declare_parameter('tilt_max_pulse', 4000).value
-        self.moving_speed = self.declare_parameter('moving_speed', 60).value
-        self.calib_speed = self.declare_parameter('calib_speed', 20).value
-        self.control_period_sec = self.declare_parameter('control_period_sec', 0.05).value
-        self.vel_timeout_sec = self.declare_parameter('vel_timeout_sec', 0.5).value
-        self.load_threshold = self.declare_parameter('load_threshold', 400).value
-        self.load_count_limit = self.declare_parameter('load_count_limit', 5).value
+        # [FIX] Conservative defaults for testing
+        self.declare_parameter('moving_speed', 300)
+        # [FIX] Current limit in mA (XC330: max recommended 2700mA)
+        self.declare_parameter('current_limit_mA', 1500)  # ← 安全値に引き下げ
+        
+        self.declare_parameter('control_period_sec', 0.02)
+        self.declare_parameter('vel_timeout_sec', 0.5)
+        self.declare_parameter('bus_watchdog_ms', 100)
+        self.declare_parameter('use_sync_read', True)
+        # [NEW] Enable hardware error monitoring
+        self.declare_parameter('monitor_hardware', True)
 
-        self.get_logger().info(f"--- Head Servo Parameters ---")
-        self.get_logger().info(f"dx_path: {self.dx_path}")
-        self.get_logger().info(f"pan_home_pulse: {self.pan_home_pulse}")
-        self.get_logger().info(f"tilt_home_pulse: {self.tilt_home_pulse} (Default: 1895)")
-        self.get_logger().info(f"pan_dir: {self.pan_dir}, tilt_dir: {self.tilt_dir}")
-        self.get_logger().info(f"------------------------------")
+        # ===== Load Parameters =====
+        self.dx_path = self.get_parameter('dx_path').value
+        self.baudrate = self.get_parameter('baudrate').value
+        self.pan_id = self.get_parameter('pan_id').value
+        self.tilt_id = self.get_parameter('tilt_id').value
+        self.pan_home_pulse = self.get_parameter('pan_home_pulse').value
+        self.tilt_home_pulse = self.get_parameter('tilt_home_pulse').value
+        self.pan_rad_offset = self.get_parameter('pan_rad_offset').value
+        self.tilt_rad_offset = self.get_parameter('tilt_rad_offset').value
+        self.pan_dir = self.get_parameter('pan_dir').value
+        self.tilt_dir = self.get_parameter('tilt_dir').value
+        self.pan_min_pulse = self.get_parameter('pan_min_pulse').value
+        self.pan_max_pulse = self.get_parameter('pan_max_pulse').value
+        self.tilt_min_pulse = self.get_parameter('tilt_min_pulse').value
+        self.tilt_max_pulse = self.get_parameter('tilt_max_pulse').value
+        
+        self.moving_speed = self.get_parameter('moving_speed').value
+        self.current_limit_mA = self.get_parameter('current_limit_mA').value
+        # [FIX] Correct unit conversion for XC330-M288
+        self.current_limit_units = max(1, min(1008, int(self.current_limit_mA / XC330_CURRENT_UNIT_mA)))
+        
+        self.control_period_sec = self.get_parameter('control_period_sec').value
+        self.vel_timeout_sec = self.get_parameter('vel_timeout_sec').value
+        self.bus_watchdog_ms = self.get_parameter('bus_watchdog_ms').value
+        self.use_sync_read = self.get_parameter('use_sync_read').value
+        self.monitor_hardware = self.get_parameter('monitor_hardware').value
 
+        self.get_logger().info(f"=== Head Servo Controller Initialized ===")
+        self.get_logger().info(f"Device: {self.dx_path}, Baud: {self.baudrate}")
+        self.get_logger().info(f"Pan ID: {self.pan_id}, Tilt ID: {self.tilt_id}")
+        self.get_logger().info(f"Profile Velocity: {self.moving_speed} pulse/s, Current Limit: {self.current_limit_mA} mA ({self.current_limit_units} units)")
+
+        # ===== State Variables =====
         self.target_pan_rad = 0.0
         self.target_tilt_rad = 0.0
         self.vel_cmd_pan = 0.0
         self.vel_cmd_tilt = 0.0
         self.last_vel_time = 0.0
         self.is_connected = False
+        self.has_homed = False
 
-        self.portHandler = PortHandler(self.get_parameter('dx_path').value)
+        # ===== Dynamixel SDK Setup =====
+        self.portHandler = PortHandler(self.dx_path)
         self.packetHandler = PacketHandler(PROTOCOL_VERSION)
+        self.groupSyncRead = None
 
+        # ===== Connection & Initialization =====
         self.try_connect()
 
-        self.pub_pan_raw = self.create_publisher(Int32, '/pan/present_position', 10)
-        self.pub_tilt_raw = self.create_publisher(Int32, '/tilt/present_position', 10)
+        # ===== ROS Publishers =====
         self.pub_joint_state = self.create_publisher(JointState, '/joint_states', 10)
 
-        self.create_subscription(Twist, '/servo_vel', self.vel_callback, 10, callback_group=self.callback_group)
-        self.create_subscription(JointState, '/upper_joints_control', self.joint_control_callback, 10, callback_group=self.callback_group)
-        
-        self.create_service(MoveServo, '/move_servo', self.move_servo_callback, callback_group=self.callback_group)
-        self.create_service(Trigger, '/calibrate_head', self.calibrate_callback, callback_group=self.callback_group)
-        
-        # Integrated Manual calibration service
-        self.create_service(Trigger, '/manual_calibration', self.manual_calibration_callback, callback_group=self.callback_group)
+        # ===== ROS Subscribers =====
+        self.create_subscription(
+            JointState, '/upper_joints_control',
+            self.joint_control_callback, 10,
+            callback_group=self.callback_group
+        )
+        self.create_subscription(
+            Twist, '/servo_vel',
+            self.vel_callback, 10,
+            callback_group=self.callback_group
+        )
 
-        self.timer = self.create_timer(self.get_parameter('control_period_sec').value, self.timer_callback, callback_group=self.callback_group)
+        # ===== ROS Services =====
+        self.create_service(
+            Trigger, '/calibrate_head',
+            self.calibrate_callback,
+            callback_group=self.callback_group
+        )
+
+        # ===== Timer =====
+        self.timer = self.create_timer(
+            self.control_period_sec, self.timer_callback,
+            callback_group=self.callback_group
+        )
+
+        self.get_logger().info("=== Ready ===")
 
     def try_connect(self):
+        """Initialize port, baudrate, and motor setup"""
         with self.lock:
-            dx_path = self.dx_path
-            self.get_logger().info(f"Connecting to {dx_path}...")
             try:
                 if self.portHandler.is_open:
                     self.portHandler.closePort()
+
+                if not self.portHandler.openPort():
+                    self.get_logger().error(f"Failed to open port: {self.dx_path}")
+                    return False
+
+                if not self.portHandler.setBaudRate(self.baudrate):
+                    self.get_logger().error(f"Failed to set baudrate: {self.baudrate}")
+                    return False
+
+                self.get_logger().info("Port opened. Initializing servos...")
                 
-                if self.portHandler.openPort():
-                    if self.portHandler.setBaudRate(DEFAULT_BAUDRATE):
-                        self.get_logger().info(f"Connected. Initializing motors...")
-                        pan_id = self.pan_id
-                        tilt_id = self.tilt_id
-                        if self.setup_motor_locked(pan_id, "Pan") and self.setup_motor_locked(tilt_id, "Tilt"):
-                            self.get_logger().info("Motors Ready!")
-                            self.is_connected = True
-                            return True
-                self.get_logger().error("Failed to open port or set baudrate.")
+                if not (self.setup_motor(self.pan_id, "Pan") and 
+                        self.setup_motor(self.tilt_id, "Tilt")):
+                    return False
+
+                # Setup Bus Watchdog for safety
+                for dxl_id, name in [(self.pan_id, "Pan"), (self.tilt_id, "Tilt")]:
+                    result, error = self.packetHandler.write2ByteTxRx(
+                        self.portHandler, dxl_id, ADDR_BUS_WATCHDOG,
+                        max(1, self.bus_watchdog_ms // 20)
+                    )
+                    if result != COMM_SUCCESS:
+                        self.get_logger().warn(f"[{name}] Bus Watchdog setup failed: result={result}")
+
+                # Re-initialize GroupSyncRead after successful connection
+                self.groupSyncRead = GroupSyncRead(
+                    self.portHandler, self.packetHandler,
+                    ADDR_PRESENT_POSITION, 4
+                )
+                self.groupSyncRead.addParam(self.pan_id)
+                self.groupSyncRead.addParam(self.tilt_id)
+
+                self.is_connected = True
+                self.get_logger().info("All motors ready!")
+                return True
+
             except Exception as e:
-                self.get_logger().error(f"Connection Exception: {e}")
-            
-            self.is_connected = False
+                self.get_logger().error(f"Connection error: {e}")
+                self.is_connected = False
+                return False
+
+    def setup_motor(self, dxl_id, name):
+        """Configure a single motor with hardware error checking"""
+        try:
+            # 1. Torque OFF
+            result, error = self.packetHandler.write1ByteTxRx(
+                self.portHandler, dxl_id, ADDR_TORQUE_ENABLE, TORQUE_OFF
+            )
+            if result != COMM_SUCCESS:
+                raise RuntimeError(f"Failed to disable torque: result={result}, err={decode_dxl_error(error)}")
+            time.sleep(0.01)
+
+            # [NEW] Check hardware status before configuration
+            if self.monitor_hardware:
+                voltage, res, err = self.packetHandler.read2ByteTxRx(
+                    self.portHandler, dxl_id, ADDR_PRESENT_VOLTAGE
+                )
+                if res == COMM_SUCCESS:
+                    # Voltage unit: 0.1V, so 50 = 5.0V
+                    self.get_logger().info(f"[{name}] Present Voltage: {voltage * 0.1:.1f}V")
+                    if voltage < 47 or voltage > 53:  # Outside 4.7V-5.3V
+                        self.get_logger().warn(f"[{name}] Voltage out of range! Check power supply.")
+                
+                temp, res, err = self.packetHandler.read1ByteTxRx(
+                    self.portHandler, dxl_id, ADDR_PRESENT_TEMPERATURE
+                )
+                if res == COMM_SUCCESS:
+                    self.get_logger().info(f"[{name}] Present Temperature: {temp}°C")
+                    if temp > 70:
+                        self.get_logger().warn(f"[{name}] Temperature high! Allow to cool.")
+
+            # 2. Set Operating Mode to Extended Position Control
+            result, error = self.packetHandler.write1ByteTxRx(
+                self.portHandler, dxl_id, ADDR_OPERATING_MODE, OPMODE_POSITION
+            )
+            if result != COMM_SUCCESS:
+                raise RuntimeError(f"Failed to set position mode: result={result}, err={decode_dxl_error(error)}")
+            time.sleep(0.01)
+
+            # 3. Set Profile Velocity
+            result, error = self.packetHandler.write4ByteTxRx(
+                self.portHandler, dxl_id, ADDR_PROFILE_VELOCITY, self.moving_speed
+            )
+            if result != COMM_SUCCESS:
+                raise RuntimeError(f"Failed to set profile velocity: result={result}, err={decode_dxl_error(error)}")
+            time.sleep(0.01)
+
+            # 4. Set Current Limit [FIX: correct unit conversion + safe default]
+            result, error = self.packetHandler.write2ByteTxRx(
+                self.portHandler, dxl_id, ADDR_CURRENT_LIMIT, self.current_limit_units
+            )
+            if result != COMM_SUCCESS:
+                self.get_logger().warn(f"[{name}] Failed to set current limit: result={result}, err={decode_dxl_error(error)}")
+            else:
+                actual_mA = self.current_limit_units * XC330_CURRENT_UNIT_mA
+                self.get_logger().info(f"[{name}] Current Limit set: {self.current_limit_units} units ≈ {actual_mA:.0f} mA")
+            time.sleep(0.01)
+
+            # 5. Torque ON
+            result, error = self.packetHandler.write1ByteTxRx(
+                self.portHandler, dxl_id, ADDR_TORQUE_ENABLE, TORQUE_ON
+            )
+            if result != COMM_SUCCESS:
+                raise RuntimeError(f"Failed to enable torque: result={result}, err={decode_dxl_error(error)}")
+            if error != 0:
+                self.get_logger().warn(f"[{name}] Torque ON returned error: {decode_dxl_error(error)}")
+                # Continue anyway - some errors may be transient
+
+            self.get_logger().info(f"[{name}] Setup complete. Torque ON.")
+            return True
+
+        except Exception as e:
+            self.get_logger().error(f"[{name}] Setup failed: {e}")
             return False
 
-    def setup_motor_locked(self, dxl_id, name):
-        try:
-            moving_speed = self.moving_speed
-            self.packetHandler.write1ByteTxRx(self.portHandler, dxl_id, ADDR_TORQUE_ENABLE, 0)
-            time.sleep(0.02)
-            self.packetHandler.write1ByteTxRx(self.portHandler, dxl_id, ADDR_OPERATING_MODE, 3)
-            time.sleep(0.02)
-            self.packetHandler.write4ByteTxRx(self.portHandler, dxl_id, ADDR_PROFILE_VELOCITY, moving_speed)
-            time.sleep(0.02)
-            res, err = self.packetHandler.write1ByteTxRx(self.portHandler, dxl_id, ADDR_TORQUE_ENABLE, 1)
-            if res == COMM_SUCCESS and err == 0:
-                self.get_logger().info(f"[{name}] Velocity Profile set to {moving_speed}. Torque ON.")
-                return True
-        except Exception:
-            pass
-        self.get_logger().warn(f"[{name}] Setup failed. Will retry.")
-        return False
-
     def set_torque(self, dxl_id, enable):
-        if not self.is_connected: return False
+        """Safely toggle torque with lock"""
+        if not self.is_connected:
+            return False
         with self.lock:
             try:
-                res, err = self.packetHandler.write1ByteTxRx(self.portHandler, dxl_id, ADDR_TORQUE_ENABLE, 1 if enable else 0)
-                return res == COMM_SUCCESS and err == 0
+                result, error = self.packetHandler.write1ByteTxRx(
+                    self.portHandler, dxl_id, ADDR_TORQUE_ENABLE,
+                    TORQUE_ON if enable else TORQUE_OFF
+                )
+                if error != 0:
+                    self.get_logger().debug(f"Torque toggle error for ID {dxl_id}: {decode_dxl_error(error)}")
+                return result == COMM_SUCCESS
             except Exception as e:
-                self.handle_disconnect(e)
-        return False
+                self.get_logger().error(f"Torque toggle failed: {e}")
+                self.is_connected = False
+                return False
 
-    def safe_read_pulse(self, dxl_id):
-        if not self.is_connected: return None
+    def read_positions_sync(self):
+        """Read present positions using GroupSyncRead"""
+        if not self.is_connected or self.groupSyncRead is None:
+            return None, None
+
         with self.lock:
             try:
-                pos, res, err = self.packetHandler.read4ByteTxRx(self.portHandler, dxl_id, ADDR_PRESENT_POSITION)
-                if res == COMM_SUCCESS:
-                    return pos
-            except Exception as e:
-                self.handle_disconnect(e)
-            return None
+                result = self.groupSyncRead.txRxPacket()
+                if result != COMM_SUCCESS:
+                    for dxl_id in [self.pan_id, self.tilt_id]:
+                        if not self.groupSyncRead.isAvailable(dxl_id, ADDR_PRESENT_POSITION, 4):
+                            self.get_logger().debug(f"SyncRead failed for ID {dxl_id}")
+                    return None, None
 
-    def safe_read_load(self, dxl_id):
-        if not self.is_connected: return 0
-        with self.lock:
-            try:
-                load, res, err = self.packetHandler.read2ByteTxRx(self.portHandler, dxl_id, ADDR_PRESENT_LOAD)
-                if res == COMM_SUCCESS:
-                    if load > 32767: load -= 65536
-                    return load
-            except Exception as e:
-                self.handle_disconnect(e)
-            return 0
+                pan_pulse = self.groupSyncRead.getData(
+                    self.pan_id, ADDR_PRESENT_POSITION, 4
+                )
+                tilt_pulse = self.groupSyncRead.getData(
+                    self.tilt_id, ADDR_PRESENT_POSITION, 4
+                )
+                return pan_pulse, tilt_pulse
 
-    def safe_write_pulse(self, dxl_id, pulse):
-        if not self.is_connected: return
-        pulse = int(pulse)
+            except Exception as e:
+                self.get_logger().error(f"SyncRead exception: {e}")
+                self.is_connected = False
+                return None, None
+
+    def write_position_pulse(self, dxl_id, pulse):
+        """Write goal position with limit clamping and error handling"""
+        if not self.is_connected:
+            return
+
+        original_pulse = pulse
         if dxl_id == self.pan_id:
-            pulse = max(self.pan_min_pulse, min(self.pan_max_pulse, pulse))
+            pulse = max(self.pan_min_pulse, min(self.pan_max_pulse, int(pulse)))
         elif dxl_id == self.tilt_id:
-            pulse = max(self.tilt_min_pulse, min(self.tilt_max_pulse, pulse))
+            pulse = max(self.tilt_min_pulse, min(self.tilt_max_pulse, int(pulse)))
         
-        with self.lock:
-            try:
-                self.packetHandler.write4ByteTxRx(self.portHandler, dxl_id, ADDR_GOAL_POSITION, pulse)
-            except Exception as e:
-                self.handle_disconnect(e)
-    
-    def set_profile_velocity(self, dxl_id, velocity):
-        if not self.is_connected: return
-        with self.lock:
-            try:
-                 self.packetHandler.write4ByteTxRx(self.portHandler, dxl_id, ADDR_PROFILE_VELOCITY, velocity)
-            except Exception as e:
-                self.handle_disconnect(e)
+        if pulse != original_pulse:
+            self.get_logger().debug(f"[ID:{dxl_id}] Pulse clamped: {original_pulse} → {pulse}")
 
-    def handle_disconnect(self, e):
-        if self.is_connected:
-            self.get_logger().error(f"CRITICAL: Communication lost! ({e})")
-            self.is_connected = False
+        with self.lock:
+            try:
+                result, error = self.packetHandler.write4ByteTxRx(
+                    self.portHandler, dxl_id, ADDR_GOAL_POSITION, pulse
+                )
+                if result != COMM_SUCCESS:
+                    self.get_logger().warn(f"Write COMM error for ID {dxl_id}: result={result}")
+                elif error != 0:
+                    # [IMPORTANT] Log hardware errors for debugging
+                    self.get_logger().warn(f"Write hardware error for ID {dxl_id}: {decode_dxl_error(error)}")
+                    # Don't set is_connected=False for hardware errors - may be transient
+                else:
+                    self.get_logger().debug(f"[ID:{dxl_id}] Position written: {pulse} pulse")
+            except Exception as e:
+                self.get_logger().error(f"Write exception: {e}")
+                self.is_connected = False
 
     def rad_to_pulse(self, rad, home_pulse, direction, offset_rad):
-        return int(home_pulse + ((rad - offset_rad) * (4096.0 / (2 * math.pi)) * direction))
+        """Convert radian to pulse count"""
+        raw_pulse = (rad - offset_rad) / XL330_RAD_PER_PULSE
+        return int(home_pulse + raw_pulse * direction)
 
     def pulse_to_rad(self, pulse, home_pulse, direction, offset_rad):
-        return (pulse - home_pulse) * (2 * math.pi / 4096.0) * direction + offset_rad
+        """Convert pulse count to radian"""
+        raw_rad = (pulse - home_pulse) * XL330_RAD_PER_PULSE * direction
+        return raw_rad + offset_rad
 
-    def write_position_rad(self, dxl_id, rad, home_pulse, direction, offset_rad):
-        pulse = self.rad_to_pulse(rad, home_pulse, direction, offset_rad)
-        self.safe_write_pulse(dxl_id, pulse)
+    def publish_joint_state(self, pan_pulse, tilt_pulse):
+        """Publish current joint state to /joint_states"""
+        if pan_pulse is None or tilt_pulse is None:
+            return
 
-    def publish_current_state(self):
-        pan_id = self.pan_id
-        tilt_id = self.tilt_id
-        pan_pulse = self.safe_read_pulse(pan_id)
-        tilt_pulse = self.safe_read_pulse(tilt_id)
+        pan_rad = self.pulse_to_rad(
+            pan_pulse, self.pan_home_pulse, self.pan_dir, self.pan_rad_offset
+        )
+        tilt_rad = self.pulse_to_rad(
+            tilt_pulse, self.tilt_home_pulse, self.tilt_dir, self.tilt_rad_offset
+        )
 
-        if pan_pulse is not None and tilt_pulse is not None:
-            self.pub_pan_raw.publish(Int32(data=pan_pulse))
-            self.pub_tilt_raw.publish(Int32(data=tilt_pulse))
-            joint_state = JointState()
-            joint_state.header.stamp = self.get_clock().now().to_msg()
-            joint_state.name = ["xl330_joint", "d455_joint"]
-            p_rad = self.pulse_to_rad(pan_pulse, self.pan_home_pulse, self.pan_dir, self.pan_rad_offset)
-            t_rad = self.pulse_to_rad(tilt_pulse, self.tilt_home_pulse, self.tilt_dir, self.tilt_rad_offset)
-            joint_state.position = [p_rad, t_rad]
-            self.pub_joint_state.publish(joint_state)
-            return p_rad, t_rad
-        return None, None
+        joint_state = JointState()
+        joint_state.header.stamp = self.get_clock().now().to_msg()
+        joint_state.name = ["xl330_pan_joint", "xl330_tilt_joint"]
+        joint_state.position = [pan_rad, tilt_rad]
+        joint_state.velocity = []
+        joint_state.effort = []
+        self.pub_joint_state.publish(joint_state)
 
-    def execute_calibration_for_joint(self, dxl_id, name):
-        self.get_logger().info(f"Calibrating {name} (ID: {dxl_id})...")
-        calib_speed = self.calib_speed
-        load_threshold = self.load_threshold
-        load_count_limit = self.load_count_limit
-        
-        if not self.is_connected: return 0, 0
-        self.set_profile_velocity(dxl_id, calib_speed)
-        self.get_logger().info(f"[{name}] Searching Upper Limit...")
-        self.safe_write_pulse(dxl_id, 4000) 
-        
-        overload_count = 0
-        detected_upper_pulse = 4000
-        for _ in range(200):
-            if not self.is_connected: break
-            load = abs(self.safe_read_load(dxl_id))
-            pos  = self.safe_read_pulse(dxl_id)
-            if pos is None: continue
-            if load > load_threshold:
-                overload_count += 1
-            else:
-                overload_count = 0
-            if overload_count > load_count_limit:
-                detected_upper_pulse = pos
-                self.get_logger().info(f"[{name}] Upper Limit Detected at {pos} (Load: {load})")
-                self.safe_write_pulse(dxl_id, pos)
-                break
-            time.sleep(0.05)
-            
-        if not self.is_connected: return 0, 0
-        time.sleep(1.0)
-        self.safe_write_pulse(dxl_id, detected_upper_pulse - 200)
-        time.sleep(2.0)
-        
-        self.get_logger().info(f"[{name}] Searching Lower Limit...")
-        self.safe_write_pulse(dxl_id, 100)
-        overload_count = 0
-        detected_lower_pulse = 0
-        for _ in range(200):
-            if not self.is_connected: break
-            load = abs(self.safe_read_load(dxl_id))
-            pos  = self.safe_read_pulse(dxl_id)
-            if pos is None: continue
-            if load > load_threshold:
-                overload_count += 1
-            else:
-                overload_count = 0
-            if overload_count > load_count_limit:
-                detected_lower_pulse = pos
-                self.get_logger().info(f"[{name}] Lower Limit Detected at {pos} (Load: {load})")
-                self.safe_write_pulse(dxl_id, pos)
-                break
-            time.sleep(0.05)
-            
-        self.set_profile_velocity(dxl_id, self.moving_speed)
-        center = int((detected_upper_pulse + detected_lower_pulse) / 2)
-        self.safe_write_pulse(dxl_id, center)
-        return detected_lower_pulse, detected_upper_pulse
+    # ===== Callbacks =====
 
-    def calibrate_callback(self, request, response):
-        if not self.is_connected:
-            response.success = False
-            response.message = "Motor not connected"
-            return response
-        try:
-            tilt_min, tilt_max = self.execute_calibration_for_joint(self.get_parameter('tilt_id').value, "Tilt")
-            if not self.is_connected: raise RuntimeError("Lost connection during Tilt calibration")
-            pan_min, pan_max = self.execute_calibration_for_joint(self.get_parameter('pan_id').value, "Pan")
-            if not self.is_connected: raise RuntimeError("Lost connection during Pan calibration")
-            
-            response.success = True
-            response.message = f"Tilt [{tilt_min}:{tilt_max}], Pan [{pan_min}:{pan_max}]"
-        except Exception as e:
-            response.success = False
-            response.message = f"Calibration failed: {e}"
-        return response
-
-    def manual_calibration_callback(self, request, response):
-        if not self.is_connected:
-            response.success = False
-            response.message = "Motor not connected"
-            return response
-        
-        self.get_logger().info("Manual Calibration: Torque OFF. You have 15 seconds to adjust the head.")
-        pan_id = self.pan_id
-        tilt_id = self.tilt_id
-        
-        # Torque OFF
-        self.set_torque(pan_id, False)
-        self.set_torque(tilt_id, False)
-        
-        # Wait 15 seconds
-        time.sleep(15.0)
-        
-        if not self.is_connected:
-            response.success = False
-            response.message = "Connection lost during manual calibration"
-            return response
-
-        self.get_logger().info("Manual Calibration: Time is up. Fixing position...")
-        pan_pos = self.safe_read_pulse(pan_id)
-        tilt_pos = self.safe_read_pulse(tilt_id)
-        
-        if pan_pos is None or tilt_pos is None:
-            response.success = False
-            response.message = "Failed to read final position"
-            # Try to turn torque back on anyway for safety
-            self.set_torque(pan_id, True)
-            self.set_torque(tilt_id, True)
-            return response
-        
-        # Update parameters in memory
-        self.set_parameters([
-            Parameter('pan_home_pulse', Parameter.Type.INTEGER, pan_pos),
-            Parameter('tilt_home_pulse', Parameter.Type.INTEGER, tilt_pos),
-            Parameter('pan_rad_offset', Parameter.Type.DOUBLE, 0.0),
-            Parameter('tilt_rad_offset', Parameter.Type.DOUBLE, 0.0)
-        ])
-        
-        # Torque ON
-        self.set_torque(pan_id, True)
-        self.set_torque(tilt_id, True)
-        
-        # Maintain current position
-        self.safe_write_pulse(pan_id, pan_pos)
-        self.safe_write_pulse(tilt_id, tilt_pos)
-        
-        # Update internal variables to reflect new calibration
-        self.pan_home_pulse = pan_pos
-        self.tilt_home_pulse = tilt_pos
-        self.pan_rad_offset = 0.0
-        self.tilt_rad_offset = 0.0
-        
-        self.target_pan_rad = 0.0
-        self.target_tilt_rad = 0.0
-        
-        result_msg = f"Calibration Finished. New zero points: Pan={pan_pos}, Tilt={tilt_pos}. Please update YAML manually."
-        self.get_logger().info(result_msg)
-        response.success = True
-        response.message = result_msg
-        return response
-
-    def move_servo_callback(self, request, response):
-        target_pan = request.pan
-        target_tilt = request.tilt
-        self.get_logger().info(f"MoveServo: Pan={target_pan:.2f}, Tilt={target_tilt:.2f}")
-        self.target_pan_rad = target_pan
-        self.target_tilt_rad = target_tilt
-        
-        pan_id = self.pan_id
-        tilt_id = self.tilt_id
-        
-        self.write_position_rad(pan_id, target_pan, self.pan_home_pulse, self.pan_dir, self.pan_rad_offset)
-        self.write_position_rad(tilt_id, target_tilt, self.tilt_home_pulse, self.tilt_dir, self.tilt_rad_offset)
-        
-        success = self.wait_for_both_arrival(target_pan, target_tilt)
-        response.success = success
-        return response
-
-    def wait_for_both_arrival(self, target_pan, target_tilt):
-        start_time = time.time()
-        while (time.time() - start_time) < 5.0:
-            if not self.is_connected: return False
-            curr_pan, curr_tilt = self.publish_current_state()
-            if curr_pan is not None and curr_tilt is not None:
-                offset_pan = self.pan_rad_offset
-                offset_tilt = self.tilt_rad_offset
-                err_pan = abs(target_pan - (curr_pan - offset_pan))
-                err_tilt = abs(target_tilt - (curr_tilt - offset_tilt))
-                if err_pan < 0.08 and err_tilt < 0.08:
-                    return True
-            time.sleep(0.05)
-        return False
-
-    def vel_callback(self, msg):
+    def vel_callback(self, msg: Twist):
+        """Velocity command callback"""
         self.vel_cmd_pan = msg.angular.z
         self.vel_cmd_tilt = msg.angular.y
         self.last_vel_time = time.time()
 
-    def joint_control_callback(self, msg):
+    def joint_control_callback(self, msg: JointState):
+        """Position command via JointState message"""
+        updated = False
         for i, name in enumerate(msg.name):
-            if name == "xl330_joint":
+            if name == "xl330_pan_joint" and i < len(msg.position):
                 self.target_pan_rad = msg.position[i]
-                self.last_vel_time = 0.0 
-            elif name == "d455_joint":
+                updated = True
+            elif name == "xl330_tilt_joint" and i < len(msg.position):
                 self.target_tilt_rad = msg.position[i]
-                self.last_vel_time = 0.0
-        if self.is_connected:
-             self.write_position_rad(self.pan_id, self.target_pan_rad, self.pan_home_pulse, self.pan_dir, self.pan_rad_offset)
-             self.write_position_rad(self.tilt_id, self.target_tilt_rad, self.tilt_home_pulse, self.tilt_dir, self.tilt_rad_offset)
+                updated = True
+        
+        if updated:
+            self.last_vel_time = 0.0
+
+    def calibrate_callback(self, request, response):
+        """Manual calibration service"""
+        if not self.is_connected:
+            response.success = False
+            response.message = "Motors not connected"
+            return response
+
+        self.get_logger().info("=== Manual Calibration Started ===")
+        self.get_logger().info("Step 1: Torque OFF. Position head FORWARD within 15 seconds.")
+        
+        self.set_torque(self.pan_id, False)
+        self.set_torque(self.tilt_id, False)
+        time.sleep(0.1)
+        time.sleep(15.0)
+
+        if not self.is_connected:
+            response.success = False
+            response.message = "Connection lost during calibration"
+            return response
+
+        self.get_logger().info("Step 2: Reading current positions as new zero points...")
+        
+        pan_pulse, tilt_pulse = self.read_positions_sync()
+        if pan_pulse is None or tilt_pulse is None:
+            response.success = False
+            response.message = "Failed to read positions"
+            self.set_torque(self.pan_id, True)
+            self.set_torque(self.tilt_id, True)
+            return response
+
+        self.get_logger().info(f"Step 3: Writing Homing Offset to EEPROM...")
+        
+        success = True
+        for dxl_id, name, current_pulse in [
+            (self.pan_id, "Pan", pan_pulse),
+            (self.tilt_id, "Tilt", tilt_pulse)
+        ]:
+            old_offset, res, err = self.packetHandler.read4ByteTxRx(
+                self.portHandler, dxl_id, ADDR_HOMING_OFFSET
+            )
+            if res != COMM_SUCCESS:
+                self.get_logger().warn(f"[{name}] Failed to read old offset")
+                old_offset = 0
+            
+            new_offset = old_offset - current_pulse
+            
+            self.packetHandler.write1ByteTxRx(
+                self.portHandler, dxl_id, ADDR_TORQUE_ENABLE, TORQUE_OFF
+            )
+            time.sleep(0.01)
+            
+            res, err = self.packetHandler.write4ByteTxRx(
+                self.portHandler, dxl_id, ADDR_HOMING_OFFSET, new_offset
+            )
+            if res != COMM_SUCCESS or err != 0:
+                self.get_logger().error(f"[{name}] Failed to write Homing Offset: {decode_dxl_error(err)}")
+                success = False
+            else:
+                self.get_logger().info(f"[{name}] Homing Offset updated: {old_offset} → {new_offset}")
+            
+            time.sleep(0.01)
+            self.packetHandler.write1ByteTxRx(
+                self.portHandler, dxl_id, ADDR_TORQUE_ENABLE, TORQUE_ON
+            )
+
+        if not success:
+            response.success = False
+            response.message = "Failed to write Homing Offset to EEPROM"
+            return response
+
+        self.set_parameters([
+            Parameter('pan_home_pulse', Parameter.Type.INTEGER, 0),
+            Parameter('tilt_home_pulse', Parameter.Type.INTEGER, 0),
+        ])
+        self.pan_home_pulse = 0
+        self.tilt_home_pulse = 0
+
+        self.get_logger().info("Step 4: Rebooting servos to apply changes...")
+        self.packetHandler.reboot(self.portHandler, self.pan_id)
+        self.packetHandler.reboot(self.portHandler, self.tilt_id)
+        time.sleep(1.0)
+
+        self.setup_motor(self.pan_id, "Pan")
+        self.setup_motor(self.tilt_id, "Tilt")
+
+        self.target_pan_rad = 0.0
+        self.target_tilt_rad = 0.0
+        self.has_homed = True
+
+        response.success = True
+        response.message = "Calibration complete!"
+        return response
 
     def timer_callback(self):
+        """Main control loop"""
         if not self.is_connected:
             self.try_connect()
             return
-        
+
         try:
-            vel_timeout = self.vel_timeout_sec
-            control_period = self.control_period_sec
+            if not self.has_homed:
+                if not hasattr(self, '_startup_homing_init'):
+                    pan_pulse, tilt_pulse = self.read_positions_sync()
+                    if pan_pulse is None or tilt_pulse is None:
+                        return
+                    
+                    self.target_pan_rad = self.pulse_to_rad(
+                        pan_pulse, self.pan_home_pulse, self.pan_dir, self.pan_rad_offset
+                    )
+                    self.target_tilt_rad = self.pulse_to_rad(
+                        tilt_pulse, self.tilt_home_pulse, self.tilt_dir, self.tilt_rad_offset
+                    )
+                    self._startup_homing_init = True
+                    self.get_logger().info("Soft homing: moving to neutral position...")
+                
+                step_rad = 0.5 * self.control_period_sec
+                dp = 0.0 - self.target_pan_rad
+                dt = 0.0 - self.target_tilt_rad
+                
+                if abs(dp) < step_rad and abs(dt) < step_rad:
+                    self.target_pan_rad = 0.0
+                    self.target_tilt_rad = 0.0
+                    self.has_homed = True
+                    self.last_vel_time = 0.0
+                    self.get_logger().info("Soft homing complete. Ready for commands.")
+                else:
+                    self.target_pan_rad += max(-step_rad, min(step_rad, dp))
+                    self.target_tilt_rad += max(-step_rad, min(step_rad, dt))
+                
+                self.write_position_pulse(self.pan_id, self.rad_to_pulse(
+                    self.target_pan_rad, self.pan_home_pulse, self.pan_dir, self.pan_rad_offset))
+                self.write_position_pulse(self.tilt_id, self.rad_to_pulse(
+                    self.target_tilt_rad, self.tilt_home_pulse, self.tilt_dir, self.tilt_rad_offset))
+                
+                pan_pulse, tilt_pulse = self.read_positions_sync()
+                self.publish_joint_state(pan_pulse, tilt_pulse)
+                return
+
+            # Normal operation
+            if (time.time() - self.last_vel_time) < self.vel_timeout_sec:
+                self.target_pan_rad += self.vel_cmd_pan * self.control_period_sec
+                self.target_tilt_rad += self.vel_cmd_tilt * self.control_period_sec
             
-            if (time.time() - self.last_vel_time) < vel_timeout:
-                self.target_pan_rad  += self.vel_cmd_pan  * control_period
-                self.target_tilt_rad += self.vel_cmd_tilt * control_period
-                self.write_position_rad(self.pan_id, self.target_pan_rad, self.pan_home_pulse, self.pan_dir, self.pan_rad_offset)
-                self.write_position_rad(self.tilt_id, self.target_tilt_rad, self.tilt_home_pulse, self.tilt_dir, self.tilt_rad_offset)
+            pan_pulse = self.rad_to_pulse(
+                self.target_pan_rad, self.pan_home_pulse, self.pan_dir, self.pan_rad_offset)
+            tilt_pulse = self.rad_to_pulse(
+                self.target_tilt_rad, self.tilt_home_pulse, self.tilt_dir, self.tilt_rad_offset)
             
-            self.publish_current_state()
+            self.write_position_pulse(self.pan_id, pan_pulse)
+            self.write_position_pulse(self.tilt_id, tilt_pulse)
+
+            pan_pulse, tilt_pulse = self.read_positions_sync()
+            self.publish_joint_state(pan_pulse, tilt_pulse)
+
         except Exception as e:
-            self.handle_disconnect(e)
+            self.get_logger().error(f"Control loop error: {e}", stack_info=True)
+            self.is_connected = False
 
     def __del__(self):
+        """Cleanup"""
         try:
             if self.is_connected:
-                self.packetHandler.write1ByteTxRx(self.portHandler, self.pan_id, ADDR_TORQUE_ENABLE, 0)
-                self.packetHandler.write1ByteTxRx(self.portHandler, self.tilt_id, ADDR_TORQUE_ENABLE, 0)
-            self.portHandler.closePort()
+                self.set_torque(self.pan_id, False)
+                self.set_torque(self.tilt_id, False)
+            if self.portHandler.is_open:
+                self.portHandler.closePort()
         except:
             pass
+
 
 def main(args=None):
     rclpy.init(args=args)
     node = PanTiltNode()
+    
     executor = MultiThreadedExecutor()
     executor.add_node(node)
+    
     try:
         executor.spin()
     except KeyboardInterrupt:
-        pass
+        node.get_logger().info("Shutting down...")
     except Exception as e:
-        print(f"Node crashed with exception: {e}", file=sys.stderr)
+        node.get_logger().error(f"Fatal error: {e}", stack_info=True)
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

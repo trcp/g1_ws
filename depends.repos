@@ -10,65 +10,31 @@ repositories:
         url: https://github.com/unitreerobotics/unitree_sdk2.git
         version: main
 
-    # livox pkgs
-    livox_ros_driver2:
-        type: git
-        url: https://github.com/Livox-SDK/livox_ros_driver2.git
-        version: master
-
-    Livox-SDK2:
-        type: git
-        url: https://github.com/Livox-SDK/Livox-SDK2.git
-        version: master
-    
     # nakatogawa packages
     nakalab_realsense:
         type: git
         url: https://github.com/GAI-313/nakalab_realsense.git
         version: main
-    
+
+    # for Temporary Subscriber util
     rclpy_util:
         type: git
         url: https://github.com/GAI-313/rclpy_util.git
         version: main
 
-    # FAST-LIO
-    #fast_lio:
-    #    type: git
-    #    url: https://github.com/Ericsii/FAST_LIO_ROS2.git
-    #    version: ros2
-        
-    #fast_lio/include/ikd-Tree:
-    #    type: git
-    #    url: https://github.com/hku-mars/ikd-Tree.git
-    #    version: fast_lio
-
-    # DLIO
-    #direct_lidar_inertial_odometry:
-    #    type: git
-    #    url: https://github.com/vectr-ucla/direct_lidar_inertial_odometry.git
-    #    version: feature/ros2
-
-    # pointclod_to_2dmap
-    #pointcloud_to_2dmap:
-    #    type: git
-    #    url: https://github.com/koide3/pointcloud_to_2dmap.git
-    #    version: master
-    
-    # lidar localization
-    # {pcl_localization_ros2}
-    #lidar_localization_ros2: 
-    #    type: git
-    #    url: https://github.com/rsasaki0109/lidar_localization_ros2.git
-    #    version: humble
-
-    #ndt_omap_ros2: 
-    #    type: git
-    #    url: https://github.com/rsasaki0109/ndt_omp_ros2.git
-    #    version: humble
-
-    # emcl2
+    # 2D localization
     emcl2:
         type: git
         url: https://github.com/GAI-313/emcl2_for_kachaka.git
         version: main
+
+    # 3D Localization
+    lidar_localization_ros2:
+        type: git
+        url: https://github.com/rsasaki0109/lidar_localization_ros2.git
+        version: main
+
+    ndt_omp_ros2:
+        type: git
+        url: https://github.com/rsasaki0109/ndt_omp_ros2.git
+        version: humble

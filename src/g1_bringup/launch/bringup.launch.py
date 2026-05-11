@@ -164,11 +164,6 @@ def generate_launch_description():
         executable='joy_node',
         namespace='emc'
     )
-    # LiDAR センサーの時刻を修正するノード
-    fix_lidar_time = Node(
-        package="erasers_g1_common_cpp",
-        executable="fix_lidar_time",
-    )
 
     ld.add_action(loco_service_client)
     ld.add_action(audio_client)
@@ -182,8 +177,7 @@ def generate_launch_description():
     ld.add_action(amazing_hand)
     ld.add_action(emergency_stop)
     ld.add_action(mic_server)
-    ld.add_action(emc_joy_node)
-    ld.add_action(fix_lidar_time)
+    #ld.add_action(emc_joy_node)
 
 
     pointcloud_to_laserscan = Node(
@@ -196,7 +190,8 @@ def generate_launch_description():
             {'use_sim_time': False},
         ],
         remappings=[
-            ('cloud_in', '/utlidar/cloud_livox_mid360_fixed'),
+            #('cloud_in', '/utlidar/cloud_livox_mid360_fixed'),
+            ('cloud_in', '/utlidar/cloud_livox_mid360'),
             ('scan', '/scan'),
         ],
     )
@@ -264,12 +259,16 @@ def generate_launch_description():
 
 
     # 起動時にロボットが発話する
+    audio_path = os.path.join(
+        get_package_share_directory('erasers_g1_api'), 'config/unitree.wav'
+    )
     start_speech_cmd = ExecuteProcess(
         cmd=[
             'ros2', 'service', 'call',
             '/play_audio',
             'g1_srvs/srv/AudioClient',
-            ['{type: 0, text: "', start_message, '", audio_path: ""}']
+            #['{type: 0, text: "', start_message, '", audio_path: ""}']
+            ['{type: 1, text: "", audio_path: "', audio_path,'"}']
         ],
         output='screen'
     )
