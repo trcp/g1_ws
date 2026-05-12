@@ -562,7 +562,7 @@ private:
       pose_out.y = tf.transform.translation.y;
       return true;
     } catch (const tf2::TransformException & ex) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+      RCLCPP_WARN_THROTTLE(get_logger(), const_cast<rclcpp::Clock&>(*get_clock()), 2000,
         "TF lookup %s -> %s failed: %s",
         map_frame_.c_str(), robot_base_frame_.c_str(), ex.what());
       return false;
@@ -583,7 +583,7 @@ private:
       sin_r = std::sin(yaw);
       return true;
     } catch (const tf2::TransformException & ex) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 3000,
+      RCLCPP_WARN_THROTTLE(get_logger(), const_cast<rclcpp::Clock&>(*get_clock()), 3000,
         "get_transform %s -> %s failed: %s",
         from_frame.c_str(), to_frame.c_str(), ex.what());
       return false;
