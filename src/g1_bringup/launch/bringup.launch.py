@@ -212,7 +212,8 @@ def generate_launch_description():
         output='screen',
         namespace='head_camera',
         emulate_tty=True,
-        condition=IfCondition(use_camera)
+        # condition=IfCondition(use_camera)
+        condition=IfCondition("true")
     )
     head_camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
