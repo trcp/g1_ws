@@ -1,0 +1,115 @@
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='false',
+            description='Use simulation clock',
+        ),
+
+        # --- GlobalCostmapNode / LocalCostmapNode ---
+        DeclareLaunchArgument(
+            'obstacle_threshold',
+            default_value='50',
+            description='Occupancy value >= this is treated as obstacle',
+        ),
+        DeclareLaunchArgument(
+            'footprint',
+            default_value='0.4,0.3',
+            description='Robot footprint: radius [m], rectangle length,width [m], or vertices [x1,y1,...]',
+        ),
+        DeclareLaunchArgument(
+            'clearance',
+            default_value='0.1',
+            description='Extra clearance beyond robot body [m]',
+        ),
+
+        # --- LocalCostmapNode ---
+        DeclareLaunchArgument(
+            'lidar_topic',
+            default_value='/points',
+            description='3D LiDAR PointCloud2 topic',
+        ),
+        DeclareLaunchArgument(
+            'local_costmap_frame',
+            default_value='odom',
+            description='Fixed frame for the local costmap (rolling window)',
+        ),
+        DeclareLaunchArgument(
+            'local_robot_base_frame',
+            default_value='base_footprint',
+            description='Robot base frame for local costmap TF lookup',
+        ),
+        DeclareLaunchArgument(
+            'local_resolution',
+            default_value='0.05',
+            description='Local costmap grid resolution [m/cell]',
+        ),
+        DeclareLaunchArgument(
+            'local_width',
+            default_value='4.0',
+            description='Local costmap width centred on robot [m]',
+        ),
+        DeclareLaunchArgument(
+            'local_height',
+            default_value='4.0',
+            description='Local costmap height centred on robot [m]',
+        ),
+        DeclareLaunchArgument(
+            'min_obstacle_height',
+            default_value='0.1',
+            description='Min point height above robot base treated as obstacle [m]',
+        ),
+        DeclareLaunchArgument(
+            'max_obstacle_height',
+            default_value='2.0',
+            description='Max point height above robot base treated as obstacle [m]',
+        ),
+        DeclareLaunchArgument(
+            'min_sensor_range',
+            default_value='0.5',
+            description='Min distance from sensor origin to accept a point [m] (LiDAR dead zone)',
+        ),
+
+        # GlobalCostmapNode: /map2d -> /global_costmap
+        Node(
+            package='machida_navigation',
+            executable='costmap_node',
+            name='costmap_node',
+            output='screen',
+            parameters=[{
+                'use_sim_time':       LaunchConfiguration('use_sim_time'),
+                'obstacle_threshold': LaunchConfiguration('obstacle_threshold'),
+                'footprint':          LaunchConfiguration('footprint'),
+                'clearance':          LaunchConfiguration('clearance'),
+            }],
+        ),
+
+        # LocalCostmapNode: PointCloud2 -> /local_costmap
+        Node(
+            package='machida_navigation',
+            executable='local_costmap_node',
+            name='local_costmap_node',
+            output='screen',
+            parameters=[{
+                'use_sim_time':          LaunchConfiguration('use_sim_time'),
+                'lidar_topic':           LaunchConfiguration('lidar_topic'),
+                'local_costmap_frame':   LaunchConfiguration('local_costmap_frame'),
+                'robot_base_frame':      LaunchConfiguration('local_robot_base_frame'),
+                'resolution':            LaunchConfiguration('local_resolution'),
+                'local_width':           LaunchConfiguration('local_width'),
+                'local_height':          LaunchConfiguration('local_height'),
+                'min_obstacle_height':   LaunchConfiguration('min_obstacle_height'),
+                'max_obstacle_height':   LaunchConfiguration('max_obstacle_height'),
+                'min_sensor_range':      LaunchConfiguration('min_sensor_range'),
+                'footprint':             LaunchConfiguration('footprint'),
+                'clearance':             LaunchConfiguration('clearance'),
+                'obstacle_threshold':    LaunchConfiguration('obstacle_threshold'),
+            }],
+        ),
+    ])
