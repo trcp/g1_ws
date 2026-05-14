@@ -89,7 +89,7 @@ services:
           - GLIM_CUDA_VERSION=12.6
           - USERNAME=${USER}
           - GROUPNAME=${USER}
-          - PASSWORD
+          - PASSWORD=123
           - UID=1000
           - GID=1000
     group_add:
@@ -125,8 +125,8 @@ services:
       - /tmp/.X11-unix/:/tmp/.X11-unix
       - /tmp/.docker.xauth:/tmp/.docker.xauth
       - $HOME/.Xauthority/:/root/.Xauthority
-    #command: '/bin/bash -ci " ros2 launch g1_bringup bringup.launch.py use_camera:=true"'
-    command: '/bin/bash -ci "terminator"'
+    command: '/bin/bash -ci " ros2 launch g1_bringup bringup.launch.py use_camera:=true"'
+    #command: '/bin/bash -ci "terminator"'
 
   # =============
   # Katana PC 用

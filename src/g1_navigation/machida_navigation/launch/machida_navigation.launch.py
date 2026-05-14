@@ -1,16 +1,202 @@
 #!/usr/bin/env python3
 
 import os
+import tempfile
+from pathlib import Path
+
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
+from launch.actions import (
+    DeclareLaunchArgument,
+    GroupAction,
+    IncludeLaunchDescription,
+    LogInfo,
+    OpaqueFunction,
+    SetEnvironmentVariable,
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 from launch_ros.actions import Node, SetParameter
+
+
+def _as_optional_bool(value: str):
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    if normalized in ('1', 'true', 'yes', 'on'):
+        return True
+    if normalized in ('0', 'false', 'no', 'off'):
+        return False
+    raise RuntimeError(f'Invalid boolean launch argument value: {value}')
+
+
+def _as_optional_float(value: str):
+    normalized = value.strip()
+    if not normalized:
+        return None
+    return float(normalized)
+
+
+def _rewrite_localization_params(
+    localization_param_file: str,
+    pcd_map_path: str,
+    set_initial_pose,
+    initial_pose_values: dict,
+    enable_timer_publishing,
+    pose_publish_frequency,
+):
+    should_rewrite = (
+        bool(pcd_map_path)
+        or set_initial_pose is not None
+        or enable_timer_publishing is not None
+        or pose_publish_frequency is not None
+    )
+    if not should_rewrite:
+        return localization_param_file
+
+    with Path(localization_param_file).open('r', encoding='utf-8') as stream:
+        params = yaml.safe_load(stream)
+
+    ros_params = params['/**']['ros__parameters']
+    if pcd_map_path:
+        ros_params['map_path'] = pcd_map_path
+    if set_initial_pose is not None:
+        ros_params['set_initial_pose'] = bool(set_initial_pose)
+        if set_initial_pose:
+            ros_params.update(initial_pose_values)
+    if enable_timer_publishing is not None:
+        ros_params['enable_timer_publishing'] = bool(enable_timer_publishing)
+    if pose_publish_frequency is not None:
+        ros_params['pose_publish_frequency'] = float(pose_publish_frequency)
+
+    fd, rewritten_path = tempfile.mkstemp(prefix='machida_lidar_localization_', suffix='.yaml')
+    os.close(fd)
+    with Path(rewritten_path).open('w', encoding='utf-8') as stream:
+        yaml.safe_dump(params, stream, sort_keys=False)
+    return rewritten_path
+
+
+def _start_lidar_localization(context, *args, **kwargs):
+    global_frame_id = LaunchConfiguration('map_frame').perform(context)
+    odom_frame_id = LaunchConfiguration('odom_frame').perform(context)
+    base_frame_id = LaunchConfiguration('localization_base_frame').perform(context)
+    odom_topic = LaunchConfiguration('odom_topic').perform(context)
+
+    initial_pose_values = {
+        'initial_pose_x': float(LaunchConfiguration('initial_pose_x').perform(context)),
+        'initial_pose_y': float(LaunchConfiguration('initial_pose_y').perform(context)),
+        'initial_pose_z': float(LaunchConfiguration('initial_pose_z').perform(context)),
+        'initial_pose_qx': float(LaunchConfiguration('initial_pose_qx').perform(context)),
+        'initial_pose_qy': float(LaunchConfiguration('initial_pose_qy').perform(context)),
+        'initial_pose_qz': float(LaunchConfiguration('initial_pose_qz').perform(context)),
+        'initial_pose_qw': float(LaunchConfiguration('initial_pose_qw').perform(context)),
+    }
+
+    if _as_optional_bool(LaunchConfiguration('use_odom_localization_demo').perform(context)):
+        return [
+            LogInfo(
+                msg=(
+                    'Using odom localization demo backend with '
+                    f'{global_frame_id}->{odom_frame_id} and {odom_topic}'
+                )
+            ),
+            Node(
+                package='lidar_localization_ros2',
+                executable='publish_pose_from_odom.py',
+                name='pose_from_odom_publisher',
+                output='screen',
+                parameters=[{
+                    'odom_topic': odom_topic,
+                    'pose_topic': '/localization/pose_with_covariance',
+                    'global_frame_id': global_frame_id,
+                    'odom_frame_id': odom_frame_id,
+                    'base_frame_id': base_frame_id,
+                    **initial_pose_values,
+                }],
+            ),
+        ]
+
+    package_share = get_package_share_directory('lidar_localization_ros2')
+    localization_launch = os.path.join(
+        package_share,
+        'launch',
+        'nav2_lidar_localization.launch.py',
+    )
+
+    localization_param_dir = LaunchConfiguration('localization_param_dir').perform(context)
+    pcd_map_path = LaunchConfiguration('pcd_map_path').perform(context).strip()
+    set_initial_pose = _as_optional_bool(LaunchConfiguration('set_initial_pose').perform(context))
+    enable_timer_publishing = _as_optional_bool(
+        LaunchConfiguration('localizer_enable_timer_publishing').perform(context)
+    )
+    pose_publish_frequency = _as_optional_float(
+        LaunchConfiguration('localizer_pose_publish_frequency').perform(context)
+    )
+
+    effective_localization_params = _rewrite_localization_params(
+        localization_param_file=localization_param_dir,
+        pcd_map_path=pcd_map_path,
+        set_initial_pose=set_initial_pose,
+        initial_pose_values=initial_pose_values,
+        enable_timer_publishing=enable_timer_publishing,
+        pose_publish_frequency=pose_publish_frequency,
+    )
+
+    actions = []
+    if pcd_map_path:
+        actions.append(LogInfo(msg=f'Using pointcloud map override: {pcd_map_path}'))
+    if set_initial_pose is True:
+        actions.append(
+            LogInfo(
+                msg=(
+                    'Using initial pose override: '
+                    f"({initial_pose_values['initial_pose_x']}, "
+                    f"{initial_pose_values['initial_pose_y']}, "
+                    f"{initial_pose_values['initial_pose_z']})"
+                )
+            )
+        )
+
+    actions.append(
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(localization_launch),
+            launch_arguments={
+                'localization_param_dir': effective_localization_params,
+                'use_sim_time': LaunchConfiguration('use_sim_time').perform(context),
+                'enable_map_odom_tf': LaunchConfiguration(
+                    'localizer_enable_map_odom_tf'
+                ).perform(context),
+                'global_frame_id': global_frame_id,
+                'odom_frame_id': odom_frame_id,
+                'base_frame_id': base_frame_id,
+                'cloud_topic': LaunchConfiguration('cloud_topic').perform(context),
+                'twist_topic': LaunchConfiguration('twist_topic').perform(context),
+                'imu_topic': LaunchConfiguration('imu_topic').perform(context),
+                'publish_lidar_tf': LaunchConfiguration('publish_lidar_tf').perform(context),
+                'lidar_frame_id': LaunchConfiguration('lidar_frame_id').perform(context),
+                'lidar_tf_x': LaunchConfiguration('lidar_tf_x').perform(context),
+                'lidar_tf_y': LaunchConfiguration('lidar_tf_y').perform(context),
+                'lidar_tf_z': LaunchConfiguration('lidar_tf_z').perform(context),
+                'lidar_tf_roll': LaunchConfiguration('lidar_tf_roll').perform(context),
+                'lidar_tf_pitch': LaunchConfiguration('lidar_tf_pitch').perform(context),
+                'lidar_tf_yaw': LaunchConfiguration('lidar_tf_yaw').perform(context),
+                'publish_imu_tf': LaunchConfiguration('publish_imu_tf').perform(context),
+                'imu_frame_id': LaunchConfiguration('imu_frame_id').perform(context),
+                'imu_tf_x': LaunchConfiguration('imu_tf_x').perform(context),
+                'imu_tf_y': LaunchConfiguration('imu_tf_y').perform(context),
+                'imu_tf_z': LaunchConfiguration('imu_tf_z').perform(context),
+                'imu_tf_roll': LaunchConfiguration('imu_tf_roll').perform(context),
+                'imu_tf_pitch': LaunchConfiguration('imu_tf_pitch').perform(context),
+                'imu_tf_yaw': LaunchConfiguration('imu_tf_yaw').perform(context),
+            }.items(),
+        )
+    )
+    return actions
 
 
 def generate_launch_description():
@@ -24,12 +210,6 @@ def generate_launch_description():
         'nav2_ndt_g1.yaml',
     )
 
-    localization_launch = os.path.join(
-        get_package_share_directory('lidar_localization_ros2'),
-        'launch',
-        'nav2_navigation.launch.py',
-    )
-
     use_sim_time = LaunchConfiguration('use_sim_time')
     autostart = LaunchConfiguration('autostart')
     launch_map_server = LaunchConfiguration('launch_map_server')
@@ -38,20 +218,38 @@ def generate_launch_description():
     map_dir = LaunchConfiguration('map_dir')
     map_name = LaunchConfiguration('map_name')
     map_yaml_file = [map_dir, '/', map_name, '.yaml']
-    localization_param_dir = LaunchConfiguration('localization_param_dir')
     pcd_map_path = [map_dir, '/', map_name, '.pcd']
     cloud_topic = LaunchConfiguration('cloud_topic')
     pointcloud_topic = LaunchConfiguration('pointcloud_topic')
     imu_topic = LaunchConfiguration('imu_topic')
     twist_topic = LaunchConfiguration('twist_topic')
     odom_topic = LaunchConfiguration('odom_topic')
+    cmd_vel_topic = LaunchConfiguration('cmd_vel_topic')
 
     map_frame = LaunchConfiguration('map_frame')
     odom_frame = LaunchConfiguration('odom_frame')
     localization_base_frame = LaunchConfiguration('localization_base_frame')
     robot_base_frame = LaunchConfiguration('robot_base_frame')
-    lidar_frame_id = LaunchConfiguration('lidar_frame_id')
-    imu_frame_id = LaunchConfiguration('imu_frame_id')
+    publish_localizer_pose_odom = LaunchConfiguration('publish_localizer_pose_odom')
+    publish_identity_odom = LaunchConfiguration('publish_identity_odom')
+    identity_odom_rate_hz = LaunchConfiguration('identity_odom_rate_hz')
+    publish_twist_odom = LaunchConfiguration('publish_twist_odom')
+    twist_odom_max_dt_sec = LaunchConfiguration('twist_odom_max_dt_sec')
+    publish_cmd_vel_odom = LaunchConfiguration('publish_cmd_vel_odom')
+    cmd_vel_odom_rate_hz = LaunchConfiguration('cmd_vel_odom_rate_hz')
+    enable_reinitialization_supervisor = LaunchConfiguration('enable_reinitialization_supervisor')
+    reinitialization_supervisor_use_latest_pose = LaunchConfiguration(
+        'reinitialization_supervisor_use_latest_pose'
+    )
+    reinitialization_supervisor_publish_count = LaunchConfiguration(
+        'reinitialization_supervisor_publish_count'
+    )
+    reinitialization_supervisor_publish_interval_sec = LaunchConfiguration(
+        'reinitialization_supervisor_publish_interval_sec'
+    )
+    reinitialization_supervisor_cooldown_sec = LaunchConfiguration(
+        'reinitialization_supervisor_cooldown_sec'
+    )
 
     declarations = [
         DeclareLaunchArgument('use_sim_time', default_value='false'),
@@ -80,6 +278,11 @@ def generate_launch_description():
             'localization_param_dir',
             default_value=default_localization_param_dir,
             description='Parameter file for lidar_localization_ros2.',
+        ),
+        DeclareLaunchArgument(
+            'pcd_map_path',
+            default_value=pcd_map_path,
+            description='PointCloud map for lidar_localization_ros2.',
         ),
         DeclareLaunchArgument(
             'cloud_topic',
@@ -121,7 +324,19 @@ def generate_launch_description():
         DeclareLaunchArgument('lidar_frame_id', default_value='livox_frame'),
         DeclareLaunchArgument('imu_frame_id', default_value='livox_frame'),
         DeclareLaunchArgument('publish_lidar_tf', default_value='false'),
+        DeclareLaunchArgument('lidar_tf_x', default_value='0.0'),
+        DeclareLaunchArgument('lidar_tf_y', default_value='0.0'),
+        DeclareLaunchArgument('lidar_tf_z', default_value='0.0'),
+        DeclareLaunchArgument('lidar_tf_roll', default_value='0.0'),
+        DeclareLaunchArgument('lidar_tf_pitch', default_value='0.0'),
+        DeclareLaunchArgument('lidar_tf_yaw', default_value='0.0'),
         DeclareLaunchArgument('publish_imu_tf', default_value='false'),
+        DeclareLaunchArgument('imu_tf_x', default_value='0.0'),
+        DeclareLaunchArgument('imu_tf_y', default_value='0.0'),
+        DeclareLaunchArgument('imu_tf_z', default_value='0.0'),
+        DeclareLaunchArgument('imu_tf_roll', default_value='0.0'),
+        DeclareLaunchArgument('imu_tf_pitch', default_value='0.0'),
+        DeclareLaunchArgument('imu_tf_yaw', default_value='0.0'),
         DeclareLaunchArgument('set_initial_pose', default_value='true'),
         DeclareLaunchArgument('initial_pose_x', default_value='0.0'),
         DeclareLaunchArgument('initial_pose_y', default_value='0.0'),
@@ -130,7 +345,18 @@ def generate_launch_description():
         DeclareLaunchArgument('initial_pose_qy', default_value='0.0'),
         DeclareLaunchArgument('initial_pose_qz', default_value='0.0'),
         DeclareLaunchArgument('initial_pose_qw', default_value='1.0'),
+        DeclareLaunchArgument('use_odom_localization_demo', default_value='false'),
         DeclareLaunchArgument('enable_reinitialization_supervisor', default_value='true'),
+        DeclareLaunchArgument('reinitialization_supervisor_use_latest_pose', default_value='false'),
+        DeclareLaunchArgument('reinitialization_supervisor_publish_count', default_value='1'),
+        DeclareLaunchArgument(
+            'reinitialization_supervisor_publish_interval_sec',
+            default_value='0.2',
+        ),
+        DeclareLaunchArgument(
+            'reinitialization_supervisor_cooldown_sec',
+            default_value='15.0',
+        ),
         DeclareLaunchArgument('localizer_enable_map_odom_tf', default_value='true'),
         DeclareLaunchArgument('localizer_enable_timer_publishing', default_value='true'),
         DeclareLaunchArgument('localizer_pose_publish_frequency', default_value='10.0'),
@@ -146,7 +372,9 @@ def generate_launch_description():
             description='Publish rate for replay-safe identity odom TF.',
         ),
         DeclareLaunchArgument('publish_twist_odom', default_value='false'),
+        DeclareLaunchArgument('twist_odom_max_dt_sec', default_value='0.5'),
         DeclareLaunchArgument('publish_cmd_vel_odom', default_value='false'),
+        DeclareLaunchArgument('cmd_vel_odom_rate_hz', default_value='20.0'),
         DeclareLaunchArgument('obstacle_threshold', default_value='50'),
         DeclareLaunchArgument(
             'footprint',
@@ -189,51 +417,98 @@ def generate_launch_description():
         DeclareLaunchArgument('max_angular_acceleration', default_value='2.0'),
     ]
 
-    localization = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(localization_launch),
+    localization = GroupAction(
         condition=IfCondition(launch_localization),
-        launch_arguments={
-            'launch_nav2': 'false',
-            'use_sim_time': use_sim_time,
-            'autostart': autostart,
-            'localization_param_dir': localization_param_dir,
-            'pcd_map_path': pcd_map_path,
-            'cloud_topic': cloud_topic,
-            'pointcloud_topic': pointcloud_topic,
-            'imu_topic': imu_topic,
-            'twist_topic': twist_topic,
-            'odom_topic': odom_topic,
-            'global_frame_id': map_frame,
-            'odom_frame_id': odom_frame,
-            'base_frame_id': localization_base_frame,
-            'publish_lidar_tf': LaunchConfiguration('publish_lidar_tf'),
-            'lidar_frame_id': lidar_frame_id,
-            'publish_imu_tf': LaunchConfiguration('publish_imu_tf'),
-            'imu_frame_id': imu_frame_id,
-            'set_initial_pose': LaunchConfiguration('set_initial_pose'),
-            'initial_pose_x': LaunchConfiguration('initial_pose_x'),
-            'initial_pose_y': LaunchConfiguration('initial_pose_y'),
-            'initial_pose_z': LaunchConfiguration('initial_pose_z'),
-            'initial_pose_qx': LaunchConfiguration('initial_pose_qx'),
-            'initial_pose_qy': LaunchConfiguration('initial_pose_qy'),
-            'initial_pose_qz': LaunchConfiguration('initial_pose_qz'),
-            'initial_pose_qw': LaunchConfiguration('initial_pose_qw'),
-            'enable_reinitialization_supervisor': LaunchConfiguration(
-                'enable_reinitialization_supervisor'
+        actions=[
+            Node(
+                package='lidar_localization_ros2',
+                executable='publish_odom_from_localization.py',
+                name='odom_from_localization_publisher',
+                output='screen',
+                condition=IfCondition(publish_localizer_pose_odom),
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'pose_topic': '/localization/pose_with_covariance',
+                    'odom_topic': odom_topic,
+                    'odom_frame_id': odom_frame,
+                    'base_frame_id': localization_base_frame,
+                    'publish_tf': True,
+                }],
             ),
-            'localizer_enable_map_odom_tf': LaunchConfiguration('localizer_enable_map_odom_tf'),
-            'localizer_enable_timer_publishing': LaunchConfiguration(
-                'localizer_enable_timer_publishing'
+            Node(
+                package='lidar_localization_ros2',
+                executable='publish_identity_odom.py',
+                name='identity_odom_publisher',
+                output='screen',
+                condition=IfCondition(publish_identity_odom),
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'odom_topic': odom_topic,
+                    'odom_frame_id': odom_frame,
+                    'base_frame_id': localization_base_frame,
+                    'rate_hz': identity_odom_rate_hz,
+                    'publish_tf': True,
+                }],
             ),
-            'localizer_pose_publish_frequency': LaunchConfiguration(
-                'localizer_pose_publish_frequency'
+            Node(
+                package='lidar_localization_ros2',
+                executable='publish_odom_from_twist.py',
+                name='twist_odom_publisher',
+                output='screen',
+                condition=IfCondition(publish_twist_odom),
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'twist_topic': twist_topic,
+                    'odom_topic': odom_topic,
+                    'odom_frame_id': odom_frame,
+                    'base_frame_id': localization_base_frame,
+                    'max_dt_sec': twist_odom_max_dt_sec,
+                    'publish_tf': True,
+                }],
             ),
-            'publish_localizer_pose_odom': LaunchConfiguration('publish_localizer_pose_odom'),
-            'publish_identity_odom': LaunchConfiguration('publish_identity_odom'),
-            'identity_odom_rate_hz': LaunchConfiguration('identity_odom_rate_hz'),
-            'publish_twist_odom': LaunchConfiguration('publish_twist_odom'),
-            'publish_cmd_vel_odom': LaunchConfiguration('publish_cmd_vel_odom'),
-        }.items(),
+            Node(
+                package='lidar_localization_ros2',
+                executable='publish_cmd_vel_odom.py',
+                name='cmd_vel_odom_publisher',
+                output='screen',
+                condition=IfCondition(publish_cmd_vel_odom),
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'cmd_vel_topic': cmd_vel_topic,
+                    'odom_topic': odom_topic,
+                    'odom_frame_id': odom_frame,
+                    'base_frame_id': localization_base_frame,
+                    'rate_hz': cmd_vel_odom_rate_hz,
+                    'publish_tf': True,
+                }],
+            ),
+            Node(
+                package='lidar_localization_ros2',
+                executable='republish_initialpose_on_reinit.py',
+                name='reinitialization_supervisor',
+                output='screen',
+                condition=IfCondition(enable_reinitialization_supervisor),
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'request_topic': '/reinitialization_requested',
+                    'initialpose_topic': '/initialpose',
+                    'pose_topic': '/localization/pose_with_covariance',
+                    'global_frame_id': map_frame,
+                    'use_latest_pose': reinitialization_supervisor_use_latest_pose,
+                    'publish_count': reinitialization_supervisor_publish_count,
+                    'publish_interval_sec': reinitialization_supervisor_publish_interval_sec,
+                    'republish_cooldown_sec': reinitialization_supervisor_cooldown_sec,
+                    'initial_pose_x': LaunchConfiguration('initial_pose_x'),
+                    'initial_pose_y': LaunchConfiguration('initial_pose_y'),
+                    'initial_pose_z': LaunchConfiguration('initial_pose_z'),
+                    'initial_pose_qx': LaunchConfiguration('initial_pose_qx'),
+                    'initial_pose_qy': LaunchConfiguration('initial_pose_qy'),
+                    'initial_pose_qz': LaunchConfiguration('initial_pose_qz'),
+                    'initial_pose_qw': LaunchConfiguration('initial_pose_qw'),
+                }],
+            ),
+            OpaqueFunction(function=_start_lidar_localization),
+        ],
     )
 
     map_server = Node(

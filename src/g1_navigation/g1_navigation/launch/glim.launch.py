@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, RegisterEventHandler
-from launch.event_handlers import OnShutdown
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
+from launch.conditions import IfCondition, UnlessCondition
 
 from ament_index_python.packages import get_package_share_directory
 import os
@@ -14,7 +14,7 @@ import struct
 import sys
 
 
-DUMP_DIR = '/tmp/dump'
+DEFAULT_DUMP_DIR = '/tmp/dump'
 MAP_DIR = os.path.expanduser('~/colcon_ws/map')
 IDENTITY = [
     [1.0, 0.0, 0.0, 0.0],
@@ -86,13 +86,15 @@ def iter_submap_points(submap_dir):
 
 
 def collect_points():
-    if not os.path.isdir(DUMP_DIR):
+    dump_dir = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else DEFAULT_DUMP_DIR
+
+    if not os.path.isdir(dump_dir):
         return []
 
     submap_dirs = [
-        os.path.join(DUMP_DIR, name)
-        for name in sorted(os.listdir(DUMP_DIR))
-        if name.isdigit() and os.path.isdir(os.path.join(DUMP_DIR, name))
+        os.path.join(dump_dir, name)
+        for name in sorted(os.listdir(dump_dir))
+        if name.isdigit() and os.path.isdir(os.path.join(dump_dir, name))
     ]
 
     points = []
@@ -128,7 +130,8 @@ def write_pcd(points, path):
 def main():
     points = collect_points()
     if not points:
-        print(f'No GLIM dump points found under {DUMP_DIR}')
+        dump_dir = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] else DEFAULT_DUMP_DIR
+        print(f'No GLIM dump points found under {dump_dir}')
         return
 
     stem = map_stem()
@@ -145,13 +148,16 @@ if __name__ == '__main__':
 GLIM_WRAPPER_SCRIPT = r'''
 set -u
 
-CONFIG_PATH="$1"
-USE_SIM_TIME="$2"
-MAP_NAME="$3"
-MIN_HEIGHT="$4"
-MAX_HEIGHT="$5"
+MODE="$1"
+CONFIG_PATH="$2"
+USE_SIM_TIME="$3"
+MAP_NAME="$4"
+MIN_HEIGHT="$5"
+MAX_HEIGHT="$6"
+EDITED_DUMP_DIR="${7:-}"
 MAP_DIR="$HOME/colcon_ws/map"
 POINTCLOUD_TO_2DMAP="$HOME/colcon_ws/build/pointcloud_to_2dmap/pointcloud_to_2dmap"
+RECENT_FILES="/tmp/tmp_recent_files.ini"
 
 export DISPLAY=:1001
 
@@ -166,7 +172,11 @@ map_stem() {
 }
 
 save_dump_to_pcd() {
-  python3 -c "$DUMP_TO_PCD_SCRIPT" "$MAP_NAME" || true
+  local dump_dir
+
+  dump_dir="$(resolve_dump_dir)" || return 1
+  echo "Export GLIM dump from ${dump_dir}"
+  python3 -c "$DUMP_TO_PCD_SCRIPT" "$MAP_NAME" "$dump_dir"
 }
 
 save_pcd_to_2d_map() {
@@ -192,35 +202,102 @@ save_pcd_to_2d_map() {
   ) || true
 }
 
-stop_glim() {
-  if [ -n "${GLIM_PID:-}" ] && kill -0 "$GLIM_PID" 2>/dev/null; then
-    kill -INT "$GLIM_PID" 2>/dev/null || true
-    wait "$GLIM_PID" 2>/dev/null || true
+has_submap_points() {
+  local dump_dir="$1"
+  local points_path
+
+  for points_path in "$dump_dir"/*/points_compact.bin; do
+    if [ -f "$points_path" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+is_glim_dump_dir() {
+  local dump_dir="$1"
+
+  [ -n "$dump_dir" ] && \
+  [ -d "$dump_dir" ] && \
+  [ -f "$dump_dir/graph.bin" ] && \
+  [ -f "$dump_dir/values.bin" ] && \
+  has_submap_points "$dump_dir"
+}
+
+recent_saved_dump_dir() {
+  if [ ! -f "$RECENT_FILES" ]; then
+    return 1
+  fi
+
+  awk -F= '/^offline_viewer_save=/{ value=$2; sub(/;$/, "", value); print value; exit }' "$RECENT_FILES"
+}
+
+resolve_dump_dir() {
+  local recent_dir
+
+  if [ "$MODE" != "edit" ]; then
+    printf '%s\n' "/tmp/dump"
+    return 0
+  fi
+
+  if is_glim_dump_dir "$EDITED_DUMP_DIR"; then
+    printf '%s\n' "$EDITED_DUMP_DIR"
+    return 0
+  fi
+
+  recent_dir="$(recent_saved_dump_dir || true)"
+  if is_glim_dump_dir "$recent_dir"; then
+    printf '%s\n' "$recent_dir"
+    return 0
+  fi
+
+  echo "Skip edited map export: map_editor save directory was not found." >&2
+  echo "Use map_editor Save map, then choose a dump directory, or pass edited_dump_dir:=<dir> and save there." >&2
+  return 1
+}
+
+stop_target() {
+  if [ -n "${TARGET_PID:-}" ] && kill -0 "$TARGET_PID" 2>/dev/null; then
+    kill -INT "$TARGET_PID" 2>/dev/null || true
+    wait "$TARGET_PID" 2>/dev/null || true
   fi
 }
 
 cleanup() {
   status=$?
-  stop_glim
-  save_dump_to_pcd
-  save_pcd_to_2d_map
+  stop_target
+  if save_dump_to_pcd; then
+    save_pcd_to_2d_map
+  fi
   exit "$status"
 }
 
 handle_signal() {
   trap - INT TERM
-  stop_glim
+  stop_target
   exit 130
 }
 
 trap cleanup EXIT
 trap handle_signal INT TERM
 
-ros2 run glim_ros glim_rosnode --ros-args \
-  -p "config_path:=${CONFIG_PATH}" \
-  -p "use_sim_time:=${USE_SIM_TIME}" &
-GLIM_PID=$!
-wait "$GLIM_PID"
+case "$MODE" in
+  edit)
+    ros2 run glim_ros map_editor /tmp/dump/ &
+    ;;
+  run)
+    ros2 run glim_ros glim_rosnode --ros-args \
+      -p "config_path:=${CONFIG_PATH}" \
+      -p "use_sim_time:=${USE_SIM_TIME}" &
+    ;;
+  *)
+    echo "Unknown GLIM wrapper mode: $MODE" >&2
+    exit 2
+    ;;
+esac
+
+TARGET_PID=$!
+wait "$TARGET_PID"
 '''
 
 
@@ -234,6 +311,8 @@ def generate_launch_description():
     # GLIM 用
     config_path = LaunchConfiguration('config_path')
     use_sim_time = LaunchConfiguration('use_sim_time')
+    edit_map = LaunchConfiguration('edit_map')
+    edited_dump_dir = LaunchConfiguration('edited_dump_dir')
     # 生成されるマップの設定
     map_name = LaunchConfiguration('map_name')
     min_height = LaunchConfiguration('min_height')
@@ -248,7 +327,15 @@ def generate_launch_description():
         'use_sim_time', default_value='false',
         description='use sim time'
     )
-    declare_map = DeclareLaunchArgument(
+    declare_edit_map = DeclareLaunchArgument(
+        'edit_map', default_value='false',
+        description='Run GLIM map_editor against /tmp/dump instead of glim_rosnode'
+    )
+    declare_edited_dump_dir = DeclareLaunchArgument(
+        'edited_dump_dir', default_value='',
+        description='Expected map_editor save directory. Empty uses offline_viewer_save recent path.'
+    )
+    declare_map_name = DeclareLaunchArgument(
         'map_name', default_value='map',
         description='PCD map file name without extension'
     )
@@ -262,7 +349,9 @@ def generate_launch_description():
     )
     ld.add_action(declare_config_path)
     ld.add_action(declare_use_sim_time)
-    ld.add_action(declare_map)
+    ld.add_action(declare_edit_map)
+    ld.add_action(declare_edited_dump_dir)
+    ld.add_action(declare_map_name)
     ld.add_action(declare_min_height)
     ld.add_action(declare_max_height)
 
@@ -273,11 +362,13 @@ def generate_launch_description():
             '-lc',
             GLIM_WRAPPER_SCRIPT,
             'glim_wrapper',
+            'run',
             config_path,
             use_sim_time,
             map_name,
             min_height,
             max_height,
+            edited_dump_dir,
         ],
         name='glim_rosnode',
         output='screen',
@@ -287,47 +378,34 @@ def generate_launch_description():
         },
         sigterm_timeout='30',
         sigkill_timeout='30',
+        condition=UnlessCondition(edit_map),
     )
-    dump_on_shutdown = ExecuteProcess(
+    edit_process = ExecuteProcess(
         cmd=[
             'bash',
             '-lc',
-            (
-                'set -u; '
-                'MAP_NAME="$1"; MIN_HEIGHT="$2"; MAX_HEIGHT="$3"; '
-                'MAP_DIR="$HOME/colcon_ws/map"; '
-                'POINTCLOUD_TO_2DMAP="$HOME/colcon_ws/build/pointcloud_to_2dmap/pointcloud_to_2dmap"; '
-                'stem="$(basename "$MAP_NAME")"; stem="${stem%.pcd}"; '
-                'if [ -z "$stem" ]; then stem="map"; fi; '
-                'sleep 5; '
-                'python3 -c "$DUMP_TO_PCD_SCRIPT" "$MAP_NAME" || true; '
-                'pcd_file="${stem}.pcd"; '
-                'if [ ! -f "${MAP_DIR}/${pcd_file}" ]; then '
-                '  echo "Skip 2D map export: ${MAP_DIR}/${pcd_file} does not exist"; exit 0; '
-                'fi; '
-                'if [ ! -x "$POINTCLOUD_TO_2DMAP" ]; then '
-                '  echo "Skip 2D map export: $POINTCLOUD_TO_2DMAP is not executable"; exit 0; '
-                'fi; '
-                'cd "$MAP_DIR" && '
-                '"$POINTCLOUD_TO_2DMAP" "$pcd_file" . --min_height "$MIN_HEIGHT" --max_height "$MAX_HEIGHT" || true'
-            ),
-            'dump_on_shutdown',
+            GLIM_WRAPPER_SCRIPT,
+            'glim_wrapper',
+            'edit',
+            config_path,
+            use_sim_time,
             map_name,
             min_height,
             max_height,
+            edited_dump_dir,
         ],
-        name='glim_dump_to_pcd',
+        name='glim_map_editor',
         output='screen',
         additional_env={
             'DISPLAY': ':1001',
             'DUMP_TO_PCD_SCRIPT': DUMP_TO_PCD_SCRIPT,
         },
+        sigterm_timeout='30',
+        sigkill_timeout='30',
+        condition=IfCondition(edit_map),
     )
-
     ld.add_action(glim_process)
-    ld.add_action(RegisterEventHandler(
-        OnShutdown(on_shutdown=[dump_on_shutdown])
-    ))
+    ld.add_action(edit_process)
 
 
     return ld
