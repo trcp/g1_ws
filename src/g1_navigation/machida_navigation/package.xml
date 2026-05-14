@@ -19,6 +19,13 @@
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
 
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>lidar_localization_ros2</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>

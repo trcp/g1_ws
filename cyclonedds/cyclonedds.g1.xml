@@ -3,7 +3,7 @@
     <Domain Id="any">
         <General>
             <Interfaces>
-                <NetworkInterface name="enP8p1s0" priority="default" multicast="default" />
+                <NetworkInterface name="eno1" priority="default" multicast="default" />
             </Interfaces>
         <AllowMulticast>spdp</AllowMulticast>
         </General>
