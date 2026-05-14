@@ -77,9 +77,6 @@ RUN . /opt/ros/${ROS}/setup.bash &&\
     --skip-keys sam3_ros &&\
     rm -rf /var/lib/apt/lists/*
 
-# Fix pointcloud2_to_2dmap shared ptr ref
-#RUN sed -i '97c\  auto cloud = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();' ./pointcloud_to_2dmap/src/pointcloud_to_2dmap.cpp
-
 # resolve mapeditor depends
 RUN apt-get update && apt-get install -y \
     python3-tk \
@@ -92,6 +89,12 @@ RUN apt-get update && apt-get install -y --allow-downgrades \
     libopencv-dev=4.5.4+dfsg-9ubuntu4 \
     && apt-mark hold libopencv-dev &&\
     rm -rf /var/lib/apt/lists/*
+
+# Optimize pointcloud_to_2dmap for the ROS Humble/PCL toolchain
+RUN sed -i 's/boost::make_shared<pcl::PointCloud<pcl::PointXYZ>>()/pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>()/' \
+        ./pointcloud_to_2dmap/src/pointcloud_to_2dmap.cpp && \
+    sed -i 's/${CV_INCLUDE_DIRS}/${OpenCV_INCLUDE_DIRS}/g' \
+        ./pointcloud_to_2dmap/CMakeLists.txt
 
 # install python packages
 USER $USERNAME
@@ -114,7 +117,7 @@ WORKDIR /home/${USERNAME}/colcon_ws
 RUN . /opt/ros/${ROS}/setup.bash &&\
     find /usr -name "libopencv_core.so*" &&\
     colcon build --symlink-install --packages-up-to erasers_g1 \
-    --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble --packages-skip livox_ros_driver2
+    --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble
 
 
 # =================================
