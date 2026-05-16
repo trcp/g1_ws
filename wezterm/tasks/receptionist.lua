@@ -10,8 +10,8 @@ local task = {
       display_name = "G1 Bring up",
       description = "",
       command = {
-        template = "cd ~/g1_ws && docker compose up erasers_g1",
-        kill = "cd ~/g1_ws && docker compose down erasers_g1",
+        template = "cd /home/unitree/g1_ws && /usr/bin/docker compose up erasers_g1",
+        kill = "cd /home/unitree/g1_ws && /usr/bin/docker compose down erasers_g1",
         variables = {},
       },
     },
