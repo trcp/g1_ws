@@ -18,7 +18,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'use_smoothing',
-            default_value='false',
+            default_value='true',
             description='Apply gradient-descent path smoothing',
         ),
         DeclareLaunchArgument(
