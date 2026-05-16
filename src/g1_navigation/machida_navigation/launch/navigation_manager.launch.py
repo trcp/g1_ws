@@ -38,7 +38,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'local_plan_horizon',
-            default_value='2.0',
+            default_value='0.5',
             description='Distance ahead on the global path used as local A* target [m]',
         ),
         DeclareLaunchArgument(
@@ -48,7 +48,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'use_local_smoothing',
-            default_value='false',
+            default_value='true',
             description='Apply gradient-descent smoothing to the local A* path',
         ),
         DeclareLaunchArgument(

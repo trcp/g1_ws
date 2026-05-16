@@ -16,6 +16,7 @@
   <!--depend>livox_ros_driver2</depend-->
   <depend>g1_description</depend>
   <depend>joint_state_publisher_gui</depend>
+  <depend>rosbridge_suite</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

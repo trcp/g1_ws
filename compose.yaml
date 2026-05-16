@@ -108,7 +108,7 @@ services:
         - "video"
         - "input"
     <<: [*preferences, *jetpack]
-    command: '/bin/bash -ci " ros2 launch g1_bringup bringup.launch.py"'
+    command: '/bin/bash -ci " ros2 launch g1_bringup bringup.launch.py use_camera:=true"'
     #command: "/bin/bash"
 
   # =============
