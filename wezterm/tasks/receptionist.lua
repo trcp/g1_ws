@@ -10,7 +10,7 @@ local task = {
       display_name = "G1 Bring up",
       description = "",
       command = {
-        template = "cd ~/g1_ws && CATEGORY_SPACE=robocup2024.pth docker compose up erasers_g1",
+        template = "cd ~/g1_ws && docker compose up erasers_g1",
         kill = "cd ~/g1_ws && docker compose down erasers_g1",
         variables = {},
       },
