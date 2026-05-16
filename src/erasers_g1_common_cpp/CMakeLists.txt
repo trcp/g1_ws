@@ -30,7 +30,7 @@ find_package(pinocchio QUIET)
 
 if(NOT pinocchio_FOUND)
   message(STATUS "Pinocchio not found via find_package, trying standard paths...")
-  set(PINOCCHIO_INCLUDE_DIRS /opt/ros/humble/include /usr/include/eigen3)
+  set(PINOCCHIO_INCLUDE_DIRS /opt/ros/$ENV{ROS_DISTRO}/include /usr/include/eigen3)
   set(PINOCCHIO_LIBRARIES pinocchio)
 else()
   message(STATUS "Found Pinocchio: ${pinocchio_VERSION}")

@@ -36,7 +36,16 @@ def main():
     sm = smach.StateMachine(outcomes=['success', 'failure'])
 
     # userdata
-    sm.userdata.prompt_message = "この画像に写っているものは何？"
+    sm.userdata.prompt_message = '''
+    画像に写っている人物はかばんを持っていますか？
+    以下のフォーマットに準拠し結果を出力してください。。
+    以下のフォーマットはコードブロックで囲わず、そのままテキストとして出力すること。
+    ```
+    {
+        bag: True # or False
+    }
+    ```
+    '''
     
     # sm
     with sm:

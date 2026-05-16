@@ -19,7 +19,7 @@ local task = {
       display_name = "Localization",
       description = "",
       command = {
-        template = "ros2 launch g1_navigation machida_navigation.launch.py",
+        template = "ros2 launch g1_navigation localization.launch.py",
         kill = "",
         variables = {},
       },

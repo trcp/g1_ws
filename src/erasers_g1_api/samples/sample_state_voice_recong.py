@@ -57,8 +57,7 @@ def main():
     # sm
     with sm:
         smach.StateMachine.add('VOICE_RECONG', SpeechToText(node=node,
-                                                            tts_say=SAY,
-                                                            model_size='medium',
+                                                            tts=tts,
                                                             device='cpu',
                                                             lang='en',
                                                             silence_duration=5.0),

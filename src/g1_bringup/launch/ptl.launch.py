@@ -30,23 +30,6 @@ def generate_launch_description():
         ]
     )
 
-    '''
-    camera_bridge_node = Node(
-        package='erasers_g1_common_cpp',
-        executable='camera_bridge',
-        name='camera_bridge',
-        output='screen',
-        remappings=[
-            ('input_image', '/head_camera/d455/aligned_depth_to_color/image_raw'),
-            ('input_camera', '/head_camera/d455/aligned_depth_to_color/camera_info'),
-            ('output0_image', '/lor/image_raw'),
-            ('output0_camera', '/lor/camera_info'),
-            ('output1_image', '/sam3/image_raw'),
-            ('output1_camera', '/sam3/camera_info'),
-        ]
-    )
-    '''
-
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
@@ -55,12 +38,18 @@ def generate_launch_description():
         output='screen'
     )
 
+    # 緊急停止用 joy_node
+    emc_joy_node = Node(
+        package='joy',
+        executable='joy_node',
+        namespace='emc'
+    )
 
     # launchers
     ld = LaunchDescription()
 
     #ld.add_action(ptl_node)
-    #ld.add_action(camera_bridge_node)
-    ld.add_action(rviz_node)
+    #ld.add_action(rviz_node)
+    ld.add_action(emc_joy_node)
 
     return ld
