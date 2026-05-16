@@ -24,7 +24,7 @@ add_executable(map_saver src/map_saver.cpp)
 ament_target_dependencies(map_saver rclcpp)
 
 add_executable(auto_map_saver src/auto_map_saver.cpp)
-ament_target_dependencies(auto_map_saver rclcpp cartographer_ros_msgs)
+ament_target_dependencies(auto_map_saver rclcpp cartographer_ros_msgs ament_index_cpp)
 
 install(TARGETS
   map_saver
