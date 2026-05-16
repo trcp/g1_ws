@@ -4,7 +4,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Exec
 from launch.substitutions import LaunchConfiguration
 from launch.event_handlers import OnProcessStart
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.launch_description_sources import PythonLaunchDescriptionSource, AnyLaunchDescriptionSource
 from launch_ros.actions import Node
 
 from ament_index_python.packages import get_package_share_directory
@@ -375,6 +375,16 @@ def generate_launch_description():
 
     ld.add_action(init_hand_pose_handler)
 
+    rosbridge_launch = IncludeLaunchDescription(
+        AnyLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('rosbridge_server'),
+                'launch',
+                'rosbridge_websocket_launch.xml'
+            )
+        )
+    )
+    ld.add_action(rosbridge_launch)
 
     # send launch description to ROS2
     return ld
