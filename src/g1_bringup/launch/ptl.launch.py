@@ -49,7 +49,7 @@ def generate_launch_description():
     ld = LaunchDescription()
 
     #ld.add_action(ptl_node)
-    ld.add_action(rviz_node)
-    #ld.add_action(emc_joy_node)
+    #ld.add_action(rviz_node)
+    ld.add_action(emc_joy_node)
 
     return ld
