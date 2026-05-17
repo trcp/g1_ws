@@ -46,7 +46,7 @@ local task = {
       display_name = "Costmap",
       description = "",
       command = {
-        template = "ros2 launch machida_navigation costmap.launch.py lidar_topic:=/utlidar/cloud_livox_mod360",
+        template = "ros2 launch machida_navigation costmap.launch.py",
         kill = "",
         variables = {},
       },
