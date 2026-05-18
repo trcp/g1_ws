@@ -54,8 +54,9 @@ public:
     declare_parameter("goal_tolerance",      0.15);
     declare_parameter("goal_yaw_tolerance",  0.05);
     declare_parameter("slowdown_distance",   0.6);
-    declare_parameter("min_linear_velocity", 0.2);
-    declare_parameter("holonomic",           false);
+    declare_parameter("min_linear_velocity",   0.2);
+    declare_parameter("min_angular_velocity", 0.3);
+    declare_parameter("holonomic",            false);
     declare_parameter("max_linear_acceleration",  0.5);
     declare_parameter("max_angular_acceleration", 2.0);
 
@@ -214,6 +215,10 @@ private:
       double w = std::clamp(heading_error, -max_w, max_w);
       w = std::clamp(w, prev_w_ - max_w_acc * dt, prev_w_ + max_w_acc * dt);
 
+      const double min_w_param = get_parameter("min_angular_velocity").as_double();
+      if (w > 0.0 && w < min_w_param) w = min_w_param;
+      else if (w < 0.0 && w > -min_w_param) w = -min_w_param;
+
       geometry_msgs::msg::Twist cmd;
       cmd.angular.z = w;
       prev_v_  = 0.0;
@@ -313,6 +318,16 @@ private:
       }
     } else if (cmd.linear.x > 0.0 && cmd.linear.x < min_v) {
       cmd.linear.x = min_v;
+    }
+
+    const double linear_speed = std::hypot(cmd.linear.x, cmd.linear.y);
+    if (linear_speed < 1e-3) {
+      const double min_w = get_parameter("min_angular_velocity").as_double();
+      if (cmd.angular.z > 0.0 && cmd.angular.z < min_w) {
+        cmd.angular.z = min_w;
+      } else if (cmd.angular.z < 0.0 && cmd.angular.z > -min_w) {
+        cmd.angular.z = -min_w;
+      }
     }
 
     prev_v_  = cmd.linear.x;
