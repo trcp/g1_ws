@@ -202,7 +202,7 @@ def _start_lidar_localization(context, *args, **kwargs):
 def generate_launch_description():
     home = os.environ.get('HOME', '/home/roboworks')
 
-    default_map_dir = os.path.join(home, 'colcon_ws', 'map')
+    default_map_dir = os.path.join(home, 'g1_ws', 'map')
     default_map_name = 'map'
     default_localization_param_dir = os.path.join(
         get_package_share_directory('g1_navigation'),
@@ -378,10 +378,10 @@ def generate_launch_description():
         DeclareLaunchArgument('obstacle_threshold', default_value='50'),
         DeclareLaunchArgument(
             'footprint',
-            default_value='0.4,0.3',
+            default_value="'0.3'",
             description='Robot footprint: radius, length,width, or x1,y1,... vertices.',
         ),
-        DeclareLaunchArgument('clearance', default_value='0.1'),
+        DeclareLaunchArgument('clearance', default_value='0.2'),
         DeclareLaunchArgument('local_costmap_frame', default_value='odom'),
         DeclareLaunchArgument('local_resolution', default_value='0.05'),
         DeclareLaunchArgument('local_width', default_value='4.0'),
