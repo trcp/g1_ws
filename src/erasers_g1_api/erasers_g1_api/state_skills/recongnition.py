@@ -384,7 +384,7 @@ class SpeechToText(smach.State):
                 self.__node.get_logger().warn('Voice recong challenge is %d times. Remaining %d times.'%(num_challenge, self.__max_challenge - num_challenge))
 
             # bringup mic
-            self.__tts.say(self.__start_msg)
+            self.__tts.say(text=self.__start_msg)
             request = SetBool.Request()
             request.data = True
             if not self.__send_mic_req(request):

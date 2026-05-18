@@ -11,8 +11,8 @@ import random
 import rclpy
 
 # msgs
-from geometry_msgs.msg import Twist, PoseStamped, PoseWithCovarianceStamped, Pose
-from sensor_msgs.msg import Imu, JointState
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Pose
+from sensor_msgs.msg import JointState
 from shape_msgs.msg import SolidPrimitive
 from amazing_hand_interfaces.srv import HandCommand
 from g1_srvs.srv import MoveServo, PosePolicy
@@ -43,7 +43,6 @@ import time
 import math
 import copy
 from rclpy.action import ActionClient
-from rclpy_util.util import TemporarySubscriber
 
 # ArmControl specific imports
 from std_srvs.srv import SetBool, Trigger
@@ -199,9 +198,6 @@ class G1Navigation:
             PoseWithCovarianceStamped, "/initialpose", 10
         )
 
-        # Cmd Vel Publisher for Precision Correction
-        self.__cmd_vel_pub = self.node.create_publisher(Twist, "/cmd_vel", 10)
-
     def get_current_pose(self, simple: bool = False):
         """
         現在のロボットの位置姿勢を取得する．
@@ -246,7 +242,7 @@ class G1Navigation:
     def move_to_pose(
         self,
         pose,
-        tolerance: float = 0.05,
+        tolerance: float = 0.0,
         reference_frame: str = "map",
         wait: bool = True,
         timeout: float = None,
@@ -260,7 +256,7 @@ class G1Navigation:
         pose : PoseStamped or Pose
             目標とする姿勢情報。Pose メッセージの場合、reference_frame の座標系基準として扱われる。
         tolerance : float, optional
-            目標から指定された距離(m)以内に到達した場合、その時点でナビゲーションを成功として終了する。デフォルトは 0.05。
+            目標から指定された距離(m)以内に到達した場合、その時点でナビゲーションを成功として終了する。デフォルトは 0.0。
         reference_frame : str, optional
             pose が Pose 型の場合の基準フレーム。デフォルトは 'map'。
         wait : bool, optional
@@ -362,7 +358,7 @@ class G1Navigation:
 
                         if dist <= tolerance:
                             self.node.get_logger().info(
-                                f"Reached tolerance limit ({dist:.3f} <= {tolerance:.3f}). Canceling Nav2 and starting precision phase."
+                                f"Reached tolerance limit ({dist:.3f} <= {tolerance:.3f}). Canceling Nav2."
                             )
                             cancel_future = goal_handle.cancel_goal_async()
                             rclpy.spin_until_future_complete(
@@ -382,8 +378,6 @@ class G1Navigation:
                     nav_success = False
 
             if nav_success:
-                pos_tol = tolerance if tolerance is not None else 0.05
-                self._precision_correction(goal_pose, pos_tol, 0.05)
                 return True
 
             return False
@@ -404,97 +398,12 @@ class G1Navigation:
             self.node.get_logger().error(f"Navigation error: {str(e)}")
             return False
 
-    def _precision_correction(
-        self, goal_pose: PoseStamped, pos_tol: float, yaw_tol: float
-    ):
-        imu_data = {"raw_yaw": None, "yaw_offset": None}
-
-        def imu_cb(msg: Imu):
-            q = msg.orientation
-            _, _, y = euler_from_quaternion([q.x, q.y, q.z, q.w])
-            imu_data["raw_yaw"] = y
-
-        self.node.get_logger().debug(
-            "Starting precision correction using TF and /imu..."
-        )
-
-        with TemporarySubscriber(self.node, Imu, "/imu", 10, imu_cb):
-            start_time = time.time()
-            gx = goal_pose.pose.position.x
-            gy = goal_pose.pose.position.y
-            gq = goal_pose.pose.orientation
-            _, _, gyaw = euler_from_quaternion([gq.x, gq.y, gq.z, gq.w])
-
-            while rclpy.ok() and time.time() - start_time < 5.0:
-                rclpy.spin_once(self.node, timeout_sec=0.05)
-
-                current_pose = self.get_current_pose(simple=True)
-                if current_pose is None:
-                    continue
-
-                cx, cy, cyaw = current_pose
-
-                # Fuse high-freq IMU with low-freq TF
-                if imu_data["raw_yaw"] is not None:
-                    if imu_data["yaw_offset"] is None:
-                        imu_data["yaw_offset"] = cyaw - imu_data["raw_yaw"]
-
-                    current_yaw = imu_data["raw_yaw"] + imu_data["yaw_offset"]
-                    diff = cyaw - current_yaw
-                    while diff > math.pi:
-                        diff -= 2 * math.pi
-                    while diff < -math.pi:
-                        diff += 2 * math.pi
-                    imu_data["yaw_offset"] += diff * 0.1
-                else:
-                    current_yaw = cyaw
-
-                ex = gx - cx
-                ey = gy - cy
-
-                lex = ex * math.cos(current_yaw) + ey * math.sin(current_yaw)
-                ley = -ex * math.sin(current_yaw) + ey * math.cos(current_yaw)
-
-                eyaw = gyaw - current_yaw
-                while eyaw > math.pi:
-                    eyaw -= 2.0 * math.pi
-                while eyaw < -math.pi:
-                    eyaw += 2.0 * math.pi
-
-                dist = math.sqrt(ex**2 + ey**2)
-
-                if dist <= pos_tol and abs(eyaw) <= yaw_tol:
-                    self.node.get_logger().debug(
-                        f"Precision correction completed. Dist: {dist:.3f}, YawErr: {eyaw:.3f}"
-                    )
-                    break
-
-                def apply_min_max(err, p_gain, min_v, max_v, deadband):
-                    if abs(err) < deadband:
-                        return 0.0
-                    v = err * p_gain
-                    if abs(v) < min_v:
-                        return math.copysign(min_v, v)
-                    return math.copysign(min(abs(v), max_v), v)
-
-                vx = apply_min_max(lex, 2.0, 0.2, 0.2, pos_tol / 2.0)
-                vy = apply_min_max(ley, 2.0, 0.2, 0.2, pos_tol / 2.0)
-                vw = apply_min_max(eyaw, 1.5, 0.15, 1.0, yaw_tol / 2.0)
-
-                cmd = Twist()
-                cmd.linear.x = vx
-                cmd.linear.y = vy
-                cmd.angular.z = vw
-                self.__cmd_vel_pub.publish(cmd)
-
-            self.__cmd_vel_pub.publish(Twist())  # Stop
-
     def move_abs(
         self,
         x: float = 0.0,
         y: float = 0.0,
         yaw: float = 0.0,
-        tolerance: float = 0.05,
+        tolerance: float = 0.0,
         reference_frame: str = "map",
         wait: bool = True,
         timeout: float = None,
@@ -512,7 +421,7 @@ class G1Navigation:
         yaw : float, optional
             目標姿勢のヨー角（ラジアン）。デフォルトは 0.0。
         tolerance : float, optional
-            目標からの許容誤差半径(m)。指定値以内に到達すれば終了する。
+            目標からの許容誤差半径(m)。指定値以内に到達すれば終了する。デフォルトは 0.0。
         reference_frame : str, optional
             座標系の基準フレーム。デフォルトは 'map'。
         wait : bool, optional
@@ -547,7 +456,7 @@ class G1Navigation:
         x: float = 0.0,
         y: float = 0.0,
         yaw: float = 0.0,
-        tolerance: float = 0.05,
+        tolerance: float = 0.0,
         wait: bool = True,
         timeout: float = None,
     ) -> bool:
@@ -564,7 +473,7 @@ class G1Navigation:
         yaw : float, optional
             ロボットの現在角度からの相対的な反時計回りの回転量（ラジアン）。デフォルトは 0.0。
         tolerance : float, optional
-            目標からの許容誤差半径(m)。指定値以内に到達すれば終了する。
+            目標からの許容誤差半径(m)。指定値以内に到達すれば終了する。デフォルトは 0.0。
         wait : bool, optional
             移動完了まで処理をブロックするかどうか。デフォルトは True。
         timeout : float, optional
@@ -598,32 +507,35 @@ class G1Navigation:
             timeout=timeout,
         )
 
-    def set_initialpose(self, pose, reference_frame: str = "map"):
+    def set_initialpose(self, pose, reference_frame: str = "map", xyy: bool = True):
         """
         ロボットの初期位置（Initial Pose）を設定する．
         AMCL等のローカライゼーションノードに対して /initialpose トピックをパブリッシュする。
 
         Parameters
         ----------
-        pose : Pose or PoseStamped or list of float
-            設定する初期姿勢。リストの場合は [x, y, yaw] の形式。
+        pose : list of float or PoseWithCovarianceStamped
+            xyy=True の場合は [x, y, yaw] の形式。
+            xyy=False の場合は PoseWithCovarianceStamped 形式。
         reference_frame : str, optional
             基準となる座標フレーム。デフォルトは 'map'。
+        xyy : bool, optional
+            True の場合、pose を [x, y, yaw] として扱う。False の場合、pose を PoseWithCovarianceStamped として扱う。
 
         Returns
         -------
         None
         """
-        msg = PoseWithCovarianceStamped()
-        msg.header.stamp = self.node.get_clock().now().to_msg()
-        msg.header.frame_id = reference_frame
+        if xyy:
+            if not (isinstance(pose, list) and len(pose) == 3):
+                self.node.get_logger().error(
+                    "Invalid pose format for set_initialpose. Use [x, y, yaw] when xyy=True."
+                )
+                return
 
-        if isinstance(pose, PoseStamped):
-            msg.pose.pose = pose.pose
-            msg.header.frame_id = pose.header.frame_id
-        elif isinstance(pose, Pose):
-            msg.pose.pose = pose
-        elif isinstance(pose, list) and len(pose) == 3:
+            msg = PoseWithCovarianceStamped()
+            msg.header.stamp = self.node.get_clock().now().to_msg()
+            msg.header.frame_id = reference_frame
             msg.pose.pose.position.x = float(pose[0])
             msg.pose.pose.position.y = float(pose[1])
             msg.pose.pose.position.z = 0.0
@@ -633,16 +545,19 @@ class G1Navigation:
             msg.pose.pose.orientation.y = q[1]
             msg.pose.pose.orientation.z = q[2]
             msg.pose.pose.orientation.w = q[3]
-        else:
-            self.node.get_logger().error(
-                "Invalid pose format for set_initialpose. Use Pose, PoseStamped, or [x, y, yaw]."
-            )
-            return
 
-        # Covariance - typical reasonable defaults for a manual reset
-        msg.pose.covariance[0] = 0.25
-        msg.pose.covariance[7] = 0.25
-        msg.pose.covariance[35] = 0.06853891945200942
+            # Covariance - typical reasonable defaults for a manual reset
+            msg.pose.covariance[0] = 0.25
+            msg.pose.covariance[7] = 0.25
+            msg.pose.covariance[35] = 0.06853891945200942
+        else:
+            if not isinstance(pose, PoseWithCovarianceStamped):
+                self.node.get_logger().error(
+                    "Invalid pose format for set_initialpose. Use PoseWithCovarianceStamped when xyy=False."
+                )
+                return
+
+            msg = pose
 
         self.__initial_pose_pub.publish(msg)
         self.node.get_logger().info(
