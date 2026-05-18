@@ -38,3 +38,19 @@ repositories:
         type: git
         url: https://github.com/rsasaki0109/ndt_omp_ros2.git
         version: humble
+    
+    pointcloud_to_2dmap:
+        type: git
+        url: https://github.com/koide3/pointcloud_to_2dmap.git
+        version: master
+
+    # livox pkgs
+    livox_ros_driver2:
+        type: git
+        url: https://github.com/Livox-SDK/livox_ros_driver2.git
+        version: master
+
+    Livox-SDK2:
+        type: git
+        url: https://github.com/Livox-SDK/Livox-SDK2.git
+        version: master

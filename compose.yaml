@@ -17,7 +17,7 @@ x-gpu: &gpu
 # ======
 # JETSON
 # ======
-x-jetpack: &jetpack
+x-jetson: &jetson
   environment:
     - XAUTHORITY=/tmp/.docker.xauth
     - NVIDIA_DRIVER_CAPABILITIES=all
@@ -37,18 +37,6 @@ x-jetpack: &jetpack
   devices:
     - /dev:/dev
   runtime: nvidia
-  build:
-    context: .
-    dockerfile: Dockerfile
-    target: sample
-    args:
-      - TARGET_ARCH=jetpack
-      - L4T_VERSION=r36.4.0
-      - USERNAME=${USER}
-      - GROUPNAME=${USER}
-      - PASSWORD
-      - UID=1000
-      - GID=1000
 
 
 # ===========
@@ -92,24 +80,54 @@ services:
     container_name: erasers_g1
     image: erasers_g1:latest
     build:
-      context: .
-      dockerfile: Dockerfile
-      target: main
-      args:
-        - TARGET_ARCH=jetpack
-        - OS=22.04
-        - L4T_VERSION=r36.4.0
-        - ROS=humble
-        - USERNAME=${USER}
-        - GROUPNAME=${USER}
-        - PASSWORD=123
+        context: .
+        dockerfile: Dockerfile
+        target: main
+        args:
+          - TARGET_ARCH=jetson
+          - L4T_VERSION=36.4
+          - SOC=t234
+          - GLIM_CUDA_VERSION=12.6
+          - USERNAME=${USER}
+          - GROUPNAME=${USER}
+          - PASSWORD=123
+          - UID=1000
+          - GID=1000
     group_add:
         - "audio"
         - "video"
         - "input"
-    <<: [*preferences, *jetpack]
+    <<: [*preferences, *jetson]
+    environment:
+      - DISPLAY=${DISPLAY}
+      - LC_TIME
+      - TZ=Asia/Tokyo
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///tmp/cyclonedds/cyclonedds.g1.xml
+      - AH_PATH="/dev/ttyACM0"
+      - DX_PATH="/dev/ttyCH341USB0"
+      - USE_EMC=true
+      - XAUTHORITY=/tmp/.docker.xauth
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - ./src:$HOME/colcon_ws/src/erasers_g1
+      - ./rosbag:$HOME/colcon_ws/rosbag
+      - ./map:$HOME/colcon_ws/map
+      - ./cyclonedds:/tmp/cyclonedds
+      - /run/jtop.sock:/run/jtop.sock
+      - /tmp/argus_socket:/tmp/argus_socket
+      - /etc/enctune.conf:/etc/enctune.conf
+      - /etc/nv_tegra_release:/etc/nv_tegra_release
+      - /tmp/nv_jetson_model:/tmp/nv_jetson_model
+      - /var/run/dbus:/var/run/dbus
+      - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/.X11-unix/:/tmp/.X11-unix
+      - /tmp/.docker.xauth:/tmp/.docker.xauth
+      - $HOME/.Xauthority/:/root/.Xauthority
     command: '/bin/bash -ci " ros2 launch g1_bringup bringup.launch.py use_camera:=true"'
-    #command: "/bin/bash"
+    #command: '/bin/bash -ci "terminator"'
 
   # =============
   # Katana PC 用
@@ -134,25 +152,6 @@ services:
     #command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py & terminator\""
     command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py \""
   
-  # =============
-  # L4T 36.4
-  # =============
-  r36.4:
-    container_name: r36.4
-    image: erasers_g1:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: main
-      args:
-        - TARGET_ARCH=jetpack
-        - L4T_VERSION=r36.4.0
-        - USERNAME=${USER}
-        - GROUPNAME=${USER}
-        - PASSWORD
-    <<: [*preferences, *gpu, *jetpack ]
-    #command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py & terminator\""
-    command: "/bin/bash"
 
   # ===============================================
   # G1 内部で rosbag を実行したり検証したりする
@@ -165,13 +164,44 @@ services:
       dockerfile: Dockerfile
       target: main
       args:
-        - TARGET_ARCH=arm64
-        - OS=22.04
-        - ROS=humble
+        - TARGET_ARCH=jetson
+        - L4T_VERSION=36.4
+        - SOC=t234
+        - GLIM_CUDA_VERSION=12.6
         - USERNAME=${USER}
         - GROUPNAME=${USER}
-    <<: *preferences
+        - PASSWORD
+        - UID=1000
+        - GID=1000
+    <<: [*preferences, *jetson]
     environment:
-      - DISPLAY
+      - DISPLAY=${DISPLAY}
+      - LC_TIME
+      - TZ=Asia/Tokyo
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///tmp/cyclonedds/cyclonedds.g1.xml
+      - AH_PATH="/dev/ttyACM0"
+      - DX_PATH="/dev/ttyCH341USB0"
+      - USE_EMC=true
+      - XAUTHORITY=/tmp/.docker.xauth
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_VISIBLE_DEVICES=all
       - ROS_DOMAIN_ID=100
-    command: '/bin/bash -ic "rviz2 -d $(ros2 pkg prefix --share g1_description)/rviz/g1.rviz"'
+    volumes:
+      - ./src:$HOME/colcon_ws/src/erasers_g1
+      - ./rosbag:$HOME/colcon_ws/rosbag
+      - ./map:$HOME/colcon_ws/map
+      - ./cyclonedds:/tmp/cyclonedds
+      - /run/jtop.sock:/run/jtop.sock
+      - /tmp/argus_socket:/tmp/argus_socket
+      - /etc/enctune.conf:/etc/enctune.conf
+      - /etc/nv_tegra_release:/etc/nv_tegra_release
+      - /tmp/nv_jetson_model:/tmp/nv_jetson_model
+      - /var/run/dbus:/var/run/dbus
+      - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/.X11-unix/:/tmp/.X11-unix
+      - /tmp/.docker.xauth:/tmp/.docker.xauth
+      - $HOME/.Xauthority/:/root/.Xauthority
+    #command: '/bin/bash -ic "rviz2 -d $(ros2 pkg prefix --share g1_description)/rviz/g1.rviz"'
+    command: '/bin/bash -ic "terminator"'

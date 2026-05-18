@@ -42,7 +42,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'linear_velocity',
-            default_value='0.15',
+            default_value='0.3',
             description='Nominal forward velocity [m/s]',
         ),
         DeclareLaunchArgument(
