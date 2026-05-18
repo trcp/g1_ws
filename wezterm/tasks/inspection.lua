@@ -15,56 +15,11 @@ local task = {
         variables = {},
       },
     },
-    localization = {
-      display_name = "Localization",
-      description = "",
+    navigation = {
+      display_name = "Navigation",
+      description = "all navigation and localization launch",
       command = {
-        template = "ros2 launch g1_navigation localization.launch.py",
-        kill = "",
-        variables = {},
-      },
-    },
-    global_planner = {
-      display_name = "Global Planner",
-      description = "",
-      command = {
-        template = "ros2 launch machida_navigation global_planner.launch.py",
-        kill = "",
-        variables = {},
-      },
-    },
-    local_planner = {
-      display_name = "Local Planner",
-      description = "",
-      command = {
-        template = "ros2 launch machida_navigation local_planner.launch.py",
-        kill = "",
-        variables = {},
-      },
-    },
-    costmap = {
-      display_name = "Costmap",
-      description = "",
-      command = {
-        template = "ros2 launch machida_navigation costmap.launch.py",
-        kill = "",
-        variables = {},
-      },
-    },
-    navigation_manager = {
-      display_name = "Navigation Manager",
-      description = "",
-      command = {
-        template = "ros2 launch machida_navigation navigation_manager.launch.py",
-        kill = "",
-        variables = {},
-      },
-    },
-    inspection_task = {
-      display_name = "Robot Inspection",
-      description = "main inspection task",
-      command = {
-        template = "ros2 run robot_tasks robot_inspection",
+        template = "ros2 launch machida_navigation machida_navigation.launch.py",
         kill = "",
         variables = {},
       },
@@ -84,12 +39,6 @@ local task = {
         direction = "vertical",
         panes = {
            { program = "navigation" },
-           { program = "localization"},
-           { program = "global_planner"},
-           { program = "local_planner"},
-           { program = "costmap"},
-           { program = "navigation_manager"},
-           { program = "inspection_task"},
         },
       },
     },
