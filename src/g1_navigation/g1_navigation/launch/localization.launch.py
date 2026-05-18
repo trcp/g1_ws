@@ -154,7 +154,8 @@ def generate_launch_description():
             'imu_frame_id': imu_frame_id,
             'pointcloud_topic': pointcloud_topic,
             'publish_lidar_tf': publish_lidar_tf,
-            'publish_imu_tf': publish_imu_tf
+            'publish_imu_tf': publish_imu_tf,
+            'launch_nav2': 'false'
         }.items()
     )
     ld.add_action(lidar_localization_ros2_nav2_navigation)
