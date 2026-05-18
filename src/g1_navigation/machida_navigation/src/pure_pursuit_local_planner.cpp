@@ -253,6 +253,21 @@ private:
     cmd.linear.x  = std::clamp(cmd.linear.x,  prev_v_ - max_v_acc * dt, prev_v_ + max_v_acc * dt);
     cmd.linear.y  = std::clamp(cmd.linear.y,  prev_vy_ - max_v_acc * dt, prev_vy_ + max_v_acc * dt);
     cmd.angular.z = std::clamp(cmd.angular.z, prev_w_ - max_w_acc * dt, prev_w_ + max_w_acc * dt);
+
+    // Re-apply min_linear_velocity after the acceleration limiter so the
+    // published value is always either 0 or >= min (robot is unresponsive below this).
+    const double min_v = get_parameter("min_linear_velocity").as_double();
+    if (get_parameter("holonomic").as_bool()) {
+      const double spd = std::hypot(cmd.linear.x, cmd.linear.y);
+      if (spd > 0.0 && spd < min_v) {
+        const double scale = min_v / spd;
+        cmd.linear.x *= scale;
+        cmd.linear.y *= scale;
+      }
+    } else if (cmd.linear.x > 0.0 && cmd.linear.x < min_v) {
+      cmd.linear.x = min_v;
+    }
+
     prev_v_  = cmd.linear.x;
     prev_vy_ = cmd.linear.y;
     prev_w_  = cmd.angular.z;
