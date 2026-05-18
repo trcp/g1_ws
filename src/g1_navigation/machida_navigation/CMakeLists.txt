@@ -15,6 +15,8 @@ find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(nav2_msgs REQUIRED)
 
 add_executable(global_planner
   src/astar.cpp
@@ -101,9 +103,11 @@ ament_target_dependencies(local_planner
 
 ament_target_dependencies(navigation_manager
   rclcpp
+  rclcpp_action
   nav_msgs
   geometry_msgs
   std_msgs
+  nav2_msgs
   tf2
   tf2_ros
 )
@@ -114,6 +118,11 @@ install(TARGETS global_planner costmap_node local_costmap_node local_planner nav
 
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+  scripts/nav_goal_sender.py
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 ament_package()
