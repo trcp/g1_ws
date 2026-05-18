@@ -64,7 +64,7 @@ def main():
     # userdatas
     sm.userdata.inspection_point = [-2.58, -1.86, -1.57]
     sm.userdata.exit_point = [-0.795, -5.98, -1.57]
-    sm.userdata.success_keywards = ['yes', 'YES', 'Yes', 'no', 'NO', 'No']
+    sm.userdata.success_keywards = ['yes', 'YES', 'Yes']
     sm.userdata.num_challenge = 0
 
     SAY('robot inspection task start!')
@@ -73,10 +73,10 @@ def main():
         smach.StateMachine.add('WAIT_DOOR_OPEN', WaitDoorOpen(node=node,
                                                               tts_say=SAY,
                                                               timeout_sec=20,
-                                                              threshold=1.0),
+                                                              threshold=1.5),
                                transitions={
                                    'success': 'MOVE_INSPECTION_POINT',
-                                   'timeout': 'MOVE_INSPECTION_POINT',
+                                   'timeout': 'WAIT_DOOR_OPEN',
                                    'failure': 'failure'
                                 })
         
