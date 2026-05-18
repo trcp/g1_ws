@@ -28,7 +28,7 @@
       "profile": "sensor_data"
     },
     "points_time_offset": 0.0,
-    "points_topic": "/output_cloud",
+    "points_topic": "/utlidar/cloud_livox_mid360",
     "publish_imu2lidar": false,
     "tf_time_offset": 1e-06
   }

@@ -18,7 +18,7 @@
       0.0,
       1.0
     ],
-    "autoconf_perpoint_times": true,
+    "autoconf_perpoint_times": false,
     "autoconf_prefer_frame_time": false,
     "distortion_coeffs": [
       -0.02295507941388206,
@@ -46,7 +46,7 @@
       639.4531613962971
     ],
     "perpoint_relative_time": true,
-    "perpoint_time_scale": 1.0,
+    "perpoint_time_scale": 1e-9,
     "ring_field": ""
   }
 }

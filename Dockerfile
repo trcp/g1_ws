@@ -1,9 +1,11 @@
 # Build image arguments
 ARG OS=22.04
 ARG CUDA=13.0.0
-ARG L4T_VERSION=r36.4.0
+ARG L4T_VERSION=36.4
+ARG SOC=t234
 ARG TARGET_ARCH=amd64
 ARG ROS=humble
+ARG GLIM_CUDA_VERSION=auto
 
 
 # ===============
@@ -12,7 +14,7 @@ ARG ROS=humble
 FROM gai313/ros2:${ROS}.amd64 AS ros2-amd64
 FROM gai313/ros2:${ROS}.arm64 AS ros2-arm64
 FROM gai313/ros2:${ROS}.cuda.${CUDA} AS ros2-cuda
-FROM gai313/ros2:humble.jetpack.${L4T_VERSION} AS ros2-jetpack
+FROM gai313/ros2:humble.jetson.${SOC}.r${L4T_VERSION}.runtime AS ros2-jetson
 
 
 # ==========
@@ -21,6 +23,7 @@ FROM gai313/ros2:humble.jetpack.${L4T_VERSION} AS ros2-jetpack
 FROM ros2-${TARGET_ARCH} AS main
 
 ARG ROS=humble
+ARG GLIM_CUDA_VERSION=auto
 
 # build args
 ARG USERNAME
@@ -53,6 +56,12 @@ RUN mkdir -p /etc/apt/keyrings &&\
     echo "deb [signed-by=/etc/apt/keyrings/librealsenseai.gpg] https://librealsense.realsenseai.com/Debian/apt-repo $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/librealsense.list &&\
     apt update
 
+# install GLIM
+COPY assets/install_glim.sh /tmp/install_glim.sh
+RUN chmod +x /tmp/install_glim.sh && \
+    /tmp/install_glim.sh ${ROS} ${GLIM_CUDA_VERSION} && \
+    rm /tmp/install_glim.sh
+
 # resolve depends
 USER $USERNAME
 COPY src ./erasers_g1
@@ -68,9 +77,6 @@ RUN . /opt/ros/${ROS}/setup.bash &&\
     --skip-keys sam3_ros &&\
     rm -rf /var/lib/apt/lists/*
 
-# Fix pointcloud2_to_2dmap shared ptr ref
-#RUN sed -i '97c\  auto cloud = pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>();' ./pointcloud_to_2dmap/src/pointcloud_to_2dmap.cpp
-
 # resolve mapeditor depends
 RUN apt-get update && apt-get install -y \
     python3-tk \
@@ -78,9 +84,27 @@ RUN apt-get update && apt-get install -y \
     ros-${ROS}-navigation2 ros-${ROS}-nav2-bringup &&\
     rm -rf /var/lib/apt/lists/*
 
+# Fix OpenCV Version
+RUN apt-get update && apt-get install -y --allow-downgrades \
+    libopencv-dev=4.5.4+dfsg-9ubuntu4 \
+    && apt-mark hold libopencv-dev &&\
+    rm -rf /var/lib/apt/lists/*
+
+# Optimize pointcloud_to_2dmap for the ROS Humble/PCL toolchain
+RUN sed -i 's/boost::make_shared<pcl::PointCloud<pcl::PointXYZ>>()/pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>()/' \
+        ./pointcloud_to_2dmap/src/pointcloud_to_2dmap.cpp && \
+    sed -i 's/${CV_INCLUDE_DIRS}/${OpenCV_INCLUDE_DIRS}/g' \
+        ./pointcloud_to_2dmap/CMakeLists.txt
+
 # install python packages
 USER $USERNAME
-RUN pip install --index-url https://pypi.org/simple pyserial rustypot transform3d faster-whisper "numpy==1.22.4"
+RUN pip install --index-url https://pypi.org/simple \
+    pyserial \
+    rustypot \
+    transform3d \
+    faster-whisper \
+    "numpy==1.22.4" \
+    "setuptools==58.2.0"
 
 # COPY amcl2 code
 COPY assets/emcl2_node.cpp ./emcl2/src/emcl2_node.cpp
@@ -91,8 +115,9 @@ ENV HUMBLE_ROS=humble
 USER $USERNAME
 WORKDIR /home/${USERNAME}/colcon_ws
 RUN . /opt/ros/${ROS}/setup.bash &&\
+    find /usr -name "libopencv_core.so*" &&\
     colcon build --symlink-install --packages-up-to erasers_g1 \
-    --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble --packages-skip livox_ros_driver2
+    --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble
 
 
 # =================================
