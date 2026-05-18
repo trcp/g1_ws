@@ -54,7 +54,7 @@ x-preferences: &preferences
     - LC_TIME
     - TZ=Asia/Tokyo
     - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-    - CYCLONEDDS_URI=file:///tmp/cyclonedds/cyclonedds.katana.xml
+    - CYCLONEDDS_URI=file:///tmp/cyclonedds/cyclonedds.g1.xml
     # Amazing Hand のデバイスパス
     - AH_PATH="/dev/ttyACM0"
     # 頭部カメラジョイントモーターのデバイスパス
@@ -151,7 +151,7 @@ services:
     <<: [*preferences, *gpu ]
     #command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py & terminator\""
     command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py \""
-  
+
 
   # ===============================================
   # G1 内部で rosbag を実行したり検証したりする

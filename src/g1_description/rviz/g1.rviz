@@ -675,7 +675,6 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: false
-<<<<<<< HEAD
     - Alpha: 1
       Buffer Length: 1
       Class: rviz_default_plugins/Path
