@@ -15,6 +15,7 @@ from geometry_msgs.msg import PoseStamped
 from erasers_g1_api.tts import TTS
 from erasers_g1_api.robot_control import G1Navigation, G1Control
 from erasers_g1_api.state_skills.wait_door_open import WaitDoorOpen
+from erasers_g1_api.state_skills.recongnition import SpeechToText
 
 # preferences
 from ament_index_python.packages import get_package_share_directory
@@ -28,22 +29,14 @@ import os
 指定されたロケーションに移動する
 """
 @smach.cb_interface(outcomes=['success', 'timeout', 'failure'],
-                    input_keys=['inspection_point'],
+                    input_keys=['abs_pose'],
                     output_keys=[])
-def move_to_inspection_point_cb(userdata, node:Node, tts_say:TTS.say, message:str='move to inspection point'):
+def move_to_pose_cb(userdata, node:Node, tts_say:TTS.say, navigation:G1Navigation, message:str='I will move.'):
     try:
-        goal_pub = node.create_publisher(PoseStamped, '/goal_pose', 10)
-
-        goal = PoseStamped()
-        goal.header.frame_id = 'map'
-        goal.pose.position.x = userdata.inspection_point[0]
-        goal.pose.position.y = userdata.inspection_point[1]
-        goal.pose.position.z = 0.0
-        goal.pose.orientation.x = 0.0
-        goal.pose.orientation.y = 0.0
-        goal.pose.orientation.z = 0.0
-        goal.pose.orientation.w = 1.0
-        goal_pub.publish(goal)
+        tts_say(message)
+        navigation.move_abs(userdata.abs_pose[0],
+                            userdata.abs_pose[1],
+                            userdata.abs_pose[2])
         return 'success'
 
     except Exception as e:
@@ -63,14 +56,16 @@ def main():
     tts = TTS(node)
     SAY = tts.say
     CONTROL = G1Control(node)
-    #NAVIGATION = G1Navigation(node)
+    NAVIGATION = G1Navigation(node)
 
     # init smach
     sm = smach.StateMachine(outcomes=['success', 'failure'])
 
     # userdatas
-    sm.userdata.inspection_point = [-2.89, -1.9, 0.0]
-    sm.userdata.exit_point = [6.4, 0.95, 0.0]
+    sm.userdata.inspection_point = [-2.58, -1.86, -1.57]
+    sm.userdata.exit_point = [-0.795, -5.98, -1.57]
+    sm.userdata.success_keywards = ['yes', 'YES', 'Yes', 'no', 'NO', 'No']
+    sm.userdata.num_challenge = 0
 
     SAY('robot inspection task start!')
 
@@ -85,22 +80,33 @@ def main():
                                    'failure': 'failure'
                                 })
         
-        smach.StateMachine.add('MOVE_INSPECTION_POINT', smach.CBState(cb=move_to_inspection_point_cb,
-                                                                      cb_kwargs={'node': node, 'tts_say': SAY}),
+        smach.StateMachine.add('MOVE_INSPECTION_POINT', smach.CBState(cb=move_to_pose_cb,
+                                                                      cb_kwargs={'node': node, 'tts_say': SAY, 'navigation': NAVIGATION, 'message': 'I will go to the inspection point.'}),
                                 transitions={
-                                    'success':'MOVE_EXIT_POINT',
+                                    'success':'HUMAN_INTARACTION',
                                     'timeout':'failure',
                                     'failure':'failure',
-                                })
+                                },
+                                remapping={'abs_pose':'inspection_point'})
+        
+        smach.StateMachine.add('HUMAN_INTARACTION', SpeechToText(node=node,
+                                                                 tts=tts,
+                                                                 start_msg='My name is erasers_g1. Can you hear me at this volume? If so, please say YES or NO after the chime sounds.',
+                                                                 success_msg='Thank you! I will go to exit.',
+                                                                 timeout_msg='I see. That\'s too bad. I\'ll try again later.',
+                                                                 ),
+                                transitions={'success': 'MOVE_EXIT_POINT',
+                                             'timeout': 'MOVE_EXIT_POINT',
+                                             'failure': 'failure',})
 
-        smach.StateMachine.add('MOVE_EXIT_POINT', smach.CBState(cb=move_to_inspection_point_cb,
-                                                                      cb_kwargs={'node': node, 'tts_say': SAY, 'message': 'Move to exit point.'}),
+        smach.StateMachine.add('MOVE_EXIT_POINT', smach.CBState(cb=move_to_pose_cb,
+                                                                      cb_kwargs={'node': node, 'tts_say': SAY, 'navigation': NAVIGATION, 'message': 'Move to exit point.'}),
                                 transitions={
                                     'success':'success',
                                     'timeout':'failure',
                                     'failure':'failure',
                                 },
-                                remapping={'inspection_point':'exit_point'})
+                                remapping={'abs_pose':'exit_point'})
     
     # execute smach states
     outcome = sm.execute()
