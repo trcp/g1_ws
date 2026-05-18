@@ -61,6 +61,7 @@ public:
     declare_parameter("replan_cooldown",              2.0);
     declare_parameter("obstacle_decay_rate",          5);
     declare_parameter("decay_frequency",              2.0);
+    declare_parameter("goal_yaw_tolerance",           0.05);
 
     map_frame_        = get_parameter("map_frame").as_string();
     robot_base_frame_ = get_parameter("robot_base_frame").as_string();
@@ -147,7 +148,9 @@ private:
     const auto & pose = goal_handle->get_goal()->pose;
     {
       std::lock_guard<std::mutex> lock(path_mutex_);
-      stored_goal_ = pose;
+      stored_goal_      = pose;
+      goal_yaw_         = yaw_from_quat(pose.pose.orientation);
+      position_reached_ = false;
     }
     request_plan(pose);
   }
@@ -173,7 +176,9 @@ private:
       msg->pose.position.x, msg->pose.position.y);
     {
       std::lock_guard<std::mutex> lock(path_mutex_);
-      stored_goal_ = *msg;
+      stored_goal_      = *msg;
+      goal_yaw_         = yaw_from_quat(msg->pose.orientation);
+      position_reached_ = false;
     }
     request_plan(*msg);
   }
@@ -376,7 +381,8 @@ private:
       if (active_goal_handle_ && active_goal_handle_->is_canceling()) {
         {
           std::lock_guard<std::mutex> plock(path_mutex_);
-          has_path_ = false;
+          has_path_         = false;
+          position_reached_ = false;
         }
         publish_execute(false);
         active_goal_handle_->canceled(std::make_shared<nav2_msgs::action::NavigateToPose::Result>());
@@ -389,35 +395,61 @@ private:
     std::vector<Point2D> path;
     geometry_msgs::msg::PoseStamped stored_goal;
     bool has_path;
+    bool position_reached;
+    double goal_yaw;
     {
       std::lock_guard<std::mutex> lock(path_mutex_);
-      path        = path_;
-      stored_goal = stored_goal_;
-      has_path    = has_path_;
+      path             = path_;
+      stored_goal      = stored_goal_;
+      has_path         = has_path_;
+      position_reached = position_reached_;
+      goal_yaw         = goal_yaw_;
     }
 
     if (!has_path || path.empty()) return;
 
-    // Robot position (map frame)
+    // Robot position and yaw (map frame)
     Point2D robot;
-    if (!get_robot_pose(robot)) return;
+    double robot_yaw = 0.0;
+    if (!get_robot_pose(robot, robot_yaw)) return;
 
-    // Goal reached check
-    const double goal_tol = get_parameter("goal_tolerance").as_double();
-    if (distance(robot, path.back()) <= goal_tol) {
+    // Goal reached check (two-phase: XY first, then yaw)
+    const double goal_tol     = get_parameter("goal_tolerance").as_double();
+    const double goal_yaw_tol = get_parameter("goal_yaw_tolerance").as_double();
+    const double dist_to_goal = distance(robot, path.back());
+
+    if (position_reached) {
+      double yaw_err = goal_yaw - robot_yaw;
+      while (yaw_err >  M_PI) yaw_err -= 2.0 * M_PI;
+      while (yaw_err < -M_PI) yaw_err += 2.0 * M_PI;
+      if (std::abs(yaw_err) <= goal_yaw_tol) {
+        {
+          std::lock_guard<std::mutex> lock(path_mutex_);
+          has_path_         = false;
+          position_reached_ = false;
+        }
+        publish_execute(false);
+        RCLCPP_INFO(get_logger(), "Global goal reached (yaw_err=%.3f rad)", yaw_err);
+        {
+          std::lock_guard<std::mutex> alock(action_mutex_);
+          if (active_goal_handle_ && active_goal_handle_->is_active()) {
+            active_goal_handle_->succeed(std::make_shared<nav2_msgs::action::NavigateToPose::Result>());
+            active_goal_handle_ = nullptr;
+          }
+        }
+        return;
+      }
+      // Still rotating toward goal yaw — keep executing without replanning
+      publish_execute(true);
+      return;
+    }
+
+    if (dist_to_goal <= goal_tol) {
       {
         std::lock_guard<std::mutex> lock(path_mutex_);
-        has_path_ = false;
+        position_reached_ = true;
       }
-      publish_execute(false);
-      RCLCPP_INFO(get_logger(), "Global goal reached");
-      {
-        std::lock_guard<std::mutex> alock(action_mutex_);
-        if (active_goal_handle_ && active_goal_handle_->is_active()) {
-          active_goal_handle_->succeed(std::make_shared<nav2_msgs::action::NavigateToPose::Result>());
-          active_goal_handle_ = nullptr;
-        }
-      }
+      publish_execute(true);
       return;
     }
 
@@ -616,6 +648,10 @@ private:
       local_plan.poses.push_back(pose);
     }
 
+    if (!local_plan.poses.empty() && target_idx == path.size() - 1) {
+      local_plan.poses.back().pose.orientation = stored_goal.pose.orientation;
+    }
+
     current_plan_pub_->publish(local_plan);
     publish_execute(true);
 
@@ -634,13 +670,14 @@ private:
     }
   }
 
-  bool get_robot_pose(Point2D & pose_out) const
+  bool get_robot_pose(Point2D & pose_out, double & yaw_out) const
   {
     try {
       const auto tf = tf_buffer_->lookupTransform(
         map_frame_, robot_base_frame_, tf2::TimePointZero);
       pose_out.x = tf.transform.translation.x;
       pose_out.y = tf.transform.translation.y;
+      yaw_out    = yaw_from_quat(tf.transform.rotation);
       return true;
     } catch (const tf2::TransformException & ex) {
       RCLCPP_WARN_THROTTLE(get_logger(), const_cast<rclcpp::Clock&>(*get_clock()), 2000,
@@ -708,6 +745,8 @@ private:
   geometry_msgs::msg::PoseStamped stored_goal_;
   std::string                     path_frame_id_;
   bool                            has_path_{false};
+  double                          goal_yaw_{0.0};
+  bool                            position_reached_{false};
 
   std::mutex costmap_mutex_;
   nav_msgs::msg::OccupancyGrid::SharedPtr local_costmap_;

@@ -52,6 +52,7 @@ public:
     declare_parameter("max_angular_velocity", 1.0);
     declare_parameter("max_path_deviation",  0.5);
     declare_parameter("goal_tolerance",      0.15);
+    declare_parameter("goal_yaw_tolerance",  0.05);
     declare_parameter("slowdown_distance",   0.6);
     declare_parameter("min_linear_velocity", 0.2);
     declare_parameter("holonomic",           false);
@@ -99,12 +100,17 @@ private:
       path_.push_back({pose.pose.position.x, pose.pose.position.y});
     }
 
-    path_frame_id_ = msg->header.frame_id;
-    nearest_index_ = 0;
-    reached_goal_  = false;
+    if (!msg->poses.empty()) {
+      goal_yaw_ = yaw_from_quat(msg->poses.back().pose.orientation);
+    }
 
-    RCLCPP_INFO(get_logger(), "Path received: %zu poses, frame=%s",
-      path_.size(), path_frame_id_.c_str());
+    path_frame_id_      = msg->header.frame_id;
+    nearest_index_      = 0;
+    reached_goal_       = false;
+    rotating_to_goal_   = false;
+
+    RCLCPP_INFO(get_logger(), "Path received: %zu poses, frame=%s, goal_yaw=%.3f rad",
+      path_.size(), path_frame_id_.c_str(), goal_yaw_);
   }
 
   void execute_callback(const std_msgs::msg::Bool::SharedPtr msg)
@@ -167,15 +173,56 @@ private:
         path_frame.c_str(), map_frame_.c_str());
     }
 
+    double goal_yaw;
+    bool rotating_to_goal;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      goal_yaw         = goal_yaw_;
+      rotating_to_goal = rotating_to_goal_;
+    }
+
     const Point2D goal = path.back();
     const double dist_to_goal = distance(pose, goal);
-    if (reached_goal || dist_to_goal <= get_parameter("goal_tolerance").as_double()) {
+
+    if (reached_goal) {
       publish_stop();
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (!reached_goal_) {
-        RCLCPP_INFO(get_logger(), "Goal reached (dist=%.3f m)", dist_to_goal);
+      return;
+    }
+
+    if (dist_to_goal <= get_parameter("goal_tolerance").as_double() || rotating_to_goal) {
+      // Position reached — now align to goal yaw
+      double heading_error = goal_yaw - yaw;
+      while (heading_error >  M_PI) heading_error -= 2.0 * M_PI;
+      while (heading_error < -M_PI) heading_error += 2.0 * M_PI;
+
+      if (std::abs(heading_error) <= get_parameter("goal_yaw_tolerance").as_double()) {
+        publish_stop();
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!reached_goal_) {
+          RCLCPP_INFO(get_logger(), "Goal reached (dist=%.3f m, yaw_err=%.3f rad)",
+            dist_to_goal, heading_error);
+        }
+        reached_goal_     = true;
+        rotating_to_goal_ = false;
+        return;
       }
-      reached_goal_ = true;
+
+      // Rotate in place toward goal yaw
+      const double max_w = get_parameter("max_angular_velocity").as_double();
+      const double dt = 1.0 / std::max(1.0, get_parameter("control_frequency").as_double());
+      const double max_w_acc = get_parameter("max_angular_acceleration").as_double();
+      double w = std::clamp(heading_error, -max_w, max_w);
+      w = std::clamp(w, prev_w_ - max_w_acc * dt, prev_w_ + max_w_acc * dt);
+
+      geometry_msgs::msg::Twist cmd;
+      cmd.angular.z = w;
+      prev_v_  = 0.0;
+      prev_vy_ = 0.0;
+      prev_w_  = w;
+      cmd_pub_->publish(cmd);
+
+      std::lock_guard<std::mutex> lock(mutex_);
+      rotating_to_goal_ = true;
       return;
     }
 
@@ -344,6 +391,8 @@ private:
   std::mutex mutex_;
   std::vector<Point2D> path_;
   bool reached_goal_{false};
+  bool rotating_to_goal_{false};
+  double goal_yaw_{0.0};
   size_t nearest_index_{0};
   std::string path_frame_id_;
   std::string path_topic_;
