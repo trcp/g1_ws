@@ -44,7 +44,7 @@ import os
 '''
 人物認識
 '''
-class LOR(smach.StateMachine):
+class LOR(smach.State):
     def __init__(self,
                  node:Node,
                  tts_say:TTS.say,
@@ -137,6 +137,7 @@ class LOR(smach.StateMachine):
     
 
     def __person_cb(self, msg:Persons3D):
+        print(msg)
         if self.__detect_condition == 'normal':
             self.__person_poses = msg.persons
         elif self.__detect_condition == 'hand_up':
@@ -176,7 +177,7 @@ class LOR(smach.StateMachine):
             request.data = True
             if not self.__send_lor_req(request):
                 self.__node.get_logger().error('lightweight_openpose_ros2 request failed')
-                self.__say(self.__failure_msg)
+                self.__say(text=self.__failure_msg)
                 return 'failure'
             
             self.__node.get_logger().info('''
@@ -219,11 +220,11 @@ class LOR(smach.StateMachine):
                 userdata.person_poses = self.__person_poses
                 if not self.__person_poses:
                     self.__node.get_logger().warn('Person is not detected')
-                    self.__say(self.__timeout_msg)
+                    self.__say(text=self.__timeout_msg)
                     return 'timeout'
                 else:
                     self.__node.get_logger().info('Person is detected')
-                    self.__say(self.__success_msg)
+                    self.__say(text=self.__success_msg)
                     return 'success'
         except:
             # Ensure lor is stopped on error
@@ -234,7 +235,7 @@ class LOR(smach.StateMachine):
             except:
                 pass
                 
-            self.__say('Error is occured in PersonRecongnition')
+            self.__say(text='Error is occured in PersonRecongnition')
             self.__node.get_logger().error('Error is occured in PersonRecongnition\n%s'%traceback.format_exc())
             return 'failure'
 
@@ -252,7 +253,7 @@ class SpeechToText(smach.State):
                  success_msg:str='I can hear! Please wait.',
                  timeout_msg:str='Sorry. I can not hear.',
                  device:str='cpu',
-                 model_size:str='small',
+                 model_size:str=os.path.join(get_package_share_directory('erasers_g1_api'), 'config', 'faster-whisper-small'),
                  lang:str='en',
                  beep_sound_path:str=os.path.join(get_package_share_directory('erasers_g1_api'), 'config', 'req_sound.wav'),
                  speech_threshold:float=1000.0,
@@ -390,6 +391,7 @@ class SpeechToText(smach.State):
                 self.__node.get_logger().error('mic_service request failed')
                 self.__tts.say(self.__failure_msg)
                 return 'failure'
+            time.sleep(10)
             self.__tts.audio(self.__beep_sound_path, wait=False)
             self.__node.get_logger().info('''
             =================================
@@ -692,6 +694,7 @@ class Sam3ObjectDetector(smach.State):
             =================================
             ''')
             self.__tts_say(self.__start_msg)
+            print(userdata.objects_dict)
             
             self.__target_conf_map = userdata.objects_dict
             self.__send_sam3_request(execute=True, objects_dict=userdata.objects_dict)

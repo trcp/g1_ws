@@ -20,19 +20,19 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'footprint',
-            default_value='0.4,0.3',
+            default_value="'0.3'",
             description='Robot footprint: radius [m], rectangle length,width [m], or vertices [x1,y1,...]',
         ),
         DeclareLaunchArgument(
             'clearance',
-            default_value='0.1',
+            default_value='0.3',
             description='Extra clearance beyond robot body [m]',
         ),
 
         # --- LocalCostmapNode ---
         DeclareLaunchArgument(
             'lidar_topic',
-            default_value='/points',
+            default_value='/utlidar/cloud_livox_mid360',
             description='3D LiDAR PointCloud2 topic',
         ),
         DeclareLaunchArgument(

@@ -66,13 +66,14 @@ x-preferences: &preferences
     - LC_TIME
     - TZ=Asia/Tokyo
     - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-    - CYCLONEDDS_URI=file:///tmp/cyclonedds/cyclonedds.g1.xml
+    - CYCLONEDDS_URI=file:///tmp/cyclonedds/cyclonedds.katana.xml
     # Amazing Hand のデバイスパス
     - AH_PATH="/dev/ttyACM0"
     # 頭部カメラジョイントモーターのデバイスパス
     - DX_PATH="/dev/ttyCH341USB0"
     # 緊急停止ボタンの有効
     - USE_EMC=true
+    - GEMINI_API_KEY=${GEMINI_API_KEY}
   devices:
     - /dev:/dev
   volumes:
@@ -130,7 +131,8 @@ services:
         - GROUPNAME=${USER}
         - PASSWORD
     <<: [*preferences, *gpu ]
-    command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py & terminator\""
+    #command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py & terminator\""
+    command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py \""
   
   # =============
   # L4T 36.4

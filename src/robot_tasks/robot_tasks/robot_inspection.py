@@ -9,6 +9,8 @@ from rclpy.node import Node
 import rclpy
 import smach
 
+from geometry_msgs.msg import PoseStamped
+
 # eraasers g1 APIs
 from erasers_g1_api.tts import TTS
 from erasers_g1_api.robot_control import G1Navigation, G1Control
@@ -28,14 +30,20 @@ import os
 @smach.cb_interface(outcomes=['success', 'timeout', 'failure'],
                     input_keys=['inspection_point'],
                     output_keys=[])
-def move_to_inspection_point_cb(userdata, node:Node, tts_say:TTS.say, navigation:G1Navigation, control:G1Control):
+def move_to_inspection_point_cb(userdata, node:Node, tts_say:TTS.say, message:str='move to inspection point'):
     try:
-        inspection_point = userdata.inspection_point
-        control.pose_policy('running')
-        tts_say("move to inspection point")
-        navigation.move_abs(inspection_point[0], inspection_point[1], inspection_point[2])
-        control.pose_policy('start')
-        tts_say("I reach the inspection point.")
+        goal_pub = node.create_publisher(PoseStamped, '/goal_pose', 10)
+
+        goal = PoseStamped()
+        goal.header.frame_id = 'map'
+        goal.pose.position.x = userdata.inspection_point[0]
+        goal.pose.position.y = userdata.inspection_point[1]
+        goal.pose.position.z = 0.0
+        goal.pose.orientation.x = 0.0
+        goal.pose.orientation.y = 0.0
+        goal.pose.orientation.z = 0.0
+        goal.pose.orientation.w = 1.0
+        goal_pub.publish(goal)
         return 'success'
 
     except Exception as e:
@@ -55,33 +63,44 @@ def main():
     tts = TTS(node)
     SAY = tts.say
     CONTROL = G1Control(node)
-    NAVIGATION = G1Navigation(node)
+    #NAVIGATION = G1Navigation(node)
 
     # init smach
     sm = smach.StateMachine(outcomes=['success', 'failure'])
 
     # userdatas
-    sm.userdata.inspection_point = [1.0, 0.0, 0.0]
+    sm.userdata.inspection_point = [-2.89, -1.9, 0.0]
+    sm.userdata.exit_point = [6.4, 0.95, 0.0]
 
     SAY('robot inspection task start!')
 
     with sm:
         smach.StateMachine.add('WAIT_DOOR_OPEN', WaitDoorOpen(node=node,
                                                               tts_say=SAY,
-                                                              threshold=2.0),
+                                                              timeout_sec=20,
+                                                              threshold=1.0),
                                transitions={
                                    'success': 'MOVE_INSPECTION_POINT',
-                                   'timeout': 'WAIT_DOOR_OPEN',
+                                   'timeout': 'MOVE_INSPECTION_POINT',
                                    'failure': 'failure'
                                 })
         
         smach.StateMachine.add('MOVE_INSPECTION_POINT', smach.CBState(cb=move_to_inspection_point_cb,
-                                                                      cb_kwargs={'node': node, 'tts_say': SAY, 'navigation': NAVIGATION, 'control': CONTROL}),
+                                                                      cb_kwargs={'node': node, 'tts_say': SAY}),
+                                transitions={
+                                    'success':'MOVE_EXIT_POINT',
+                                    'timeout':'failure',
+                                    'failure':'failure',
+                                })
+
+        smach.StateMachine.add('MOVE_EXIT_POINT', smach.CBState(cb=move_to_inspection_point_cb,
+                                                                      cb_kwargs={'node': node, 'tts_say': SAY, 'message': 'Move to exit point.'}),
                                 transitions={
                                     'success':'success',
                                     'timeout':'failure',
                                     'failure':'failure',
-                                })
+                                },
+                                remapping={'inspection_point':'exit_point'})
     
     # execute smach states
     outcome = sm.execute()

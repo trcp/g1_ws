@@ -27,21 +27,9 @@ def main():
     # init arm pose
     say("Init pose")
     arm.move_groupstate()
-
-    # Add a small target object
-    obj_name = "target_cube"
-    arm.collision.add_box(obj_name, x=0.4, y=0.1, z=0.0, size=(0.04, 0.04, 0.04))
-    say(f"Target object {obj_name} added. Starting grasp sequence")
-    if arm.grasp_manager.grasp(obj_name):
-        say("Grasp sequence completed successfully")
-        # Lift and move
-        arm.move_rel(z=0.1)
-    else:
-        say("Grasp sequence failed")
-
-    say("Verification finished. Cleaning up")
-    arm.collision.remove_collision("obstacle")
-    arm.collision.remove_collision(obj_name)
+    arm.move_rel(planning_group="arm_left", roll=1.57, x=0.2)
+    arm.move_groupstate()
+    arm.move_rel(planning_group="arm_right", roll=-1.57, x=0.2)
     arm.move_groupstate()
 
 if __name__ == '__main__':

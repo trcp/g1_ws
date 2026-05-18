@@ -10,7 +10,7 @@ from g1_srvs.srv import AudioClient
 
 
 class TTS:
-    def __init__(self, node:Node):
+    def __init__(self, node:Node, debug:bool = False):
         """TTS クラスの初期化。
 
         Parameters
@@ -19,12 +19,14 @@ class TTS:
             サービス呼び出しとログ出力に使用する ROS ノードインスタンス。
         """
         self.__node = node
+        self.__debug = debug
 
         # create TTS client
         self.__tts_cli = self.__node.create_client(AudioClient, '/play_audio')
         while not self.__tts_cli.wait_for_service(timeout_sec=5.0):
             self.__node.get_logger().error('May be erasers_g1 is not running ...')
-            raise RuntimeError('May be erasers_g1 is not running ...')
+            break
+            #raise RuntimeError('May be erasers_g1 is not running ...')
 
 
     def __send_req(self, req:AudioClient.Request, logger:str, wait:bool):
@@ -37,7 +39,7 @@ class TTS:
             self.__node.get_logger().error("G1 SAY::::::::::::\n>> %s"%req.text)
         elif logger == "debug":
             self.__node.get_logger().debug("G1 SAY::::::::::::\n>> %s"%req.text)
-        if wait:
+        if wait and not self.__debug:
             rclpy.spin_until_future_complete(self.__node, future)
             res:AudioClient.Response = future.result()
             return res.success
