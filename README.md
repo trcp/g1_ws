@@ -1,5 +1,11 @@
 # g1_ws
 
+1. Whisper モデルをダウンロード
+    ```bash
+    cd src/erasers_g1_api/config &&\
+    git clone https://huggingface.co/Systran/faster-whisper-small &&\
+    cd -
+    ```
 1. 依存関係パッケージのダウンロード
     ```bash
     vcs import ./src/thirdparty/ < depends.repos

@@ -34,3 +34,6 @@ assets/sam3.pt
 *~
 \#*\#
 .\#*
+
+# whisper
+./src/erasers_g1_api/config/faster-whisper-small
