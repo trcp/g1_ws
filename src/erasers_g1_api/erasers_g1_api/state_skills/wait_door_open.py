@@ -26,7 +26,9 @@ class WaitDoorOpen(smach.State):
                  timeout_msg:str='Time is out.',
                  failure_msg:str='Failure. error is ocurred in wait door open.',
                  timeout_sec:int=10,
-                 threshold:float=1.0,):
+                 threshold:float=1.0,
+                 front_angle:float=0.0,
+                 front_width:float=math.radians(20.0),):
         
         # init smach
         smach.State.__init__(self,
@@ -41,6 +43,8 @@ class WaitDoorOpen(smach.State):
         self.__failure_msg:str = failure_msg
         self.__timeout_sec = timeout_sec
         self.__threshold = threshold
+        self.__front_angle = front_angle
+        self.__front_width = front_width
         self.__door_open:bool = False
         
     
@@ -50,18 +54,23 @@ class WaitDoorOpen(smach.State):
             if not msg.ranges:
                 return
             
-            arr = np.array(msg.ranges)
-            cen_ind = int(len(arr)/2)
-            start_ind = max(0, cen_ind - 25)
-            end_ind = min(len(arr), cen_ind + 25)
-            center_data = arr[start_ind:end_ind]
-            valid_data = center_data[np.isfinite(center_data)]
+            arr = np.array(msg.ranges, dtype=float)
+            angles = msg.angle_min + np.arange(len(arr)) * msg.angle_increment
+            angle_diff = np.arctan2(
+                np.sin(angles - self.__front_angle),
+                np.cos(angles - self.__front_angle),
+            )
+            front_data = arr[np.abs(angle_diff) <= self.__front_width / 2.0]
+            valid_data = front_data[np.isfinite(front_data)]
+            valid_data = valid_data[
+                (valid_data >= msg.range_min) & (valid_data <= msg.range_max)
+            ]
             if len(valid_data) == 0:
                 laser_value = float('inf')
             else:
-                laser_value = np.mean(valid_data)
+                laser_value = np.min(valid_data)
 
-            self.__node.get_logger().info('Current mean LaserScan: %f' % laser_value)
+            self.__node.get_logger().info('Current front min LaserScan: %f' % laser_value)
             
             if laser_value > self.__threshold:
                 self.__door_open = True
