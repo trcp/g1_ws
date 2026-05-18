@@ -381,7 +381,7 @@ def generate_launch_description():
             default_value="'0.3'",
             description='Robot footprint: radius, length,width, or x1,y1,... vertices.',
         ),
-        DeclareLaunchArgument('clearance', default_value='0.2'),
+        DeclareLaunchArgument('clearance', default_value='0.15'),
         DeclareLaunchArgument('local_costmap_frame', default_value='odom'),
         DeclareLaunchArgument('local_resolution', default_value='0.05'),
         DeclareLaunchArgument('local_width', default_value='4.0'),
