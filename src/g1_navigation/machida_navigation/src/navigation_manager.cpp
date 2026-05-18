@@ -13,7 +13,9 @@
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "nav_msgs/srv/get_plan.hpp"
+#include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "tf2/exceptions.h"
 #include "tf2_ros/buffer.h"
@@ -98,15 +100,58 @@ public:
       std::chrono::duration<double>(1.0 / decay_freq),
       std::bind(&NavigationManager::decay_timer_callback, this));
 
+    action_server_ = rclcpp_action::create_server<nav2_msgs::action::NavigateToPose>(
+      this, "navigate_to_pose",
+      std::bind(&NavigationManager::handle_goal,     this, std::placeholders::_1, std::placeholders::_2),
+      std::bind(&NavigationManager::handle_cancel,   this, std::placeholders::_1),
+      std::bind(&NavigationManager::handle_accepted, this, std::placeholders::_1));
+
     RCLCPP_INFO(get_logger(),
       "NavigationManager ready: local_plan=%.1f Hz horizon=%.2f m decay=%.1f Hz cooldown=%.2f s",
       local_freq,
       get_parameter("local_plan_horizon").as_double(),
       decay_freq,
       get_parameter("replan_cooldown").as_double());
+    RCLCPP_INFO(get_logger(), "Action server 'navigate_to_pose' ready");
   }
 
 private:
+  rclcpp_action::GoalResponse handle_goal(
+    const rclcpp_action::GoalUUID &,
+    std::shared_ptr<const nav2_msgs::action::NavigateToPose::Goal> goal)
+  {
+    RCLCPP_INFO(get_logger(), "Action goal received: (%.3f, %.3f)",
+      goal->pose.pose.position.x, goal->pose.pose.position.y);
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+  }
+
+  rclcpp_action::CancelResponse handle_cancel(
+    const std::shared_ptr<rclcpp_action::ServerGoalHandle<nav2_msgs::action::NavigateToPose>> /*goal_handle*/)
+  {
+    RCLCPP_INFO(get_logger(), "Navigation cancel requested via action");
+    return rclcpp_action::CancelResponse::ACCEPT;
+  }
+
+  void handle_accepted(
+    const std::shared_ptr<rclcpp_action::ServerGoalHandle<nav2_msgs::action::NavigateToPose>> goal_handle)
+  {
+    {
+      std::lock_guard<std::mutex> lock(action_mutex_);
+      if (active_goal_handle_ && active_goal_handle_->is_active()) {
+        active_goal_handle_->abort(std::make_shared<nav2_msgs::action::NavigateToPose::Result>());
+      }
+      active_goal_handle_ = goal_handle;
+      action_start_time_  = now();
+    }
+
+    const auto & pose = goal_handle->get_goal()->pose;
+    {
+      std::lock_guard<std::mutex> lock(path_mutex_);
+      stored_goal_ = pose;
+    }
+    request_plan(pose);
+  }
+
   void map_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
   {
     std::lock_guard<std::mutex> lock(memory_mutex_);
@@ -326,6 +371,21 @@ private:
   {
     if (planning_in_progress_) return;
 
+    {
+      std::lock_guard<std::mutex> alock(action_mutex_);
+      if (active_goal_handle_ && active_goal_handle_->is_canceling()) {
+        {
+          std::lock_guard<std::mutex> plock(path_mutex_);
+          has_path_ = false;
+        }
+        publish_execute(false);
+        active_goal_handle_->canceled(std::make_shared<nav2_msgs::action::NavigateToPose::Result>());
+        active_goal_handle_ = nullptr;
+        RCLCPP_INFO(get_logger(), "Navigation cancelled");
+        return;
+      }
+    }
+
     std::vector<Point2D> path;
     geometry_msgs::msg::PoseStamped stored_goal;
     bool has_path;
@@ -351,6 +411,13 @@ private:
       }
       publish_execute(false);
       RCLCPP_INFO(get_logger(), "Global goal reached");
+      {
+        std::lock_guard<std::mutex> alock(action_mutex_);
+        if (active_goal_handle_ && active_goal_handle_->is_active()) {
+          active_goal_handle_->succeed(std::make_shared<nav2_msgs::action::NavigateToPose::Result>());
+          active_goal_handle_ = nullptr;
+        }
+      }
       return;
     }
 
@@ -551,6 +618,20 @@ private:
 
     current_plan_pub_->publish(local_plan);
     publish_execute(true);
+
+    {
+      std::lock_guard<std::mutex> alock(action_mutex_);
+      if (active_goal_handle_ && active_goal_handle_->is_active()) {
+        auto fb = std::make_shared<nav2_msgs::action::NavigateToPose::Feedback>();
+        fb->current_pose.header.stamp    = now();
+        fb->current_pose.header.frame_id = map_frame_;
+        fb->current_pose.pose.position.x = robot.x;
+        fb->current_pose.pose.position.y = robot.y;
+        fb->distance_remaining = static_cast<float>(distance(robot, path.back()));
+        fb->navigation_time    = now() - action_start_time_;
+        active_goal_handle_->publish_feedback(fb);
+      }
+    }
   }
 
   bool get_robot_pose(Point2D & pose_out) const
@@ -642,6 +723,11 @@ private:
 
   std::string map_frame_;
   std::string robot_base_frame_;
+
+  rclcpp_action::Server<nav2_msgs::action::NavigateToPose>::SharedPtr                  action_server_;
+  std::shared_ptr<rclcpp_action::ServerGoalHandle<nav2_msgs::action::NavigateToPose>> active_goal_handle_;
+  std::mutex   action_mutex_;
+  rclcpp::Time action_start_time_;
 };
 
 }  // namespace machida_navigation
@@ -650,7 +736,9 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<machida_navigation::NavigationManager>();
-  rclcpp::spin(node);
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(node);
+  executor.spin();
   rclcpp::shutdown();
   return 0;
 }
