@@ -1,0 +1,14 @@
+src/thirdparty
+
+# その他ビルドを妨げる一時ディレクトリ・成果物
+build/
+install/
+log/
+.git/
+.pixi/
+.vscode/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.DS_Store
