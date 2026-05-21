@@ -55,6 +55,7 @@ public:
     declare_parameter("goal_yaw_tolerance",  0.05);
     declare_parameter("slowdown_distance",   0.6);
     declare_parameter("min_linear_velocity",   0.2);
+    declare_parameter("max_linear_velocity",   0.5);
     declare_parameter("min_angular_velocity", 0.3);
     declare_parameter("holonomic",            false);
     declare_parameter("max_linear_acceleration",  0.5);
@@ -381,11 +382,12 @@ private:
   double desired_linear_velocity(double dist_to_goal) const
   {
     const double v = get_parameter("linear_velocity").as_double();
+    const double max_v = get_parameter("max_linear_velocity").as_double();
     const double slowdown_distance = get_parameter("slowdown_distance").as_double();
-    if (slowdown_distance <= 1e-6) return v;
+    if (slowdown_distance <= 1e-6) return std::min(v, max_v);
 
     const double scale = std::clamp(dist_to_goal / slowdown_distance, 0.0, 1.0);
-    return v * scale;
+    return std::min(v * scale, max_v);
   }
 
   void publish_stop()
