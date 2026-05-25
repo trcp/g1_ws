@@ -9,20 +9,23 @@ local task = {
     g1_bringup = {
       display_name = "G1 Bring up",
       description = "",
-      command = {
-        template = "cd /home/unitree/g1_ws && /usr/bin/docker compose up erasers_g1",
-        kill = "cd /home/unitree/g1_ws && /usr/bin/docker compose down erasers_g1",
-        variables = {},
+      commands = {
+        default = {
+          template = "cd /home/unitree/g1_ws && /usr/bin/docker compose up erasers_g1",
+          kill = "cd /home/unitree/g1_ws && /usr/bin/docker compose down erasers_g1",
+          variables = {},
+        },
       },
     },
     navigation = {
       display_name = "Navigation",
-      description = "all navigation and localization launch in erasers g1 container",
-      command = {
-        -- template = "ros2 launch machida_navigation machida_navigation.launch.py",
-        template = "cd /home/unitree/g1_ws && /usr/bin/docker compose exec erasers_g1 bash -ic \"ros2 launch machida_navigation machida_navigation.launch.py map_dir:=/home/unitree/colcon_ws/map\"",
-        kill = "",
-        variables = {},
+      description = "all navigation and localization launch",
+      commands = {
+        default = {
+          template = "cd /home/unitree/g1_ws && /usr/bin/docker compose exec erasers_g1 bash -ic \"ros2 launch machida_navigation machida_navigation.launch.py map_dir:=/home/unitree/colcon_ws/map\"",
+          kill = "",
+          variables = {},
+        },
       },
     },
   },
