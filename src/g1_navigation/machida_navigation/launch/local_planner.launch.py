@@ -71,6 +71,11 @@ def generate_launch_description():
             description='Minimum forward velocity sent to the robot [m/s] (hardware dead-band)',
         ),
         DeclareLaunchArgument(
+            'max_linear_velocity',
+            default_value='0.5',
+            description='Maximum forward velocity sent to the robot [m/s]',
+        ),
+        DeclareLaunchArgument(
             'control_frequency',
             default_value='20.0',
             description='Control loop frequency [Hz]',
@@ -100,6 +105,7 @@ def generate_launch_description():
                 'max_path_deviation':   LaunchConfiguration('max_path_deviation'),
                 'slowdown_distance':    LaunchConfiguration('slowdown_distance'),
                 'min_linear_velocity':  LaunchConfiguration('min_linear_velocity'),
+                'max_linear_velocity':  LaunchConfiguration('max_linear_velocity'),
                 'control_frequency':    LaunchConfiguration('control_frequency'),
                 'holonomic':            LaunchConfiguration('holonomic'),
             }],
