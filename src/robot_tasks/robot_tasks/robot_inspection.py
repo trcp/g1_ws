@@ -91,12 +91,12 @@ def main():
         
         smach.StateMachine.add('HUMAN_INTARACTION', SpeechToText(node=node,
                                                                  tts=tts,
-                                                                 start_msg='My name is erasers_g1. Can you hear me at this volume? If so, please say YES or NO after the chime sounds.',
+                                                                 start_msg='My name is erasers_g1, Did you finish my inspection?? If so, please say YES or NO after the chime sounds.',
                                                                  success_msg='Thank you! I will go to exit.',
-                                                                 timeout_msg='I see. That\'s too bad. I\'ll try again later.',
+                                                                 timeout_msg='OK. I will stay.',
                                                                  ),
                                 transitions={'success': 'MOVE_EXIT_POINT',
-                                             'timeout': 'MOVE_EXIT_POINT',
+                                             'timeout': 'HUMAN_INTARACTION',
                                              'failure': 'failure',})
 
         smach.StateMachine.add('MOVE_EXIT_POINT', smach.CBState(cb=move_to_pose_cb,

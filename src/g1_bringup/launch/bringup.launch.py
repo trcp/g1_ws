@@ -170,7 +170,7 @@ def generate_launch_description():
     ld.add_action(imu_publisher)
     ld.add_action(odom_publisher)
     ld.add_action(cmd_vel)
-    ld.add_action(head_joints)
+    # ld.add_action(head_joints)
     ld.add_action(arm_joint_control)
     #ld.add_action(arm_endeffector_control)
     #ld.add_action(cartesian_trajectory_planner)
