@@ -123,6 +123,12 @@ private:
 
   void control_loop()
   {
+    // If goal was already reached, yield control to other publishers (e.g. joystick)
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (reached_goal_) return;
+    }
+
     // Stop while execute_local_planner is false
     {
       std::lock_guard<std::mutex> lock(execute_mutex_);
@@ -187,7 +193,6 @@ private:
     const double dist_to_goal = distance(pose, goal);
 
     if (reached_goal) {
-      publish_stop();
       return;
     }
 
