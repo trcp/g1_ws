@@ -133,9 +133,13 @@ private:
     {
       std::lock_guard<std::mutex> lock(execute_mutex_);
       if (!executing_) {
-        publish_stop();
+        if (prev_executing_) {
+          publish_stop();
+          prev_executing_ = false;
+        }
         return;
       }
+      prev_executing_ = true;
     }
 
     Point2D pose;
@@ -424,6 +428,7 @@ private:
 
   std::mutex execute_mutex_;
   bool executing_{false};
+  bool prev_executing_{false};
 
   double prev_v_{0.0};
   double prev_vy_{0.0};
