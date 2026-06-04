@@ -412,7 +412,7 @@ def generate_launch_description():
         DeclareLaunchArgument('max_path_deviation', default_value='0.3'),
         DeclareLaunchArgument('slowdown_distance', default_value='0.6'),
         DeclareLaunchArgument('min_linear_velocity', default_value='0.21'),
-        DeclareLaunchArgument('max_linear_velocity', default_value='0.5'),
+        DeclareLaunchArgument('max_linear_velocity', default_value='0.8'),
         DeclareLaunchArgument('control_frequency', default_value='20.0'),
         DeclareLaunchArgument('holonomic', default_value='true'),
         DeclareLaunchArgument('max_linear_acceleration', default_value='0.5'),

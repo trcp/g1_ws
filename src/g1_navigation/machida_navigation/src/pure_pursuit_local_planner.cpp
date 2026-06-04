@@ -123,13 +123,23 @@ private:
 
   void control_loop()
   {
+    // If goal was already reached, yield control to other publishers (e.g. joystick)
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (reached_goal_) return;
+    }
+
     // Stop while execute_local_planner is false
     {
       std::lock_guard<std::mutex> lock(execute_mutex_);
       if (!executing_) {
-        publish_stop();
+        if (prev_executing_) {
+          publish_stop();
+          prev_executing_ = false;
+        }
         return;
       }
+      prev_executing_ = true;
     }
 
     Point2D pose;
@@ -187,7 +197,6 @@ private:
     const double dist_to_goal = distance(pose, goal);
 
     if (reached_goal) {
-      publish_stop();
       return;
     }
 
@@ -419,6 +428,7 @@ private:
 
   std::mutex execute_mutex_;
   bool executing_{false};
+  bool prev_executing_{false};
 
   double prev_v_{0.0};
   double prev_vy_{0.0};

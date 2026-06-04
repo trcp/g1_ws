@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 # --- Port / Protocol ---
-DEVICE_NAME   = "/dev/ttyCH341USB0"
+# DEVICE_NAME   = "/dev/ttyCH341USB0"
+DEVICE_NAME   = "/dev/ttyUSB0"
 BAUDRATE      = 1000000
 PROTOCOL_VER  = 2.0
 

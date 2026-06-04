@@ -27,7 +27,7 @@ class HeadServoNode(Node):
     def __init__(self):
         super().__init__('head_servo_node')
 
-        self.declare_parameter('port', '/dev/ttyCH341USB0')
+        self.declare_parameter('port', '/dev/ttyUSB0')
         self.declare_parameter('baudrate', 1000000)
         self.declare_parameter('pan_id', 1)
         self.declare_parameter('tilt_id', 2)

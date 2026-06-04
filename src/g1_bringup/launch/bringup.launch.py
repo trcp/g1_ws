@@ -104,7 +104,7 @@ def generate_launch_description():
     # 頭部ジョイントの起動
     head_joints = Node(
         package='head_servo_controller',
-        executable='head_servo_controller',
+        executable='head_servo_node',
         emulate_tty=True,
         parameters=[
             os.path.join(get_package_share_directory('head_servo_controller'), 'params', 'head_servo.yaml'),
