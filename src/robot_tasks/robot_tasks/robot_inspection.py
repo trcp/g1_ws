@@ -29,11 +29,13 @@ import os
 指定されたロケーションに移動する
 """
 @smach.cb_interface(outcomes=['success', 'timeout', 'failure'],
-                    input_keys=['abs_pose'],
+                    input_keys=['abs_pose', 'initial_pose'],
                     output_keys=[])
-def move_to_pose_cb(userdata, node:Node, tts_say:TTS.say, navigation:G1Navigation, message:str='I will move.'):
+def move_to_pose_cb(userdata, node:Node, tts_say:TTS.say, navigation:G1Navigation, init_pose:bool=False,  message:str='I will move.'):
     try:
         tts_say(message)
+        if init_pose:
+            navigation.set_initialpose(pose=[userdata.initial_pose[0], userdata.initial_pose[1], userdata.initial_pose[2]])
         navigation.move_abs(userdata.abs_pose[0],
                             userdata.abs_pose[1],
                             userdata.abs_pose[2])
@@ -62,8 +64,9 @@ def main():
     sm = smach.StateMachine(outcomes=['success', 'failure'])
 
     # userdatas
-    sm.userdata.inspection_point = [-2.58, -1.86, -1.57]
-    sm.userdata.exit_point = [-0.795, -5.98, -1.57]
+    sm.userdata.initial_pose = [-1.08, -0.3, -1.57]
+    sm.userdata.inspection_point = [-3.50, -0.95, 0.0]
+    sm.userdata.exit_point = [-2.5, -5.0, -1.57]
     sm.userdata.success_keywards = ['yes', 'YES', 'Yes']
     sm.userdata.num_challenge = 0
 
@@ -81,7 +84,7 @@ def main():
                                 })
         
         smach.StateMachine.add('MOVE_INSPECTION_POINT', smach.CBState(cb=move_to_pose_cb,
-                                                                      cb_kwargs={'node': node, 'tts_say': SAY, 'navigation': NAVIGATION, 'message': 'I will go to the inspection point.'}),
+                                                                      cb_kwargs={'node': node, 'tts_say': SAY, 'navigation': NAVIGATION, 'init_pose': True, 'message': 'I will go to the inspection point.'}),
                                 transitions={
                                     'success':'HUMAN_INTARACTION',
                                     'timeout':'failure',
@@ -91,9 +94,9 @@ def main():
         
         smach.StateMachine.add('HUMAN_INTARACTION', SpeechToText(node=node,
                                                                  tts=tts,
-                                                                 start_msg='My name is erasers_g1. Can you hear me at this volume? If so, please say YES or NO after the chime sounds.',
+                                                                 start_msg='My name is erasers_g1. Is my inspection over? Please say YES or NO after the chime sounds.',
                                                                  success_msg='Thank you! I will go to exit.',
-                                                                 timeout_msg='I see. That\'s too bad. I\'ll try again later.',
+                                                                 timeout_msg='OK, I will wait.',
                                                                  ),
                                 transitions={'success': 'MOVE_EXIT_POINT',
                                              'timeout': 'MOVE_EXIT_POINT',

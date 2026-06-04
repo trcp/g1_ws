@@ -10,9 +10,14 @@ local task = {
       display_name = "G1 Bring up",
       description = "",
       commands = {
-        default = {
+        g1 = {
           template = "cd /home/unitree/g1_ws && /usr/bin/docker compose up erasers_g1",
-          kill = "cd /home/unitree/g1_ws && /usr/bin/docker compose down erasers_g1",
+          kill = "cd /home/unitree/g1_ws && /usr/bin/docker compose stop erasers_g1",
+          variables = {},
+        },
+        katana = {
+          template = "cd /home/roboworks/g1_ws && /usr/bin/docker compose up katana",
+          kill = "cd /home/roboworks/g1_ws && /usr/bin/docker compose stop katana",
           variables = {},
         },
       },
@@ -28,6 +33,17 @@ local task = {
         },
       },
     },
+    robot_inspection = {
+      display_name = "RobotInspection",
+      description = "Bringup the Robot Inspection",
+      commands = {
+        default = {
+          template = "cd /home/roboworks/g1_ws && /usr/bin/docker compose run --name ri --rm katana bash -ic \"ros2 run robot_tasks robot_inspection\"",
+          kill = "docker stop ri",
+          variables = {},
+        },
+      },
+    },
   },
   -- direction: "horizontal"=上下分割, "vertical"=左右分割
   layout = {
@@ -37,6 +53,7 @@ local task = {
         direction = "vertical",
         panes = {
           { program = "g1_bringup" },
+          { program = "robot_inspection" },
         },
       },
       {
