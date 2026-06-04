@@ -104,7 +104,7 @@ def generate_launch_description():
     # 頭部ジョイントの起動
     head_joints = Node(
         package='head_servo_controller',
-        executable='head_servo_controller',
+        executable='head_servo_node',
         emulate_tty=True,
         parameters=[
             os.path.join(get_package_share_directory('head_servo_controller'), 'params', 'head_servo.yaml'),
@@ -170,7 +170,7 @@ def generate_launch_description():
     ld.add_action(imu_publisher)
     ld.add_action(odom_publisher)
     ld.add_action(cmd_vel)
-    # ld.add_action(head_joints)
+    ld.add_action(head_joints)
     ld.add_action(arm_joint_control)
     #ld.add_action(arm_endeffector_control)
     #ld.add_action(cartesian_trajectory_planner)

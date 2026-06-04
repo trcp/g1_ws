@@ -1,5 +1,5 @@
 # params/head_servo.yaml
-head_servo_controller:
+head_servo_node:
   ros__parameters:
     # 通信設定
     dx_path: "/dev/ttyCH341USB0"
@@ -9,32 +9,26 @@ head_servo_controller:
     pan_id: 1
     tilt_id: 2
 
-    # 物理的な中立点（パルス値）とオフセット・回転方向
-    # ※Dynamixelの機構的センターである2048を基準とします
-    pan_home_pulse: 2048
-    tilt_home_pulse: 2048
-    pan_rad_offset: 0.0
-    tilt_rad_offset: 0.0
+    # 通信設定
+    publish_rate: 10.0
+
+    # Calibration pulses from the existing hardware calibration.
+    # These values correspond to the reference angles below, not necessarily
+    # the camera-forward 0 rad pose.
+    pan_zero: 945
+    tilt_zero: 1061
+    pan_zero_rad: -0.8727
+    tilt_zero_rad: -1.5708
+
+    # URDF joint limits [rad]
+    pan_min_rad: -0.7
+    pan_max_rad: 0.7
+    tilt_min_rad: -1.57
+    tilt_max_rad: 1.1
+
+    # +1: positive ROS angle increases Dynamixel pulse
+    # -1: positive ROS angle decreases Dynamixel pulse
     pan_dir: 1
     tilt_dir: 1
 
-    # 物理制限（pulse 単位、XL330: 0~4095）
-    # ※物理干渉を防ぐための安全な可動範囲（約+/-90度）
-    pan_min_pulse: 1024
-    pan_max_pulse: 3072
-    tilt_min_pulse: 1024
-    tilt_max_pulse: 3072
-
-    # 動作パラメータ・プロファイル
-    moving_speed: 200        # Profile Velocity [pulse/s]
-    moving_accel: 50         # Profile Acceleration [pulse/s^2] (突入電流防止)
-    current_limit_mA: 400    # 電流制限 [mA] (USBバスパワー保護のため低めの設定)
-    
-    # 制御ループ・安全設定
-    control_period_sec: 0.02 # 50Hz 制御ループ
-    vel_timeout_sec: 0.5     # 速度指令のタイムアウト [sec]
-    bus_watchdog_ms: 100     # 100ms通信断で自動ストップ [ms]
-    
-    # デバッグ・電源監視
-    debug_power_monitor: true
-    power_monitor_period_sec: 0.1
+    profile_velocity: 1000

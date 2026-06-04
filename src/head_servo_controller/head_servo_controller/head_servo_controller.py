@@ -73,7 +73,7 @@ def to_signed_16(value: int) -> int:
 
 class PanTiltNode(Node):
     def __init__(self):
-        super().__init__('head_servo_controller')
+        super().__init__('head_servo_node')
 
         self.lock = threading.RLock()
         self.callback_group = ReentrantCallbackGroup()
