@@ -80,6 +80,26 @@ def generate_launch_description():
             default_value='0.5',
             description='Min distance from sensor origin to accept a point [m] (LiDAR dead zone)',
         ),
+        DeclareLaunchArgument(
+            'realsense_topic',
+            default_value='',
+            description='RealSense PointCloud2 topic. Empty string disables RealSense input.',
+        ),
+        DeclareLaunchArgument(
+            'realsense_min_obstacle_height',
+            default_value='0.02',
+            description='Min point height above robot base for RealSense [m]',
+        ),
+        DeclareLaunchArgument(
+            'realsense_max_obstacle_height',
+            default_value='1.0',
+            description='Max point height above robot base for RealSense [m]',
+        ),
+        DeclareLaunchArgument(
+            'realsense_min_sensor_range',
+            default_value='0.2',
+            description='Min distance from RealSense sensor origin to accept a point [m]',
+        ),
 
         # GlobalCostmapNode: /map2d -> /global_costmap
         Node(
@@ -111,10 +131,14 @@ def generate_launch_description():
                 'local_height':          LaunchConfiguration('local_height'),
                 'min_obstacle_height':   LaunchConfiguration('min_obstacle_height'),
                 'max_obstacle_height':   LaunchConfiguration('max_obstacle_height'),
-                'min_sensor_range':      LaunchConfiguration('min_sensor_range'),
-                'footprint':             LaunchConfiguration('footprint'),
-                'clearance':             LaunchConfiguration('local_clearance'),
-                'obstacle_threshold':    LaunchConfiguration('obstacle_threshold'),
+                'min_sensor_range':               LaunchConfiguration('min_sensor_range'),
+                'footprint':                      LaunchConfiguration('footprint'),
+                'clearance':                      LaunchConfiguration('local_clearance'),
+                'obstacle_threshold':             LaunchConfiguration('obstacle_threshold'),
+                'realsense_topic':                LaunchConfiguration('realsense_topic'),
+                'realsense_min_obstacle_height':  LaunchConfiguration('realsense_min_obstacle_height'),
+                'realsense_max_obstacle_height':  LaunchConfiguration('realsense_max_obstacle_height'),
+                'realsense_min_sensor_range':     LaunchConfiguration('realsense_min_sensor_range'),
             }],
         ),
     ])

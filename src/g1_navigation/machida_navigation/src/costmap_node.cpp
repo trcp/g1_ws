@@ -1,6 +1,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -99,6 +100,10 @@ public:
     declare_parameter("footprint",            std::string("0.4,0.3"));
     declare_parameter("clearance",            0.1);
     declare_parameter("obstacle_threshold",   50);
+    declare_parameter("realsense_topic",               std::string(""));
+    declare_parameter("realsense_min_obstacle_height", 0.02);
+    declare_parameter("realsense_max_obstacle_height", 1.0);
+    declare_parameter("realsense_min_sensor_range",    0.2);
 
     tf_buffer_   = std::make_unique<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -107,6 +112,14 @@ public:
       get_parameter("lidar_topic").as_string(),
       rclcpp::SensorDataQoS(),
       std::bind(&LocalCostmapNode::cloud_callback, this, std::placeholders::_1));
+
+    const std::string rs_topic = get_parameter("realsense_topic").as_string();
+    if (!rs_topic.empty()) {
+      realsense_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
+        rs_topic, rclcpp::SensorDataQoS(),
+        std::bind(&LocalCostmapNode::realsense_callback, this, std::placeholders::_1));
+      RCLCPP_INFO(get_logger(), "RealSense input enabled: %s", rs_topic.c_str());
+    }
 
     costmap_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/local_costmap", 1);
 
@@ -133,13 +146,71 @@ private:
        + (1.0 - 2.0*(qx*qx + qy*qy))*lz + tz;
   }
 
+  // Extract (x, y) obstacle candidates from a PointCloud2 message and append to out.
+  // min_range_sq: squared minimum distance in sensor frame to reject near-field noise.
+  void collect_obstacle_points(
+    const sensor_msgs::msg::PointCloud2 & msg,
+    float min_h, float max_h, float min_range_sq,
+    double robot_z,
+    const geometry_msgs::msg::TransformStamped & cloud_tf,
+    std::vector<std::pair<float, float>> & out) const
+  {
+    int off_x = -1, off_y = -1, off_z = -1;
+    for (const auto & field : msg.fields) {
+      if (field.name == "x")      off_x = static_cast<int>(field.offset);
+      else if (field.name == "y") off_y = static_cast<int>(field.offset);
+      else if (field.name == "z") off_z = static_cast<int>(field.offset);
+    }
+    if (off_x < 0 || off_y < 0 || off_z < 0) {
+      RCLCPP_WARN_ONCE(get_logger(), "PointCloud2 missing x/y/z fields");
+      return;
+    }
+
+    const double cqx = cloud_tf.transform.rotation.x;
+    const double cqy = cloud_tf.transform.rotation.y;
+    const double cqz = cloud_tf.transform.rotation.z;
+    const double cqw = cloud_tf.transform.rotation.w;
+    const double ctx = cloud_tf.transform.translation.x;
+    const double cty = cloud_tf.transform.translation.y;
+    const double ctz = cloud_tf.transform.translation.z;
+
+    const uint8_t * data_ptr  = msg.data.data();
+    const uint32_t point_step = msg.point_step;
+    const uint32_t num_points = msg.width * msg.height;
+
+    for (uint32_t i = 0; i < num_points; ++i) {
+      const uint8_t * p = data_ptr + i * point_step;
+      float lx, ly, lz;
+      std::memcpy(&lx, p + off_x, sizeof(float));
+      std::memcpy(&ly, p + off_y, sizeof(float));
+      std::memcpy(&lz, p + off_z, sizeof(float));
+
+      if (!std::isfinite(lx) || !std::isfinite(ly) || !std::isfinite(lz)) continue;
+
+      if (lx*lx + ly*ly + lz*lz < min_range_sq) continue;
+
+      double rx, ry, rz;
+      transform_point(lx, ly, lz, cqx, cqy, cqz, cqw, ctx, cty, ctz, rx, ry, rz);
+
+      const float dz = static_cast<float>(rz - robot_z);
+      if (dz < min_h || dz > max_h) continue;
+
+      out.emplace_back(static_cast<float>(rx), static_cast<float>(ry));
+    }
+  }
+
+  void realsense_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+  {
+    std::lock_guard<std::mutex> lock(realsense_cache_mutex_);
+    realsense_cache_ = msg;
+  }
+
   void cloud_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   {
-
     const std::string odom_frame = get_parameter("local_costmap_frame").as_string();
     const std::string base_frame = get_parameter("robot_base_frame").as_string();
 
-    // Lookup robot pose and cloud-to-odom transform
+    // Lookup robot pose and LiDAR-to-odom transform
     geometry_msgs::msg::TransformStamped robot_tf;
     geometry_msgs::msg::TransformStamped cloud_tf;
     try {
@@ -155,72 +226,50 @@ private:
     const double robot_y = robot_tf.transform.translation.y;
     const double robot_z = robot_tf.transform.translation.z;
 
-    const double cqx = cloud_tf.transform.rotation.x;
-    const double cqy = cloud_tf.transform.rotation.y;
-    const double cqz = cloud_tf.transform.rotation.z;
-    const double cqw = cloud_tf.transform.rotation.w;
-    const double ctx = cloud_tf.transform.translation.x;
-    const double cty = cloud_tf.transform.translation.y;
-    const double ctz = cloud_tf.transform.translation.z;
-
-    const float resolution  = static_cast<float>(get_parameter("resolution").as_double());
-    const float local_width = static_cast<float>(get_parameter("local_width").as_double());
-    const float local_height= static_cast<float>(get_parameter("local_height").as_double());
-    const float min_h          = static_cast<float>(get_parameter("min_obstacle_height").as_double());
-    const float max_h          = static_cast<float>(get_parameter("max_obstacle_height").as_double());
-    const float min_sensor_range_sq = static_cast<float>(
-      get_parameter("min_sensor_range").as_double() *
-      get_parameter("min_sensor_range").as_double());
-    const std::string footprint_str = get_parameter("footprint").as_string();
-    const float clearance   = static_cast<float>(get_parameter("clearance").as_double());
-    const int obstacle_threshold = get_parameter("obstacle_threshold").as_int();
+    const float resolution   = static_cast<float>(get_parameter("resolution").as_double());
+    const float local_width  = static_cast<float>(get_parameter("local_width").as_double());
+    const float local_height = static_cast<float>(get_parameter("local_height").as_double());
+    const float min_h        = static_cast<float>(get_parameter("min_obstacle_height").as_double());
+    const float max_h        = static_cast<float>(get_parameter("max_obstacle_height").as_double());
+    const float min_range    = static_cast<float>(get_parameter("min_sensor_range").as_double());
+    const std::string footprint_str  = get_parameter("footprint").as_string();
+    const float clearance            = static_cast<float>(get_parameter("clearance").as_double());
+    const int obstacle_threshold     = get_parameter("obstacle_threshold").as_int();
 
     const int grid_w = static_cast<int>(local_width  / resolution);
     const int grid_h = static_cast<int>(local_height / resolution);
 
-    // Grid origin (bottom-left corner) centred on robot
     const float origin_x = static_cast<float>(robot_x) - local_width  * 0.5f;
     const float origin_y = static_cast<float>(robot_y) - local_height * 0.5f;
 
-    // Find x/y/z byte offsets in PointCloud2
-    int off_x = -1, off_y = -1, off_z = -1;
-    for (const auto & field : msg->fields) {
-      if (field.name == "x")      off_x = static_cast<int>(field.offset);
-      else if (field.name == "y") off_y = static_cast<int>(field.offset);
-      else if (field.name == "z") off_z = static_cast<int>(field.offset);
-    }
-    if (off_x < 0 || off_y < 0 || off_z < 0) {
-      RCLCPP_WARN_ONCE(get_logger(), "PointCloud2 missing x/y/z fields");
-      return;
-    }
-
-    // Project points onto the 2D obstacle list
     std::vector<std::pair<float, float>> obstacle_points;
-    const uint8_t * data_ptr  = msg->data.data();
-    const uint32_t point_step = msg->point_step;
-    const uint32_t num_points = msg->width * msg->height;
-    obstacle_points.reserve(num_points / 4);  // rough pre-alloc
+    obstacle_points.reserve(msg->width * msg->height / 4);
 
-    for (uint32_t i = 0; i < num_points; ++i) {
-      const uint8_t * p = data_ptr + i * point_step;
-      float lx, ly, lz;
-      std::memcpy(&lx, p + off_x, sizeof(float));
-      std::memcpy(&ly, p + off_y, sizeof(float));
-      std::memcpy(&lz, p + off_z, sizeof(float));
+    // LiDAR points
+    collect_obstacle_points(*msg, min_h, max_h, min_range * min_range,
+      robot_z, cloud_tf, obstacle_points);
 
-      if (!std::isfinite(lx) || !std::isfinite(ly) || !std::isfinite(lz)) continue;
-
-      // Reject points within the sensor dead zone (zero-returns and near-field noise)
-      if (lx*lx + ly*ly + lz*lz < min_sensor_range_sq) continue;
-
-      double rx, ry, rz;
-      transform_point(lx, ly, lz, cqx, cqy, cqz, cqw, ctx, cty, ctz, rx, ry, rz);
-
-      // Height filter relative to robot base
-      const float dz = static_cast<float>(rz - robot_z);
-      if (dz < min_h || dz > max_h) continue;
-
-      obstacle_points.emplace_back(static_cast<float>(rx), static_cast<float>(ry));
+    // RealSense cached points (merged if available)
+    {
+      std::lock_guard<std::mutex> lock(realsense_cache_mutex_);
+      if (realsense_cache_) {
+        const float rs_min_h  = static_cast<float>(
+          get_parameter("realsense_min_obstacle_height").as_double());
+        const float rs_max_h  = static_cast<float>(
+          get_parameter("realsense_max_obstacle_height").as_double());
+        const float rs_min_r  = static_cast<float>(
+          get_parameter("realsense_min_sensor_range").as_double());
+        try {
+          const auto rs_tf = tf_buffer_->lookupTransform(
+            odom_frame, realsense_cache_->header.frame_id, tf2::TimePointZero);
+          collect_obstacle_points(*realsense_cache_,
+            rs_min_h, rs_max_h, rs_min_r * rs_min_r,
+            robot_z, rs_tf, obstacle_points);
+        } catch (const tf2::TransformException & ex) {
+          RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+            "RealSense TF lookup failed: %s", ex.what());
+        }
+      }
     }
 
     // Build raw grid and inflate
@@ -250,9 +299,13 @@ private:
   }
 
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr realsense_sub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr     costmap_pub_;
   std::unique_ptr<tf2_ros::Buffer>            tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+
+  sensor_msgs::msg::PointCloud2::SharedPtr realsense_cache_;
+  std::mutex realsense_cache_mutex_;
 };
 
 }  // namespace machida_navigation
