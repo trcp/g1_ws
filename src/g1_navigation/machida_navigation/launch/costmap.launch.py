@@ -24,9 +24,14 @@ def generate_launch_description():
             description='Robot footprint: radius [m], rectangle length,width [m], or vertices [x1,y1,...]',
         ),
         DeclareLaunchArgument(
-            'clearance',
+            'global_clearance',
             default_value='0.3',
-            description='Extra clearance beyond robot body [m]',
+            description='Extra clearance beyond robot body for global costmap [m]',
+        ),
+        DeclareLaunchArgument(
+            'local_clearance',
+            default_value='0.3',
+            description='Extra clearance beyond robot body for local costmap [m]',
         ),
 
         # --- LocalCostmapNode ---
@@ -86,7 +91,7 @@ def generate_launch_description():
                 'use_sim_time':       LaunchConfiguration('use_sim_time'),
                 'obstacle_threshold': LaunchConfiguration('obstacle_threshold'),
                 'footprint':          LaunchConfiguration('footprint'),
-                'clearance':          LaunchConfiguration('clearance'),
+                'clearance':          LaunchConfiguration('global_clearance'),
             }],
         ),
 
@@ -108,7 +113,7 @@ def generate_launch_description():
                 'max_obstacle_height':   LaunchConfiguration('max_obstacle_height'),
                 'min_sensor_range':      LaunchConfiguration('min_sensor_range'),
                 'footprint':             LaunchConfiguration('footprint'),
-                'clearance':             LaunchConfiguration('clearance'),
+                'clearance':             LaunchConfiguration('local_clearance'),
                 'obstacle_threshold':    LaunchConfiguration('obstacle_threshold'),
             }],
         ),

@@ -381,7 +381,8 @@ def generate_launch_description():
             default_value="'0.3'",
             description='Robot footprint: radius, length,width, or x1,y1,... vertices.',
         ),
-        DeclareLaunchArgument('clearance', default_value='0.15'),
+        DeclareLaunchArgument('global_clearance', default_value='0.15'),
+        DeclareLaunchArgument('local_clearance', default_value='0.15'),
         DeclareLaunchArgument('local_costmap_frame', default_value='odom'),
         DeclareLaunchArgument('local_resolution', default_value='0.05'),
         DeclareLaunchArgument('local_width', default_value='4.0'),
@@ -552,7 +553,7 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'obstacle_threshold': LaunchConfiguration('obstacle_threshold'),
             'footprint': LaunchConfiguration('footprint'),
-            'clearance': LaunchConfiguration('clearance'),
+            'clearance': LaunchConfiguration('global_clearance'),
         }],
     )
 
@@ -573,7 +574,7 @@ def generate_launch_description():
             'max_obstacle_height': LaunchConfiguration('max_obstacle_height'),
             'min_sensor_range': LaunchConfiguration('min_sensor_range'),
             'footprint': LaunchConfiguration('footprint'),
-            'clearance': LaunchConfiguration('clearance'),
+            'clearance': LaunchConfiguration('local_clearance'),
             'obstacle_threshold': LaunchConfiguration('obstacle_threshold'),
         }],
     )

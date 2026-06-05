@@ -202,6 +202,11 @@ private:
 
     if (dist_to_goal <= get_parameter("goal_tolerance").as_double() || rotating_to_goal) {
       // Position reached — now align to goal yaw
+      if (!rotating_to_goal) {
+        prev_v_  = 0.0;
+        prev_vy_ = 0.0;
+        prev_w_  = 0.0;
+      }
       double heading_error = goal_yaw - yaw;
       while (heading_error >  M_PI) heading_error -= 2.0 * M_PI;
       while (heading_error < -M_PI) heading_error += 2.0 * M_PI;
