@@ -1,13 +1,19 @@
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <exception>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "machida_navigation/astar.hpp"
 
+#include "g1_srvs/srv/move_servo.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/quaternion.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
@@ -42,6 +48,17 @@ static double distance(const Point2D & a, const Point2D & b)
   return std::hypot(a.x - b.x, a.y - b.y);
 }
 
+using MoveServo = g1_srvs::srv::MoveServo;
+using NavigateToPose = nav2_msgs::action::NavigateToPose;
+using NavigateGoalHandle = rclcpp_action::ServerGoalHandle<NavigateToPose>;
+
+enum class NavigationFinishReason
+{
+  Success,
+  Fatal,
+  Cancel
+};
+
 class NavigationManager : public rclcpp::Node
 {
 public:
@@ -62,6 +79,10 @@ public:
     declare_parameter("obstacle_decay_rate",          5);
     declare_parameter("decay_frequency",              2.0);
     declare_parameter("goal_yaw_tolerance",           0.05);
+    declare_parameter("move_servo_service",           std::string("/move_servo"));
+    declare_parameter("move_servo_timeout_sec",       2.0);
+    declare_parameter("navigation_start_tilt",        0.7);
+    declare_parameter("navigation_finish_tilt",       0.0);
 
     map_frame_        = get_parameter("map_frame").as_string();
     robot_base_frame_ = get_parameter("robot_base_frame").as_string();
@@ -90,6 +111,8 @@ public:
       get_parameter("augmented_costmap_topic").as_string(), latched_qos);
 
     plan_client_ = create_client<nav_msgs::srv::GetPlan>("/compute_global_plan");
+    move_servo_client_ = create_client<MoveServo>(
+      get_parameter("move_servo_service").as_string());
 
     const double local_freq = std::max(0.1, get_parameter("local_plan_frequency").as_double());
     local_plan_timer_ = create_wall_timer(
@@ -119,7 +142,7 @@ public:
 private:
   rclcpp_action::GoalResponse handle_goal(
     const rclcpp_action::GoalUUID &,
-    std::shared_ptr<const nav2_msgs::action::NavigateToPose::Goal> goal)
+    std::shared_ptr<const NavigateToPose::Goal> goal)
   {
     RCLCPP_INFO(get_logger(), "Action goal received: (%.3f, %.3f)",
       goal->pose.pose.position.x, goal->pose.pose.position.y);
@@ -127,32 +150,16 @@ private:
   }
 
   rclcpp_action::CancelResponse handle_cancel(
-    const std::shared_ptr<rclcpp_action::ServerGoalHandle<nav2_msgs::action::NavigateToPose>> /*goal_handle*/)
+    const std::shared_ptr<NavigateGoalHandle> /*goal_handle*/)
   {
     RCLCPP_INFO(get_logger(), "Navigation cancel requested via action");
     return rclcpp_action::CancelResponse::ACCEPT;
   }
 
   void handle_accepted(
-    const std::shared_ptr<rclcpp_action::ServerGoalHandle<nav2_msgs::action::NavigateToPose>> goal_handle)
+    const std::shared_ptr<NavigateGoalHandle> goal_handle)
   {
-    {
-      std::lock_guard<std::mutex> lock(action_mutex_);
-      if (active_goal_handle_ && active_goal_handle_->is_active()) {
-        active_goal_handle_->abort(std::make_shared<nav2_msgs::action::NavigateToPose::Result>());
-      }
-      active_goal_handle_ = goal_handle;
-      action_start_time_  = now();
-    }
-
-    const auto & pose = goal_handle->get_goal()->pose;
-    {
-      std::lock_guard<std::mutex> lock(path_mutex_);
-      stored_goal_      = pose;
-      goal_yaw_         = yaw_from_quat(pose.pose.orientation);
-      position_reached_ = false;
-    }
-    request_plan(pose);
+    begin_navigation(goal_handle->get_goal()->pose, goal_handle);
   }
 
   void map_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
@@ -174,13 +181,7 @@ private:
   {
     RCLCPP_INFO(get_logger(), "Goal received: (%.3f, %.3f)",
       msg->pose.position.x, msg->pose.position.y);
-    {
-      std::lock_guard<std::mutex> lock(path_mutex_);
-      stored_goal_      = *msg;
-      goal_yaw_         = yaw_from_quat(msg->pose.orientation);
-      position_reached_ = false;
-    }
-    request_plan(*msg);
+    begin_navigation(*msg, nullptr);
   }
 
   void costmap_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
@@ -321,9 +322,308 @@ private:
     publish_augmented_costmap_locked();
   }
 
-  void request_plan(const geometry_msgs::msg::PoseStamped & goal)
+  void begin_navigation(
+    const geometry_msgs::msg::PoseStamped & goal,
+    const std::shared_ptr<NavigateGoalHandle> goal_handle)
   {
-    if (planning_in_progress_.exchange(true)) {
+    const uint64_t nav_id = next_navigation_id_.fetch_add(1) + 1;
+    const uint64_t previous_nav_id = active_navigation_id_.exchange(nav_id);
+
+    cancel_pending_start_servo(previous_nav_id);
+    mark_planning_complete(previous_nav_id);
+
+    std::shared_ptr<NavigateGoalHandle> goal_to_abort;
+    {
+      std::lock_guard<std::mutex> lock(action_mutex_);
+      if (active_goal_handle_ && active_goal_handle_->is_active()) {
+        goal_to_abort = active_goal_handle_;
+      }
+      active_goal_handle_ = goal_handle;
+      if (active_goal_handle_) {
+        action_start_time_ = now();
+      }
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(path_mutex_);
+      path_.clear();
+      path_frame_id_.clear();
+      stored_goal_      = goal;
+      goal_yaw_         = yaw_from_quat(goal.pose.orientation);
+      has_path_         = false;
+      position_reached_ = false;
+    }
+
+    replan_initialized_ = false;
+    publish_execute(false);
+
+    if (goal_to_abort) {
+      goal_to_abort->abort(std::make_shared<NavigateToPose::Result>());
+      RCLCPP_INFO(get_logger(), "Previous navigation action aborted by a new goal");
+    }
+
+    if (previous_nav_id != 0) {
+      send_finish_servo("navigation superseded");
+    }
+
+    request_start_servo_then_plan(nav_id, goal);
+  }
+
+  bool is_active_navigation(uint64_t nav_id) const
+  {
+    return nav_id != 0 && active_navigation_id_.load() == nav_id;
+  }
+
+  void request_start_servo_then_plan(
+    uint64_t nav_id,
+    const geometry_msgs::msg::PoseStamped & goal)
+  {
+    if (!is_active_navigation(nav_id)) return;
+
+    if (!move_servo_client_->service_is_ready()) {
+      RCLCPP_WARN(get_logger(),
+        "Service %s not available; continuing navigation without head tilt-up",
+        get_parameter("move_servo_service").as_string().c_str());
+      request_plan(nav_id, goal);
+      return;
+    }
+
+    const double timeout_sec =
+      std::max(0.1, get_parameter("move_servo_timeout_sec").as_double());
+    const double tilt = get_parameter("navigation_start_tilt").as_double();
+
+    auto request = std::make_shared<MoveServo::Request>();
+    request->pan = 0.0f;
+    request->tilt = static_cast<float>(tilt);
+
+    {
+      std::lock_guard<std::mutex> lock(servo_mutex_);
+      start_servo_pending_ = true;
+      pending_start_servo_nav_id_ = nav_id;
+      if (start_servo_timeout_timer_) {
+        start_servo_timeout_timer_->cancel();
+      }
+      start_servo_timeout_timer_ = create_wall_timer(
+        std::chrono::duration<double>(timeout_sec),
+        [this, nav_id, goal]() {
+          handle_start_servo_timeout(nav_id, goal);
+        });
+    }
+
+    try {
+      move_servo_client_->async_send_request(
+        request,
+        [this, nav_id, goal, tilt](rclcpp::Client<MoveServo>::SharedFuture future) {
+          handle_start_servo_response(nav_id, goal, tilt, future);
+        });
+    } catch (const std::exception & ex) {
+      cancel_pending_start_servo(nav_id);
+      RCLCPP_WARN(get_logger(),
+        "Failed to call /move_servo tilt %.3f before navigation: %s; continuing",
+        tilt, ex.what());
+      request_plan(nav_id, goal);
+    }
+  }
+
+  void handle_start_servo_response(
+    uint64_t nav_id,
+    const geometry_msgs::msg::PoseStamped & goal,
+    double tilt,
+    rclcpp::Client<MoveServo>::SharedFuture future)
+  {
+    if (!claim_pending_start_servo(nav_id)) return;
+
+    bool success = false;
+    try {
+      const auto response = future.get();
+      success = response && response->success;
+    } catch (const std::exception & ex) {
+      RCLCPP_WARN(get_logger(),
+        "MoveServo tilt %.3f response failed: %s; continuing navigation",
+        tilt, ex.what());
+    }
+
+    if (!success) {
+      RCLCPP_WARN(get_logger(),
+        "MoveServo tilt %.3f did not report success; continuing navigation",
+        tilt);
+    } else {
+      RCLCPP_INFO(get_logger(), "MoveServo tilt %.3f succeeded; starting navigation", tilt);
+    }
+
+    if (!is_active_navigation(nav_id)) return;
+    request_plan(nav_id, goal);
+  }
+
+  void handle_start_servo_timeout(
+    uint64_t nav_id,
+    const geometry_msgs::msg::PoseStamped & goal)
+  {
+    if (!claim_pending_start_servo(nav_id)) return;
+
+    RCLCPP_WARN(get_logger(),
+      "MoveServo tilt-up timed out after %.3f s; continuing navigation",
+      std::max(0.1, get_parameter("move_servo_timeout_sec").as_double()));
+
+    if (!is_active_navigation(nav_id)) return;
+    request_plan(nav_id, goal);
+  }
+
+  bool claim_pending_start_servo(uint64_t nav_id)
+  {
+    std::lock_guard<std::mutex> lock(servo_mutex_);
+    if (!start_servo_pending_ || pending_start_servo_nav_id_ != nav_id) {
+      return false;
+    }
+
+    start_servo_pending_ = false;
+    pending_start_servo_nav_id_ = 0;
+    if (start_servo_timeout_timer_) {
+      start_servo_timeout_timer_->cancel();
+    }
+    return true;
+  }
+
+  void cancel_pending_start_servo(uint64_t nav_id)
+  {
+    std::lock_guard<std::mutex> lock(servo_mutex_);
+    if (nav_id == 0 || pending_start_servo_nav_id_ != nav_id) {
+      return;
+    }
+
+    start_servo_pending_ = false;
+    pending_start_servo_nav_id_ = 0;
+    if (start_servo_timeout_timer_) {
+      start_servo_timeout_timer_->cancel();
+    }
+  }
+
+  void send_finish_servo(const std::string & reason)
+  {
+    const double tilt = get_parameter("navigation_finish_tilt").as_double();
+
+    if (!move_servo_client_->service_is_ready()) {
+      RCLCPP_WARN(get_logger(),
+        "Service %s not available; failed to restore head tilt after %s",
+        get_parameter("move_servo_service").as_string().c_str(), reason.c_str());
+      return;
+    }
+
+    auto request = std::make_shared<MoveServo::Request>();
+    request->pan = 0.0f;
+    request->tilt = static_cast<float>(tilt);
+
+    try {
+      move_servo_client_->async_send_request(
+        request,
+        [this, reason, tilt](rclcpp::Client<MoveServo>::SharedFuture future) {
+          bool success = false;
+          try {
+            const auto response = future.get();
+            success = response && response->success;
+          } catch (const std::exception & ex) {
+            RCLCPP_WARN(get_logger(),
+              "MoveServo restore tilt %.3f after %s failed: %s",
+              tilt, reason.c_str(), ex.what());
+            return;
+          }
+
+          if (!success) {
+            RCLCPP_WARN(get_logger(),
+              "MoveServo restore tilt %.3f after %s did not report success",
+              tilt, reason.c_str());
+          }
+        });
+    } catch (const std::exception & ex) {
+      RCLCPP_WARN(get_logger(),
+        "Failed to call /move_servo restore tilt %.3f after %s: %s",
+        tilt, reason.c_str(), ex.what());
+    }
+  }
+
+  void finish_navigation(uint64_t nav_id, NavigationFinishReason reason)
+  {
+    uint64_t expected = nav_id;
+    if (!active_navigation_id_.compare_exchange_strong(expected, 0)) {
+      return;
+    }
+
+    cancel_pending_start_servo(nav_id);
+    mark_planning_complete(nav_id);
+
+    {
+      std::lock_guard<std::mutex> lock(path_mutex_);
+      path_.clear();
+      path_frame_id_.clear();
+      has_path_ = false;
+      position_reached_ = false;
+    }
+
+    publish_execute(false);
+
+    std::shared_ptr<NavigateGoalHandle> goal_handle;
+    {
+      std::lock_guard<std::mutex> lock(action_mutex_);
+      goal_handle = active_goal_handle_;
+      active_goal_handle_.reset();
+    }
+
+    switch (reason) {
+      case NavigationFinishReason::Success:
+        RCLCPP_INFO(get_logger(), "Navigation succeeded");
+        if (goal_handle && goal_handle->is_active()) {
+          goal_handle->succeed(std::make_shared<NavigateToPose::Result>());
+        }
+        send_finish_servo("navigation success");
+        break;
+      case NavigationFinishReason::Fatal:
+        RCLCPP_FATAL(get_logger(), "Navigation finished with fatal failure");
+        if (goal_handle && goal_handle->is_active()) {
+          goal_handle->abort(std::make_shared<NavigateToPose::Result>());
+        }
+        send_finish_servo("navigation fatal");
+        break;
+      case NavigationFinishReason::Cancel:
+        RCLCPP_INFO(get_logger(), "Navigation cancelled");
+        if (goal_handle && goal_handle->is_canceling()) {
+          goal_handle->canceled(std::make_shared<NavigateToPose::Result>());
+        }
+        send_finish_servo("navigation cancel");
+        break;
+    }
+  }
+
+  bool is_current_navigation_planning(uint64_t nav_id)
+  {
+    std::lock_guard<std::mutex> lock(planning_mutex_);
+    return planning_in_progress_ && planning_nav_id_ == nav_id;
+  }
+
+  bool mark_planning_started(uint64_t nav_id)
+  {
+    std::lock_guard<std::mutex> lock(planning_mutex_);
+    if (planning_in_progress_ && planning_nav_id_ == nav_id) {
+      return false;
+    }
+    planning_in_progress_ = true;
+    planning_nav_id_ = nav_id;
+    return true;
+  }
+
+  void mark_planning_complete(uint64_t nav_id)
+  {
+    std::lock_guard<std::mutex> lock(planning_mutex_);
+    if (planning_in_progress_ && planning_nav_id_ == nav_id) {
+      planning_in_progress_ = false;
+      planning_nav_id_ = 0;
+    }
+  }
+
+  void request_plan(uint64_t nav_id, const geometry_msgs::msg::PoseStamped & goal)
+  {
+    if (!is_active_navigation(nav_id)) return;
+
+    if (!mark_planning_started(nav_id)) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
         "Plan request ignored: previous planning still in progress");
       return;
@@ -332,7 +632,8 @@ private:
     if (!plan_client_->service_is_ready()) {
       RCLCPP_WARN(get_logger(),
         "Service /compute_global_plan not available yet");
-      planning_in_progress_ = false;
+      mark_planning_complete(nav_id);
+      finish_navigation(nav_id, NavigationFinishReason::Fatal);
       return;
     }
 
@@ -342,31 +643,49 @@ private:
     auto req = std::make_shared<nav_msgs::srv::GetPlan::Request>();
     req->goal = goal;
 
-    plan_client_->async_send_request(
-      req,
-      [this](rclcpp::Client<nav_msgs::srv::GetPlan>::SharedFuture future) {
-        auto response = future.get();
-        planning_in_progress_ = false;
-
-        if (response->plan.poses.empty()) {
-          RCLCPP_WARN(get_logger(), "Global planner returned empty path");
-          return;
-        }
-
-        {
-          std::lock_guard<std::mutex> lock(path_mutex_);
-          path_.clear();
-          path_.reserve(response->plan.poses.size());
-          for (const auto & pose : response->plan.poses) {
-            path_.push_back({pose.pose.position.x, pose.pose.position.y});
+    try {
+      plan_client_->async_send_request(
+        req,
+        [this, nav_id](rclcpp::Client<nav_msgs::srv::GetPlan>::SharedFuture future) {
+          nav_msgs::srv::GetPlan::Response::SharedPtr response;
+          try {
+            response = future.get();
+          } catch (const std::exception & ex) {
+            mark_planning_complete(nav_id);
+            RCLCPP_FATAL(get_logger(), "Global planner request failed: %s", ex.what());
+            finish_navigation(nav_id, NavigationFinishReason::Fatal);
+            return;
           }
-          path_frame_id_ = response->plan.header.frame_id;
-          has_path_      = true;
-        }
 
-        RCLCPP_INFO(get_logger(), "Path received from planner: %zu poses",
-          response->plan.poses.size());
-      });
+          mark_planning_complete(nav_id);
+
+          if (!is_active_navigation(nav_id)) return;
+
+          if (!response || response->plan.poses.empty()) {
+            RCLCPP_FATAL(get_logger(), "Global planner returned empty path");
+            finish_navigation(nav_id, NavigationFinishReason::Fatal);
+            return;
+          }
+
+          {
+            std::lock_guard<std::mutex> lock(path_mutex_);
+            path_.clear();
+            path_.reserve(response->plan.poses.size());
+            for (const auto & pose : response->plan.poses) {
+              path_.push_back({pose.pose.position.x, pose.pose.position.y});
+            }
+            path_frame_id_ = response->plan.header.frame_id;
+            has_path_      = true;
+          }
+
+          RCLCPP_INFO(get_logger(), "Path received from planner: %zu poses",
+            response->plan.poses.size());
+        });
+    } catch (const std::exception & ex) {
+      mark_planning_complete(nav_id);
+      RCLCPP_FATAL(get_logger(), "Failed to send global planner request: %s", ex.what());
+      finish_navigation(nav_id, NavigationFinishReason::Fatal);
+    }
   }
 
   // Use the point local_plan_horizon [m] ahead on the global path as the target,
@@ -374,22 +693,18 @@ private:
   // Regenerate the global plan only if A* fails.
   void local_plan_callback()
   {
-    if (planning_in_progress_) return;
+    const uint64_t nav_id = active_navigation_id_.load();
+    if (nav_id == 0) return;
+    if (is_current_navigation_planning(nav_id)) return;
 
+    bool canceling = false;
     {
       std::lock_guard<std::mutex> alock(action_mutex_);
-      if (active_goal_handle_ && active_goal_handle_->is_canceling()) {
-        {
-          std::lock_guard<std::mutex> plock(path_mutex_);
-          has_path_         = false;
-          position_reached_ = false;
-        }
-        publish_execute(false);
-        active_goal_handle_->canceled(std::make_shared<nav2_msgs::action::NavigateToPose::Result>());
-        active_goal_handle_ = nullptr;
-        RCLCPP_INFO(get_logger(), "Navigation cancelled");
-        return;
-      }
+      canceling = active_goal_handle_ && active_goal_handle_->is_canceling();
+    }
+    if (canceling) {
+      finish_navigation(nav_id, NavigationFinishReason::Cancel);
+      return;
     }
 
     std::vector<Point2D> path;
@@ -423,24 +738,12 @@ private:
       while (yaw_err >  M_PI) yaw_err -= 2.0 * M_PI;
       while (yaw_err < -M_PI) yaw_err += 2.0 * M_PI;
       if (std::abs(yaw_err) <= goal_yaw_tol) {
-        {
-          std::lock_guard<std::mutex> lock(path_mutex_);
-          has_path_         = false;
-          position_reached_ = false;
-        }
-        publish_execute(false);
         RCLCPP_INFO(get_logger(), "Global goal reached (yaw_err=%.3f rad)", yaw_err);
-        {
-          std::lock_guard<std::mutex> alock(action_mutex_);
-          if (active_goal_handle_ && active_goal_handle_->is_active()) {
-            active_goal_handle_->succeed(std::make_shared<nav2_msgs::action::NavigateToPose::Result>());
-            active_goal_handle_ = nullptr;
-          }
-        }
+        finish_navigation(nav_id, NavigationFinishReason::Success);
         return;
       }
       // Still rotating toward goal yaw — keep executing without replanning
-      publish_execute(true);
+      publish_execute_for_navigation(nav_id, true);
       return;
     }
 
@@ -449,7 +752,7 @@ private:
         std::lock_guard<std::mutex> lock(path_mutex_);
         position_reached_ = true;
       }
-      publish_execute(true);
+      publish_execute_for_navigation(nav_id, true);
       return;
     }
 
@@ -462,7 +765,7 @@ private:
 
     if (!costmap || costmap->data.empty()) {
       // Costmap not received: continue executing the current path as is
-      publish_execute(true);
+      publish_execute_for_navigation(nav_id, true);
       return;
     }
 
@@ -481,7 +784,7 @@ private:
           !get_transform(map_frame_, cm_frame,
             cm_to_map_tx, cm_to_map_ty, cm_to_map_cos, cm_to_map_sin))
       {
-        publish_execute(true);
+        publish_execute_for_navigation(nav_id, true);
         return;
       }
     }
@@ -549,7 +852,7 @@ private:
 
     if (!found_target) {
       // All waypoints of the global path are outside the costmap: continue executing the current path as is
-      publish_execute(true);
+      publish_execute_for_navigation(nav_id, true);
       return;
     }
 
@@ -563,7 +866,7 @@ private:
     start_gy = std::clamp(start_gy, 0, gh - 1);
 
     if (!in_grid(goal_gx, goal_gy)) {
-      publish_execute(true);
+      publish_execute_for_navigation(nav_id, true);
       return;
     }
 
@@ -608,7 +911,7 @@ private:
     if (!result || result->empty()) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
         "Local A* failed — requesting global replan");
-      publish_execute(false);
+      publish_execute_for_navigation(nav_id, false);
 
       const rclcpp::Time now_t = get_clock()->now();
       const double cooldown = get_parameter("replan_cooldown").as_double();
@@ -617,7 +920,7 @@ private:
       {
         last_replan_time_   = now_t;
         replan_initialized_ = true;
-        request_plan(stored_goal);
+        request_plan(nav_id, stored_goal);
       }
       return;
     }
@@ -652,8 +955,9 @@ private:
       local_plan.poses.back().pose.orientation = stored_goal.pose.orientation;
     }
 
+    if (!is_active_navigation(nav_id)) return;
     current_plan_pub_->publish(local_plan);
-    publish_execute(true);
+    publish_execute_for_navigation(nav_id, true);
 
     {
       std::lock_guard<std::mutex> alock(action_mutex_);
@@ -728,6 +1032,13 @@ private:
     execute_pub_->publish(msg);
   }
 
+  void publish_execute_for_navigation(uint64_t nav_id, bool value)
+  {
+    if (is_active_navigation(nav_id)) {
+      publish_execute(value);
+    }
+  }
+
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr    costmap_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr    map_sub_;
@@ -735,8 +1046,10 @@ private:
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr                execute_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr       augmented_costmap_pub_;
   rclcpp::Client<nav_msgs::srv::GetPlan>::SharedPtr                plan_client_;
+  rclcpp::Client<MoveServo>::SharedPtr                             move_servo_client_;
   rclcpp::TimerBase::SharedPtr                                     local_plan_timer_;
   rclcpp::TimerBase::SharedPtr                                     decay_timer_;
+  rclcpp::TimerBase::SharedPtr                                     start_servo_timeout_timer_;
   std::unique_ptr<tf2_ros::Buffer>                                 tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener>                      tf_listener_;
 
@@ -756,15 +1069,24 @@ private:
   std::vector<int8_t>        memory_grid_;
   bool                       memory_initialized_{false};
 
-  std::atomic<bool> planning_in_progress_{false};
+  std::mutex planning_mutex_;
+  bool       planning_in_progress_{false};
+  uint64_t   planning_nav_id_{0};
   rclcpp::Time      last_replan_time_;
   bool              replan_initialized_{false};
+
+  std::mutex servo_mutex_;
+  bool       start_servo_pending_{false};
+  uint64_t   pending_start_servo_nav_id_{0};
+
+  std::atomic<uint64_t> next_navigation_id_{0};
+  std::atomic<uint64_t> active_navigation_id_{0};
 
   std::string map_frame_;
   std::string robot_base_frame_;
 
-  rclcpp_action::Server<nav2_msgs::action::NavigateToPose>::SharedPtr                  action_server_;
-  std::shared_ptr<rclcpp_action::ServerGoalHandle<nav2_msgs::action::NavigateToPose>> active_goal_handle_;
+  rclcpp_action::Server<NavigateToPose>::SharedPtr  action_server_;
+  std::shared_ptr<NavigateGoalHandle>               active_goal_handle_;
   std::mutex   action_mutex_;
   rclcpp::Time action_start_time_;
 };
