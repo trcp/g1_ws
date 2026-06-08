@@ -141,7 +141,7 @@ services:
   # =======================
   # Unitree G1 用のコンテナ
   # =======================
-  colcon_build:
+  colcon_build_jetson:
     container_name: erasers_g1
     image: erasers_g1:latest
     build:
@@ -196,9 +196,58 @@ services:
     # command: '/bin/bash -ci "cd /home/unitree/colcon_ws && . /opt/ros/humble/setup.bash && find /usr -name "libopencv_core.so*" && colcon build --symlink-install --packages-up-to erasers_g1 --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble"'
     command: 'bash -ic "source /opt/ros/humble/setup.bash && cd ../ && colcon build --symlink-install --packages-up-to erasers_g1 --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble"'
 
+  
+
   # =============
   # Katana PC 用
   # =============
+  colcon_build_katana:
+    container_name: erasers_g1
+    image: erasers_g1:latest
+    build:
+        context: .
+        dockerfile: Dockerfile
+        target: robot_tasks
+        args:
+          - TARGET_ARCH=jetson
+          - L4T_VERSION=36.4
+          - SOC=t234
+          - GLIM_CUDA_VERSION=12.6
+          - USERNAME=${USER}
+          - GROUPNAME=${USER}
+          - PASSWORD=123
+          - UID=1000
+          - GID=1000
+    group_add:
+        - "audio"
+        - "video"
+        - "input"
+    <<: [*preferences]
+    environment:
+      - DISPLAY=${DISPLAY}
+      - LC_TIME
+      - TZ=Asia/Tokyo
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///tmp/cyclonedds/cyclonedds.g1.xml
+      - AH_PATH="/dev/ttyACM0"
+      - DX_PATH="/dev/ttyCH341USB0"
+      - USE_EMC=true
+      - XAUTHORITY=/tmp/.docker.xauth
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - ./src:$HOME/colcon_ws/src/erasers_g1
+      - ./install:$HOME/colcon_ws/install
+      - ./build:$HOME/colcon_ws/build
+      - ./rosbag:$HOME/colcon_ws/rosbag
+      - ./map:$HOME/colcon_ws/map
+      - ./cyclonedds:/tmp/cyclonedds
+      - /tmp/.X11-unix/:/tmp/.X11-unix
+      - /tmp/.docker.xauth:/tmp/.docker.xauth
+      - $HOME/.Xauthority/:/root/.Xauthority
+    # command: '/bin/bash -ci "cd /home/unitree/colcon_ws && . /opt/ros/humble/setup.bash && find /usr -name "libopencv_core.so*" && colcon build --symlink-install --packages-up-to erasers_g1 --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble"'
+    command: 'bash -ic "source /opt/ros/humble/setup.bash && colcon build --symlink-install --packages-up-to robot_tasks --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble"'
+
   katana:
     container_name: katana
     image: erasers_g1:latest
@@ -216,6 +265,16 @@ services:
         - GROUPNAME=${USER}
         - PASSWORD
     <<: [*preferences, *gpu ]
+    volumes:
+      - ./src:$HOME/colcon_ws/src/erasers_g1
+      - ./install:$HOME/colcon_ws/install
+      - ./build:$HOME/colcon_ws/build
+      - ./rosbag:$HOME/colcon_ws/rosbag
+      - ./map:$HOME/colcon_ws/map
+      - ./cyclonedds:/tmp/cyclonedds
+      - /tmp/.X11-unix/:/tmp/.X11-unix
+      - /tmp/.docker.xauth:/tmp/.docker.xauth
+      - $HOME/.Xauthority/:/root/.Xauthority
     #command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py & terminator\""
     command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py \""
 
