@@ -382,7 +382,12 @@ def generate_launch_description():
             description='Robot footprint: radius, length,width, or x1,y1,... vertices.',
         ),
         DeclareLaunchArgument('global_clearance', default_value='0.1'),
-        DeclareLaunchArgument('local_clearance', default_value='0.1'),
+        DeclareLaunchArgument('local_clearance', default_value='0.30'),
+        DeclareLaunchArgument(
+            'free_space_weight',
+            default_value='150.0',
+            description='Weight for free-cell cost (k/d). 0 disables. Larger values prefer paths away from obstacles.',
+        ),
         DeclareLaunchArgument('local_costmap_frame', default_value='odom'),
         DeclareLaunchArgument('local_resolution', default_value='0.05'),
         DeclareLaunchArgument('local_width', default_value='4.0'),
@@ -562,6 +567,7 @@ def generate_launch_description():
             'obstacle_threshold': LaunchConfiguration('obstacle_threshold'),
             'footprint': LaunchConfiguration('footprint'),
             'clearance': LaunchConfiguration('global_clearance'),
+            'free_space_weight': LaunchConfiguration('free_space_weight'),
         }],
     )
 
@@ -583,6 +589,7 @@ def generate_launch_description():
             'min_sensor_range':               LaunchConfiguration('min_sensor_range'),
             'footprint':                      LaunchConfiguration('footprint'),
             'clearance':                      LaunchConfiguration('local_clearance'),
+            'free_space_weight':              LaunchConfiguration('free_space_weight'),
             'obstacle_threshold':             LaunchConfiguration('obstacle_threshold'),
             'realsense_topic':                LaunchConfiguration('realsense_topic'),
             'realsense_min_obstacle_height':  LaunchConfiguration('realsense_min_obstacle_height'),

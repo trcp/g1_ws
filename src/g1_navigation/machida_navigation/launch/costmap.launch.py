@@ -33,6 +33,11 @@ def generate_launch_description():
             default_value='0.3',
             description='Extra clearance beyond robot body for local costmap [m]',
         ),
+        DeclareLaunchArgument(
+            'free_space_weight',
+            default_value='0.0',
+            description='Weight for free-cell cost (k/d). 0 disables. Larger values prefer paths away from obstacles.',
+        ),
 
         # --- LocalCostmapNode ---
         DeclareLaunchArgument(
@@ -112,6 +117,7 @@ def generate_launch_description():
                 'obstacle_threshold': LaunchConfiguration('obstacle_threshold'),
                 'footprint':          LaunchConfiguration('footprint'),
                 'clearance':          LaunchConfiguration('global_clearance'),
+                'free_space_weight':  LaunchConfiguration('free_space_weight'),
             }],
         ),
 
@@ -134,6 +140,7 @@ def generate_launch_description():
                 'min_sensor_range':               LaunchConfiguration('min_sensor_range'),
                 'footprint':                      LaunchConfiguration('footprint'),
                 'clearance':                      LaunchConfiguration('local_clearance'),
+                'free_space_weight':              LaunchConfiguration('free_space_weight'),
                 'obstacle_threshold':             LaunchConfiguration('obstacle_threshold'),
                 'realsense_topic':                LaunchConfiguration('realsense_topic'),
                 'realsense_min_obstacle_height':  LaunchConfiguration('realsense_min_obstacle_height'),
