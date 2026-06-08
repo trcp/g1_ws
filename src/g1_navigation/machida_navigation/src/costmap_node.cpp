@@ -29,6 +29,7 @@ public:
     declare_parameter("obstacle_threshold", 50);
     declare_parameter("footprint", std::string("0.4,0.3"));
     declare_parameter("clearance", 0.1);
+    declare_parameter("free_space_weight", 0.0);
 
     auto latched_qos = rclcpp::QoS(1).transient_local().reliable();
 
@@ -47,6 +48,7 @@ private:
     const int obstacle_threshold = get_parameter("obstacle_threshold").as_int();
     const std::string footprint_str = get_parameter("footprint").as_string();
     const double clearance = get_parameter("clearance").as_double();
+    const float free_space_weight = static_cast<float>(get_parameter("free_space_weight").as_double());
 
     const auto & info = msg->info;
     const float body_radius = footprint_radius(footprint_str);
@@ -63,7 +65,8 @@ private:
       static_cast<int>(info.width),
       static_cast<int>(info.height),
       footprint_cells, padding_cells,
-      obstacle_threshold);
+      obstacle_threshold, 100, 99, 98,
+      free_space_weight);
 
     nav_msgs::msg::OccupancyGrid costmap_msg;
     costmap_msg.header.stamp    = now();
@@ -104,6 +107,7 @@ public:
     declare_parameter("realsense_min_obstacle_height", 0.02);
     declare_parameter("realsense_max_obstacle_height", 1.0);
     declare_parameter("realsense_min_sensor_range",    0.2);
+    declare_parameter("free_space_weight",             0.0);
 
     tf_buffer_   = std::make_unique<tf2_ros::Buffer>(get_clock());
     tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -235,6 +239,7 @@ private:
     const std::string footprint_str  = get_parameter("footprint").as_string();
     const float clearance            = static_cast<float>(get_parameter("clearance").as_double());
     const int obstacle_threshold     = get_parameter("obstacle_threshold").as_int();
+    const float free_space_weight    = static_cast<float>(get_parameter("free_space_weight").as_double());
 
     const int grid_w = static_cast<int>(local_width  / resolution);
     const int grid_h = static_cast<int>(local_height / resolution);
@@ -281,7 +286,8 @@ private:
     const int padding_cells   = static_cast<int>(clearance   / resolution);
 
     auto inflated = distance_transform_grid(raw_grid, grid_w, grid_h,
-      footprint_cells, padding_cells, obstacle_threshold);
+      footprint_cells, padding_cells, obstacle_threshold, 100, 99, 98,
+      free_space_weight);
 
     // Publish
     nav_msgs::msg::OccupancyGrid out;

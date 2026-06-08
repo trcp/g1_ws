@@ -160,7 +160,8 @@ std::vector<int8_t> distance_transform_grid(
   int obstacle_threshold,
   int8_t obstacle_cost,
   int8_t footprint_cost,
-  int8_t max_padding_cost)
+  int8_t max_padding_cost,
+  float free_space_weight)
 {
   const int cell_count = width * height;
   if (width <= 0 || height <= 0 || static_cast<int>(grid_data.size()) != cell_count) {
@@ -238,12 +239,16 @@ std::vector<int8_t> distance_transform_grid(
       continue;
     }
 
-    if (padding <= 0.0f || d > total) continue;
-
-    float ratio = (total - d) / padding;
-    ratio = std::clamp(ratio, 0.0f, 1.0f);
-    int cost = static_cast<int>(std::ceil(ratio * static_cast<float>(max_padding_cost)));
-    result[idx] = std::max(result[idx], static_cast<int8_t>(cost));
+    if (padding > 0.0f && d <= total) {
+      float ratio = (total - d) / padding;
+      ratio = std::clamp(ratio, 0.0f, 1.0f);
+      int cost = static_cast<int>(std::ceil(ratio * static_cast<float>(max_padding_cost)));
+      result[idx] = std::max(result[idx], static_cast<int8_t>(cost));
+    } else if (free_space_weight > 0.0f) {
+      int cost = static_cast<int>(std::ceil(free_space_weight / d));
+      cost = std::clamp(cost, 0, static_cast<int>(max_padding_cost));
+      result[idx] = std::max(result[idx], static_cast<int8_t>(cost));
+    }
   }
 
   return result;
