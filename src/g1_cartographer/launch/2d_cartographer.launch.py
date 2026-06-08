@@ -118,6 +118,7 @@ def generate_launch_description():
             'resolution': resolution,
             'publish_period_sec': publish_period_sec,
         }],
+        remappings=[('/map', '/map2d')]
     )
 
     # Pointcloud to Laserscan
