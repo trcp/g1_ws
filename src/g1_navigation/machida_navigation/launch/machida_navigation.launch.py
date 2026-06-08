@@ -382,10 +382,10 @@ def generate_launch_description():
             description='Robot footprint: radius, length,width, or x1,y1,... vertices.',
         ),
         DeclareLaunchArgument('global_clearance', default_value='0.1'),
-        DeclareLaunchArgument('local_clearance', default_value='0.1'),
+        DeclareLaunchArgument('local_clearance', default_value='0.30'),
         DeclareLaunchArgument(
             'free_space_weight',
-            default_value='0.0',
+            default_value='150.0',
             description='Weight for free-cell cost (k/d). 0 disables. Larger values prefer paths away from obstacles.',
         ),
         DeclareLaunchArgument('local_costmap_frame', default_value='odom'),
