@@ -3,9 +3,13 @@ src/thirdparty/*
 !src/thirdparty/.gitkeep
 
 # ros workspace
-build/
-install/
-log/
+build/**
+install/**
+log/**
+!build/.gitkeep
+!install/.gitkeep
+!log/.gitkeep
+
 
 # Python
 __pycache__/
