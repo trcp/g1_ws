@@ -637,6 +637,7 @@ def generate_launch_description():
             'use_smoothing': LaunchConfiguration('use_smoothing'),
             'obstacle_cost_weight': LaunchConfiguration('obstacle_cost_weight'),
             'planner_obstacle_threshold': LaunchConfiguration('planner_obstacle_threshold'),
+            'unknown_cost': LaunchConfiguration('unknown_cost'),
             'robot_base_frame': robot_base_frame,
             'local_costmap_topic': LaunchConfiguration('augmented_costmap_topic'),
         }],
