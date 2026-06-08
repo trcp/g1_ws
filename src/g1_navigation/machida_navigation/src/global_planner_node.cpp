@@ -41,6 +41,7 @@ public:
     declare_parameter("use_smoothing", false);
     declare_parameter("obstacle_cost_weight", 5.0);
     declare_parameter("planner_obstacle_threshold", 99);
+    declare_parameter("unknown_cost", 0);
     declare_parameter("log_interval", 500);
     declare_parameter("robot_base_frame", std::string("base_footprint"));
     declare_parameter("local_costmap_topic", std::string("/local_costmap"));
@@ -165,17 +166,20 @@ private:
     int planner_obstacle_threshold = get_parameter("planner_obstacle_threshold").as_int();
     planner_obstacle_threshold = std::clamp(planner_obstacle_threshold, obstacle_threshold + 1, 100);
     double obstacle_cost_weight = get_parameter("obstacle_cost_weight").as_double();
+    int unknown_cost = get_parameter("unknown_cost").as_int();
+    // unknown cells (-1) are treated as obstacles only when unknown_cost makes them impassable
+    const bool unknown_is_obstacle = (unknown_cost >= obstacle_threshold);
 
     // Check against the original map whether this is an actual wall (do not error on inflation regions)
     const auto & orig = current_map->data;
     int8_t start_val = orig[start_gy * info.width + start_gx];
-    if (start_val < 0 || static_cast<int>(start_val) >= obstacle_threshold) {
+    if ((unknown_is_obstacle && start_val < 0) || static_cast<int>(start_val) >= obstacle_threshold) {
       RCLCPP_ERROR(get_logger(),
         "Start (%d,%d) is inside an actual obstacle (val=%d)", start_gx, start_gy, start_val);
       return;
     }
     int8_t goal_val = orig[goal_gy * info.width + goal_gx];
-    if (goal_val < 0 || static_cast<int>(goal_val) >= obstacle_threshold) {
+    if ((unknown_is_obstacle && goal_val < 0) || static_cast<int>(goal_val) >= obstacle_threshold) {
       RCLCPP_ERROR(get_logger(),
         "Goal (%d,%d) is inside an actual obstacle (val=%d)", goal_gx, goal_gy, goal_val);
       return;
