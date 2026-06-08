@@ -17,9 +17,9 @@ from launch.actions import (
     OpaqueFunction,
     SetEnvironmentVariable,
 )
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 
 from launch_ros.actions import Node, SetParameter
 
@@ -197,6 +197,56 @@ def _start_lidar_localization(context, *args, **kwargs):
         )
     )
     return actions
+
+
+def _start_map_server(context, *args, **kwargs):
+    launch_map_server = _as_optional_bool(LaunchConfiguration('launch_map_server').perform(context))
+    
+    if not launch_map_server:
+        return [LogInfo(msg="launch_map_server is false. Skipping map_server and its lifecycle manager.")]
+
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    autostart = LaunchConfiguration('autostart')
+    map_dir = LaunchConfiguration('map_dir').perform(context)
+    map_name = LaunchConfiguration('map_name').perform(context)
+    map_yaml_file = os.path.join(map_dir, f"{map_name}.yaml")
+
+    nodes = []
+
+    # map_server ノードの追加
+    nodes.append(
+        Node(
+            package='nav2_map_server',
+            executable='map_server',
+            name='map_server',
+            output='screen',
+            emulate_tty=True,
+            parameters=[{
+                'yaml_filename': map_yaml_file,
+                'use_sim_time': use_sim_time,
+            }],
+            remappings=[
+                ('/map', '/map2d'),
+            ],
+        )
+    )
+
+    nodes.append(
+        Node(
+            package='nav2_lifecycle_manager',
+            executable='lifecycle_manager',
+            name='lifecycle_manager_machida_map',
+            output='screen',
+            emulate_tty=True,
+            parameters=[{
+                'use_sim_time': use_sim_time,
+                'autostart': autostart,
+                'node_names': ['map_server'],
+            }],
+        )
+    )
+
+    return nodes
 
 
 def generate_launch_description():
@@ -532,35 +582,6 @@ def generate_launch_description():
         ],
     )
 
-    map_server = Node(
-        package='nav2_map_server',
-        executable='map_server',
-        name='map_server',
-        output='screen',
-        emulate_tty=True,
-        condition=IfCondition(launch_map_server),
-        parameters=[{
-            'yaml_filename': map_yaml_file,
-            'use_sim_time': use_sim_time,
-        }],
-        remappings=[
-            ('/map', '/map2d'),
-        ],
-    )
-
-    map_lifecycle_manager = Node(
-        package='nav2_lifecycle_manager',
-        executable='lifecycle_manager',
-        name='lifecycle_manager_machida_map',
-        output='screen',
-        emulate_tty=True,
-        condition=IfCondition(launch_map_server),
-        parameters=[{
-            'use_sim_time': use_sim_time,
-            'autostart': autostart,
-            'node_names': ['map_server'],
-        }],
-    )
 
     global_costmap = Node(
         package='machida_navigation',
@@ -679,8 +700,7 @@ def generate_launch_description():
             SetEnvironmentVariable('RCUTILS_LOGGING_BUFFERED_STREAM', '1'),
             SetParameter(name='use_sim_time', value=use_sim_time),
             localization,
-            map_server,
-            map_lifecycle_manager,
+            OpaqueFunction(function=_start_map_server),
             global_costmap,
             local_costmap,
             global_planner,
