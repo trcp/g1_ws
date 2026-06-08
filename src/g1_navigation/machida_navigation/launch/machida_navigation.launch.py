@@ -388,6 +388,11 @@ def generate_launch_description():
             default_value='150.0',
             description='Weight for free-cell cost (k/d). 0 disables. Larger values prefer paths away from obstacles.',
         ),
+        DeclareLaunchArgument(
+            'unknown_cost',
+            default_value='0',
+            description='Cost assigned to unknown cells (-1 in OccupancyGrid). 0=free, 1-98=traversable with penalty, 99+=impassable.',
+        ),
         DeclareLaunchArgument('local_costmap_frame', default_value='odom'),
         DeclareLaunchArgument('local_resolution', default_value='0.05'),
         DeclareLaunchArgument('local_width', default_value='4.0'),
@@ -568,6 +573,7 @@ def generate_launch_description():
             'footprint': LaunchConfiguration('footprint'),
             'clearance': LaunchConfiguration('global_clearance'),
             'free_space_weight': LaunchConfiguration('free_space_weight'),
+            'unknown_cost': LaunchConfiguration('unknown_cost'),
         }],
     )
 
@@ -590,6 +596,7 @@ def generate_launch_description():
             'footprint':                      LaunchConfiguration('footprint'),
             'clearance':                      LaunchConfiguration('local_clearance'),
             'free_space_weight':              LaunchConfiguration('free_space_weight'),
+            'unknown_cost':                   LaunchConfiguration('unknown_cost'),
             'obstacle_threshold':             LaunchConfiguration('obstacle_threshold'),
             'realsense_topic':                LaunchConfiguration('realsense_topic'),
             'realsense_min_obstacle_height':  LaunchConfiguration('realsense_min_obstacle_height'),
