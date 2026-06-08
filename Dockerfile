@@ -113,11 +113,12 @@ COPY assets/emcl2_node.cpp ./emcl2/src/emcl2_node.cpp
 ENV ROS_EDITION=ROS2
 ENV HUMBLE_ROS=humble
 USER $USERNAME
-WORKDIR /home/${USERNAME}/colcon_ws
-RUN . /opt/ros/${ROS}/setup.bash &&\
-    find /usr -name "libopencv_core.so*" &&\
-    colcon build --symlink-install --packages-up-to erasers_g1 \
-    --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble
+
+# WORKDIR /home/${USERNAME}/colcon_ws
+# RUN . /opt/ros/${ROS}/setup.bash &&\
+#     find /usr -name "libopencv_core.so*" &&\
+#     colcon build --symlink-install --packages-up-to erasers_g1 \
+#     --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble
 
 
 # =================================
@@ -162,6 +163,6 @@ RUN . /opt/ros/${ROS}/setup.bash &&\
 # build workspace
 USER $USERNAME
 COPY assets/sam3.pt /tmp/sam3.pt
-WORKDIR /home/${USERNAME}/colcon_ws
-RUN . /opt/ros/${ROS}/setup.bash &&\
-    colcon build --symlink-install --packages-up-to robot_tasks
+# WORKDIR /home/${USERNAME}/colcon_ws
+# RUN . /opt/ros/${ROS}/setup.bash &&\
+#     colcon build --symlink-install --packages-up-to robot_tasks
