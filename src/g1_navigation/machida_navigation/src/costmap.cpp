@@ -161,7 +161,8 @@ std::vector<int8_t> distance_transform_grid(
   int8_t obstacle_cost,
   int8_t footprint_cost,
   int8_t max_padding_cost,
-  float free_space_weight)
+  float free_space_weight,
+  int8_t unknown_cost)
 {
   const int cell_count = width * height;
   if (width <= 0 || height <= 0 || static_cast<int>(grid_data.size()) != cell_count) {
@@ -185,10 +186,12 @@ std::vector<int8_t> distance_transform_grid(
 
   for (int idx = 0; idx < cell_count; ++idx) {
     int8_t v = grid_data[idx];
-    if (v < 0 || static_cast<int>(v) >= obstacle_threshold) {
+    if (static_cast<int>(v) >= obstacle_threshold) {
       distance_to_obstacle[idx] = 0.0f;
       result[idx] = obstacle_cost;
       open_set.push({0.0f, idx});
+    } else if (v < 0) {
+      result[idx] = unknown_cost;
     } else if (v > 0) {
       result[idx] = v;
     }

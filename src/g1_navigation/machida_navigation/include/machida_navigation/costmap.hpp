@@ -30,7 +30,8 @@ std::vector<int8_t> distance_transform_grid(
   int8_t obstacle_cost    = 100,
   int8_t footprint_cost   = 99,
   int8_t max_padding_cost = 98,
-  float free_space_weight = 0.0f);
+  float free_space_weight = 0.0f,
+  int8_t unknown_cost     = 0);
 
 // Build a raw 2D occupancy grid by marking obstacle points.
 // origin_x/origin_y: world coordinates of the grid's bottom-left corner.
