@@ -478,6 +478,7 @@ def generate_launch_description():
         DeclareLaunchArgument('lookahead_distance', default_value='0.5'),
         DeclareLaunchArgument('linear_velocity', default_value='0.4'),
         DeclareLaunchArgument('max_angular_velocity', default_value='1.0'),
+        DeclareLaunchArgument('min_angular_velocity', default_value='0.3'),
         DeclareLaunchArgument('max_path_deviation', default_value='0.3'),
         DeclareLaunchArgument('slowdown_distance', default_value='0.6'),
         DeclareLaunchArgument('min_linear_velocity', default_value='0.21'),
@@ -486,6 +487,15 @@ def generate_launch_description():
         DeclareLaunchArgument('holonomic', default_value='true'),
         DeclareLaunchArgument('max_linear_acceleration', default_value='0.5'),
         DeclareLaunchArgument('max_angular_acceleration', default_value='2.0'),
+        # DWA local planner
+        DeclareLaunchArgument('sim_time',        default_value='1.5'),
+        DeclareLaunchArgument('sim_granularity',  default_value='0.05'),
+        DeclareLaunchArgument('vx_samples',       default_value='10'),
+        DeclareLaunchArgument('vy_samples',       default_value='5'),
+        DeclareLaunchArgument('vth_samples',      default_value='20'),
+        DeclareLaunchArgument('heading_bias',     default_value='24.0'),
+        DeclareLaunchArgument('path_bias',        default_value='32.0'),
+        DeclareLaunchArgument('speed_bias',       default_value='6.0'),
     ]
 
     localization = GroupAction(
@@ -667,10 +677,38 @@ def generate_launch_description():
         }],
     )
 
+    # local_planner = Node(
+    #     package='machida_navigation',
+    #     executable='local_planner',
+    #     name='pure_pursuit_local_planner',
+    #     output='screen',
+    #     parameters=[{
+    #         'use_sim_time': use_sim_time,
+    #         'path_topic': LaunchConfiguration('path_topic'),
+    #         'cmd_vel_topic': LaunchConfiguration('cmd_vel_topic'),
+    #         'execute_topic': LaunchConfiguration('execute_topic'),
+    #         'map_frame': map_frame,
+    #         'robot_base_frame': robot_base_frame,
+    #         'lookahead_distance': LaunchConfiguration('lookahead_distance'),
+    #         'linear_velocity': LaunchConfiguration('linear_velocity'),
+    #         'max_angular_velocity': LaunchConfiguration('max_angular_velocity'),
+    #         'goal_tolerance': LaunchConfiguration('goal_tolerance'),
+    #         'goal_yaw_tolerance': LaunchConfiguration('goal_yaw_tolerance'),
+    #         'max_path_deviation': LaunchConfiguration('max_path_deviation'),
+    #         'slowdown_distance': LaunchConfiguration('slowdown_distance'),
+    #         'min_linear_velocity': LaunchConfiguration('min_linear_velocity'),
+    #         'max_linear_velocity': LaunchConfiguration('max_linear_velocity'),
+    #         'control_frequency': LaunchConfiguration('control_frequency'),
+    #         'holonomic': LaunchConfiguration('holonomic'),
+    #         'max_linear_acceleration': LaunchConfiguration('max_linear_acceleration'),
+    #         'max_angular_acceleration': LaunchConfiguration('max_angular_acceleration'),
+    #     }],
+    # )
+
     local_planner = Node(
         package='machida_navigation',
-        executable='local_planner',
-        name='pure_pursuit_local_planner',
+        executable='dwa_local_planner',
+        name='dwa_local_planner',
         output='screen',
         parameters=[{
             'use_sim_time': use_sim_time,
@@ -680,8 +718,8 @@ def generate_launch_description():
             'map_frame': map_frame,
             'robot_base_frame': robot_base_frame,
             'lookahead_distance': LaunchConfiguration('lookahead_distance'),
-            'linear_velocity': LaunchConfiguration('linear_velocity'),
             'max_angular_velocity': LaunchConfiguration('max_angular_velocity'),
+            'min_angular_velocity': LaunchConfiguration('min_angular_velocity'),
             'goal_tolerance': LaunchConfiguration('goal_tolerance'),
             'goal_yaw_tolerance': LaunchConfiguration('goal_yaw_tolerance'),
             'max_path_deviation': LaunchConfiguration('max_path_deviation'),
@@ -692,6 +730,14 @@ def generate_launch_description():
             'holonomic': LaunchConfiguration('holonomic'),
             'max_linear_acceleration': LaunchConfiguration('max_linear_acceleration'),
             'max_angular_acceleration': LaunchConfiguration('max_angular_acceleration'),
+            'sim_time': LaunchConfiguration('sim_time'),
+            'sim_granularity': LaunchConfiguration('sim_granularity'),
+            'vx_samples': LaunchConfiguration('vx_samples'),
+            'vy_samples': LaunchConfiguration('vy_samples'),
+            'vth_samples': LaunchConfiguration('vth_samples'),
+            'heading_bias': LaunchConfiguration('heading_bias'),
+            'path_bias': LaunchConfiguration('path_bias'),
+            'speed_bias': LaunchConfiguration('speed_bias'),
         }],
     )
 

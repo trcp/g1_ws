@@ -38,6 +38,10 @@ add_executable(local_planner
   src/pure_pursuit_local_planner.cpp
 )
 
+add_executable(dwa_local_planner
+  src/dwa_local_planner.cpp
+)
+
 add_executable(navigation_manager
   src/astar.cpp
   src/navigation_manager.cpp
@@ -59,6 +63,11 @@ target_include_directories(local_costmap_node PUBLIC
 )
 
 target_include_directories(local_planner PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+target_include_directories(dwa_local_planner PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
@@ -101,6 +110,15 @@ ament_target_dependencies(local_planner
   tf2_ros
 )
 
+ament_target_dependencies(dwa_local_planner
+  rclcpp
+  nav_msgs
+  geometry_msgs
+  std_msgs
+  tf2
+  tf2_ros
+)
+
 ament_target_dependencies(navigation_manager
   rclcpp
   rclcpp_action
@@ -112,7 +130,7 @@ ament_target_dependencies(navigation_manager
   tf2_ros
 )
 
-install(TARGETS global_planner costmap_node local_costmap_node local_planner navigation_manager
+install(TARGETS global_planner costmap_node local_costmap_node local_planner dwa_local_planner navigation_manager
   DESTINATION lib/${PROJECT_NAME}
 )
 
