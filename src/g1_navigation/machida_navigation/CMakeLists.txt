@@ -17,6 +17,7 @@ find_package(tf2_ros REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(nav2_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
 add_executable(global_planner
   src/astar.cpp
@@ -115,6 +116,7 @@ ament_target_dependencies(dwa_local_planner
   nav_msgs
   geometry_msgs
   std_msgs
+  visualization_msgs
   tf2
   tf2_ros
 )

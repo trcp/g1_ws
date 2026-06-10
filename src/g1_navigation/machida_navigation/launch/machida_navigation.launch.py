@@ -252,7 +252,7 @@ def _start_map_server(context, *args, **kwargs):
 def generate_launch_description():
     home = os.environ.get('HOME', '/home/roboworks')
 
-    default_map_dir = os.path.join(home, 'g1_ws', 'map')
+    default_map_dir = os.path.join(home, 'colcon_ws', 'map')
     default_map_name = 'map'
     default_localization_param_dir = os.path.join(
         get_package_share_directory('g1_navigation'),

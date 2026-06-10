@@ -43,6 +43,8 @@ def generate_launch_description():
             description='Weight for path following score'),
         DeclareLaunchArgument('speed_bias',   default_value='6.0',
             description='Weight for forward speed score'),
+        DeclareLaunchArgument('ema_alpha',    default_value='0.4',
+            description='EMA smoothing factor for velocity output (0=hold, 1=no filter)'),
 
         Node(
             package='machida_navigation',
@@ -77,6 +79,7 @@ def generate_launch_description():
                 'heading_bias':            LaunchConfiguration('heading_bias'),
                 'path_bias':               LaunchConfiguration('path_bias'),
                 'speed_bias':              LaunchConfiguration('speed_bias'),
+                'ema_alpha':               LaunchConfiguration('ema_alpha'),
             }],
         ),
     ])

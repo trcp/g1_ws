@@ -6,10 +6,12 @@
 #include <string>
 #include <vector>
 
+#include "geometry_msgs/msg/point.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/bool.hpp"
+#include "visualization_msgs/msg/marker_array.hpp"
 #include "tf2/exceptions.h"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
@@ -67,6 +69,8 @@ public:
     declare_parameter("heading_bias",   24.0);   // weight for heading score
     declare_parameter("path_bias",      32.0);   // weight for path following score
     declare_parameter("speed_bias",      6.0);   // weight for speed score
+    declare_parameter("ema_alpha",       0.4);   // EMA smoothing factor (0=hold, 1=no filter)
+    declare_parameter("viz_topic",       std::string("/dwa_trajectories"));
 
     path_topic_       = get_parameter("path_topic").as_string();
     cmd_vel_topic_    = get_parameter("cmd_vel_topic").as_string();
@@ -84,7 +88,9 @@ public:
       get_parameter("execute_topic").as_string(), 1,
       std::bind(&DWALocalPlanner::execute_callback, this, std::placeholders::_1));
 
-    cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>(cmd_vel_topic_, 10);
+    cmd_pub_  = create_publisher<geometry_msgs::msg::Twist>(cmd_vel_topic_, 10);
+    traj_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
+      get_parameter("viz_topic").as_string(), 10);
 
     const double freq = std::max(1.0, get_parameter("control_frequency").as_double());
     timer_ = create_wall_timer(
@@ -192,7 +198,7 @@ private:
     return min_d;
   }
 
-  // Heading error of end state toward the target [rad] — lower is better.
+  // Heading error of end state toward target [rad] — lower is better.
   double heading_error(const State & end, const Point2D & target) const
   {
     const double desired = std::atan2(target.y - end.y, target.x - end.x);
@@ -337,7 +343,6 @@ private:
     const double sim_t   = get_parameter("sim_time").as_double();
     const double sim_dt  = get_parameter("sim_granularity").as_double();
     const int    vx_n    = std::max(2, (int)get_parameter("vx_samples").as_int());
-    const int    vy_n    = std::max(2, (int)get_parameter("vy_samples").as_int());
     const int    vw_n    = std::max(2, (int)get_parameter("vth_samples").as_int());
 
     // Dynamic window: velocities reachable within sim_time * 0.3 given acceleration limits.
@@ -345,33 +350,29 @@ private:
     const double win_dt = std::max(ctrl_dt, sim_t * 0.3);
     const double vx_lo  = std::max(0.0,   prev_vx_ - max_av * win_dt);
     const double vx_hi  = std::min(max_v, prev_vx_ + max_av * win_dt);
-    const double vy_lo  = holo ? std::max(-max_v, prev_vy_ - max_av * win_dt) : 0.0;
-    const double vy_hi  = holo ? std::min( max_v, prev_vy_ + max_av * win_dt) : 0.0;
     const double w_lo   = std::max(-max_w, prev_w_ - max_aw * win_dt);
     const double w_hi   = std::min( max_w, prev_w_ + max_aw * win_dt);
 
     const auto vx_vals  = linspace(vx_n, vx_lo, vx_hi);
-    const auto vy_vals  = holo ? linspace(vy_n, vy_lo, vy_hi) : std::vector<double>{0.0};
     const auto vw_vals  = linspace(vw_n, w_lo, w_hi);
 
-    // --- evaluate all candidates ---
-    struct Candidate { Vel vel; double h_err; double p_dist; double spd; };
+    // --- evaluate all candidates (vx, w only — vy=0) ---
+    struct Candidate { Vel vel; double h_err; double p_dist; double spd; std::vector<State> traj; };
     std::vector<Candidate> cands;
-    cands.reserve(vx_n * (holo ? vy_n : 1) * vw_n);
+    cands.reserve(vx_n * vw_n);
 
     for (double vx : vx_vals) {
-      for (double vy : vy_vals) {
-        for (double w : vw_vals) {
-          std::vector<State> pts;
-          const State end = simulate(pose, {vx, vy, w}, sim_t, sim_dt, holo, &pts);
-          pts.push_back(end);
-          cands.push_back({
-            {vx, vy, w},
-            heading_error(end, target),
-            traj_path_dist(pts, path, near_idx),
-            std::hypot(vx, vy)
-          });
-        }
+      for (double w : vw_vals) {
+        std::vector<State> pts;
+        const State end = simulate(pose, {vx, 0.0, w}, sim_t, sim_dt, holo, &pts);
+        pts.push_back(end);
+        cands.push_back({
+          {vx, 0.0, w},
+          heading_error(end, target),
+          traj_path_dist(pts, path, near_idx),
+          vx,
+          std::move(pts)
+        });
       }
     }
 
@@ -402,6 +403,49 @@ private:
 
     Vel best = cands[best_i].vel;
 
+    // EMA filter to smooth out frame-to-frame jumps caused by discrete sampling
+    const double ema = std::clamp(get_parameter("ema_alpha").as_double(), 0.0, 1.0);
+    best.vx = ema * best.vx + (1.0 - ema) * prev_vx_;
+    best.vy = ema * best.vy + (1.0 - ema) * prev_vy_;
+    best.w  = ema * best.w  + (1.0 - ema) * prev_w_;
+
+    // Publish candidate trajectories to RViz
+    {
+      visualization_msgs::msg::MarkerArray ma;
+      visualization_msgs::msg::Marker del;
+      del.action = visualization_msgs::msg::Marker::DELETEALL;
+      ma.markers.push_back(del);
+
+      const auto stamp = now();
+      for (size_t i = 0; i < cands.size(); ++i) {
+        visualization_msgs::msg::Marker m;
+        m.header.frame_id = map_frame_;
+        m.header.stamp    = stamp;
+        m.ns              = "dwa_trajs";
+        m.id              = static_cast<int>(i);
+        m.type            = visualization_msgs::msg::Marker::LINE_STRIP;
+        m.action          = visualization_msgs::msg::Marker::ADD;
+        m.pose.orientation.w = 1.0;
+        const bool is_best = (i == best_i);
+        m.scale.x = is_best ? 0.05 : 0.02;
+        m.color.a = is_best ? 1.0f : 0.25f;
+        m.color.r = is_best ? 0.0f : 0.4f;
+        m.color.g = is_best ? 1.0f : 0.6f;
+        m.color.b = is_best ? 0.0f : 1.0f;
+        // start point = current robot pose
+        geometry_msgs::msg::Point p0;
+        p0.x = pose.x; p0.y = pose.y;
+        m.points.push_back(p0);
+        for (const auto & s : cands[i].traj) {
+          geometry_msgs::msg::Point pt;
+          pt.x = s.x; pt.y = s.y;
+          m.points.push_back(pt);
+        }
+        ma.markers.push_back(m);
+      }
+      traj_pub_->publish(ma);
+    }
+
     // Apply min velocity dead-band (robot unresponsive below this threshold)
     const double spd = std::hypot(best.vx, best.vy);
     if (spd > 1e-6 && spd < min_v) {
@@ -431,9 +475,10 @@ private:
   double desired_max_v(double dist_to_goal) const
   {
     const double mx = get_parameter("max_linear_velocity").as_double();
+    const double mn = get_parameter("min_linear_velocity").as_double();
     const double sd = get_parameter("slowdown_distance").as_double();
     if (sd <= 1e-6) return mx;
-    return mx * std::clamp(dist_to_goal / sd, 0.0, 1.0);
+    return std::max(mn, mx * std::clamp(dist_to_goal / sd, 0.0, 1.0));
   }
 
   void publish_stop()
@@ -443,10 +488,11 @@ private:
   }
 
   // ---- ROS handles ----
-  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr    path_sub_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr    execute_sub_;
-  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
-  rclcpp::TimerBase::SharedPtr                            timer_;
+  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr                   path_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr                   execute_sub_;
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr                cmd_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr     traj_pub_;
+  rclcpp::TimerBase::SharedPtr                                           timer_;
   std::unique_ptr<tf2_ros::Buffer>                        tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener>             tf_listener_;
 
