@@ -23,6 +23,7 @@ map/*
 .antigravity
 .vscode
 .agents
+.codex
 
 # pixi environments
 .pixi/*
