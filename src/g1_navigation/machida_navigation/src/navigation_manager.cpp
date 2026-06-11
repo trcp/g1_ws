@@ -11,8 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "machida_navigation/astar.hpp"
-
 #include "g1_srvs/srv/move_servo.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/quaternion.hpp"
@@ -26,6 +24,7 @@
 #include "tf2/exceptions.h"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
+#include "visualization_msgs/msg/marker.hpp"
 
 namespace machida_navigation
 {
@@ -65,24 +64,23 @@ public:
   explicit NavigationManager(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
   : Node("navigation_manager", options)
   {
-    declare_parameter("map_frame",                    std::string("map"));
-    declare_parameter("robot_base_frame",             std::string("base_footprint"));
-    declare_parameter("local_costmap_topic",          std::string("/local_costmap"));
-    declare_parameter("augmented_costmap_topic",      std::string("/augmented_local_costmap"));
-    declare_parameter("path_obstacle_threshold",      75);
-    declare_parameter("local_plan_frequency",         5.0);
-    declare_parameter("local_plan_horizon",           2.0);
-    declare_parameter("local_plan_obstacle_threshold", 70);
-    declare_parameter("use_local_smoothing",          false);
-    declare_parameter("goal_tolerance",               0.15);
-    declare_parameter("replan_cooldown",              2.0);
-    declare_parameter("obstacle_decay_rate",          5);
-    declare_parameter("decay_frequency",              2.0);
-    declare_parameter("goal_yaw_tolerance",           0.05);
-    declare_parameter("move_servo_service",           std::string("/move_servo"));
-    declare_parameter("move_servo_timeout_sec",       2.0);
-    declare_parameter("navigation_start_tilt",        0.7);
-    declare_parameter("navigation_finish_tilt",       0.0);
+    declare_parameter("map_frame",               std::string("map"));
+    declare_parameter("robot_base_frame",        std::string("base_footprint"));
+    declare_parameter("local_costmap_topic",     std::string("/local_costmap"));
+    declare_parameter("augmented_costmap_topic", std::string("/augmented_local_costmap"));
+    declare_parameter("path_obstacle_threshold", 75);
+    declare_parameter("path_check_horizon",      1.5);   // how far ahead to check for obstacles [m]
+    declare_parameter("path_check_use_memory",   true);  // true=memory grid, false=raw local costmap
+    declare_parameter("local_plan_frequency",    5.0);
+    declare_parameter("goal_tolerance",          0.15);
+    declare_parameter("replan_cooldown",         2.0);
+    declare_parameter("obstacle_decay_rate",     5);
+    declare_parameter("decay_frequency",         2.0);
+    declare_parameter("goal_yaw_tolerance",      0.05);
+    declare_parameter("move_servo_service",      std::string("/move_servo"));
+    declare_parameter("move_servo_timeout_sec",  2.0);
+    declare_parameter("navigation_start_tilt",   0.7);
+    declare_parameter("navigation_finish_tilt",  0.0);
 
     map_frame_        = get_parameter("map_frame").as_string();
     robot_base_frame_ = get_parameter("robot_base_frame").as_string();
@@ -109,6 +107,8 @@ public:
       "/execute_local_planner", rclcpp::QoS(1).reliable());
     augmented_costmap_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>(
       get_parameter("augmented_costmap_topic").as_string(), latched_qos);
+    blocked_marker_pub_ = create_publisher<visualization_msgs::msg::Marker>(
+      "/path_blocked_marker", rclcpp::QoS(1).reliable());
 
     plan_client_ = create_client<nav_msgs::srv::GetPlan>("/compute_global_plan");
     move_servo_client_ = create_client<MoveServo>(
@@ -131,9 +131,9 @@ public:
       std::bind(&NavigationManager::handle_accepted, this, std::placeholders::_1));
 
     RCLCPP_INFO(get_logger(),
-      "NavigationManager ready: local_plan=%.1f Hz horizon=%.2f m decay=%.1f Hz cooldown=%.2f s",
+      "NavigationManager ready: monitor=%.1f Hz check_horizon=%.2f m decay=%.1f Hz cooldown=%.2f s",
       local_freq,
-      get_parameter("local_plan_horizon").as_double(),
+      get_parameter("path_check_horizon").as_double(),
       decay_freq,
       get_parameter("replan_cooldown").as_double());
     RCLCPP_INFO(get_logger(), "Action server 'navigate_to_pose' ready");
@@ -190,8 +190,6 @@ private:
       std::lock_guard<std::mutex> lock(costmap_mutex_);
       local_costmap_ = msg;
     }
-    // Write the latest local costmap obstacles into memory
-    // (immediately reflect them without waiting for the decay timer)
     {
       std::lock_guard<std::mutex> lock(memory_mutex_);
       if (memory_initialized_) {
@@ -200,9 +198,6 @@ private:
     }
   }
 
-  // Internal function to be called while holding memory_mutex_
-  // Obstacle cells are always stamped with a value of 100 (lethal)
-  // and do not rely on value decay
   void stamp_to_memory_locked(const nav_msgs::msg::OccupancyGrid & costmap)
   {
     const auto & linfo = costmap.info;
@@ -262,8 +257,6 @@ private:
         if (gx < 0 || gx >= gw || gy < 0 || gy >= gh) continue;
 
         auto & cell = memory_grid_[static_cast<size_t>(gy * gw + gx)];
-        // Obstacle cells (above the threshold) are always stamped with 100
-        // -> even if the value decreases due to decay, it is restored by re-stamping
         const int8_t stamp_val = (static_cast<int>(val) >= obstacle_thr) ?
           static_cast<int8_t>(100) : val;
         if (stamp_val > cell) cell = stamp_val;
@@ -271,10 +264,8 @@ private:
     }
   }
 
-  // Decay timer: apply decay -> re-stamp (refresh) currently observed obstacles -> publish
   void decay_timer_callback()
   {
-    // Take a snapshot of the costmap first (outside memory_mutex)
     nav_msgs::msg::OccupancyGrid::SharedPtr current_costmap;
     {
       std::lock_guard<std::mutex> lock(costmap_mutex_);
@@ -285,8 +276,6 @@ private:
     if (!memory_initialized_) return;
 
     const int decay = get_parameter("obstacle_decay_rate").as_int();
-
-    // Apply decay to all cells
     for (auto & cell : memory_grid_) {
       if (cell > 0) {
         const int next = static_cast<int>(cell) - decay;
@@ -294,8 +283,6 @@ private:
       }
     }
 
-    // Re-stamp (refresh) obstacle cells currently observed by the sensor to 100
-    // -> obstacles within the sensor range always maintain a value above planner_obstacle_threshold
     if (current_costmap && !current_costmap->data.empty()) {
       stamp_to_memory_locked(*current_costmap);
     }
@@ -303,7 +290,6 @@ private:
     publish_augmented_costmap_locked();
   }
 
-  // Publish helper to be called while holding memory_mutex_
   void publish_augmented_costmap_locked()
   {
     nav_msgs::msg::OccupancyGrid out;
@@ -314,7 +300,6 @@ private:
     augmented_costmap_pub_->publish(out);
   }
 
-  // Immediately publish the latest state right before replanning (without waiting for the timer)
   void publish_augmented_costmap_now()
   {
     std::lock_guard<std::mutex> lock(memory_mutex_);
@@ -637,7 +622,6 @@ private:
       return;
     }
 
-    // Ensure that the latest augmented_costmap is delivered to the global planner before sending the service request
     publish_augmented_costmap_now();
 
     auto req = std::make_shared<nav_msgs::srv::GetPlan::Request>();
@@ -646,7 +630,7 @@ private:
     try {
       plan_client_->async_send_request(
         req,
-        [this, nav_id](rclcpp::Client<nav_msgs::srv::GetPlan>::SharedFuture future) {
+        [this, nav_id, goal](rclcpp::Client<nav_msgs::srv::GetPlan>::SharedFuture future) {
           nav_msgs::srv::GetPlan::Response::SharedPtr response;
           try {
             response = future.get();
@@ -667,19 +651,32 @@ private:
             return;
           }
 
+          nav_msgs::msg::Path global_path;
+          global_path.header.stamp    = now();
+          global_path.header.frame_id = response->plan.header.frame_id;
+
           {
             std::lock_guard<std::mutex> lock(path_mutex_);
             path_.clear();
             path_.reserve(response->plan.poses.size());
             for (const auto & pose : response->plan.poses) {
               path_.push_back({pose.pose.position.x, pose.pose.position.y});
+              global_path.poses.push_back(pose);
+              global_path.poses.back().header = global_path.header;
             }
             path_frame_id_ = response->plan.header.frame_id;
             has_path_      = true;
+
+            if (!global_path.poses.empty()) {
+              global_path.poses.back().pose.orientation = goal.pose.orientation;
+            }
           }
 
-          RCLCPP_INFO(get_logger(), "Path received from planner: %zu poses",
-            response->plan.poses.size());
+          current_plan_pub_->publish(global_path);
+          publish_execute_for_navigation(nav_id, true);
+
+          RCLCPP_INFO(get_logger(), "Global path published: %zu poses",
+            global_path.poses.size());
         });
     } catch (const std::exception & ex) {
       mark_planning_complete(nav_id);
@@ -688,9 +685,7 @@ private:
     }
   }
 
-  // Use the point local_plan_horizon [m] ahead on the global path as the target,
-  // run A* on the local costmap, and publish the local path.
-  // Regenerate the global plan only if A* fails.
+  // Monitor path ahead for obstacles and trigger global replan if blocked
   void local_plan_callback()
   {
     const uint64_t nav_id = active_navigation_id_.load();
@@ -723,16 +718,15 @@ private:
 
     if (!has_path || path.empty()) return;
 
-    // Robot position and yaw (map frame)
     Point2D robot;
     double robot_yaw = 0.0;
     if (!get_robot_pose(robot, robot_yaw)) return;
 
-    // Goal reached check (two-phase: XY first, then yaw)
     const double goal_tol     = get_parameter("goal_tolerance").as_double();
     const double goal_yaw_tol = get_parameter("goal_yaw_tolerance").as_double();
     const double dist_to_goal = distance(robot, path.back());
 
+    // Goal reached: yaw alignment phase
     if (position_reached) {
       double yaw_err = goal_yaw - robot_yaw;
       while (yaw_err >  M_PI) yaw_err -= 2.0 * M_PI;
@@ -747,6 +741,7 @@ private:
       return;
     }
 
+    // Goal reached: position phase
     if (dist_to_goal <= goal_tol) {
       {
         std::lock_guard<std::mutex> lock(path_mutex_);
@@ -756,163 +751,99 @@ private:
       return;
     }
 
-    // Acquire the local costmap
-    nav_msgs::msg::OccupancyGrid::SharedPtr costmap;
-    {
-      std::lock_guard<std::mutex> lock(costmap_mutex_);
-      costmap = local_costmap_;
-    }
+    // Check path points ahead for obstacles
+    const size_t nearest_idx   = find_nearest_index(path, robot);
+    const double check_horizon = get_parameter("path_check_horizon").as_double();
+    const int    obs_threshold = get_parameter("path_obstacle_threshold").as_int();
+    const bool   use_memory    = get_parameter("path_check_use_memory").as_bool();
 
-    if (!costmap || costmap->data.empty()) {
-      // Costmap not received: continue executing the current path as is
-      publish_execute_for_navigation(nav_id, true);
-      return;
-    }
-
-    // Get TF transformation parameters (map topic ↔ costmaptopic  frame)
-    const std::string & cm_frame = costmap->header.frame_id;
-    const bool same_frame = (cm_frame.empty() || cm_frame == map_frame_);
-
-    double map_to_cm_tx = 0.0, map_to_cm_ty = 0.0;
-    double map_to_cm_cos = 1.0, map_to_cm_sin = 0.0;
-    double cm_to_map_tx = 0.0, cm_to_map_ty = 0.0;
-    double cm_to_map_cos = 1.0, cm_to_map_sin = 0.0;
-
-    if (!same_frame) {
-      if (!get_transform(cm_frame, map_frame_,
-            map_to_cm_tx, map_to_cm_ty, map_to_cm_cos, map_to_cm_sin) ||
-          !get_transform(map_frame_, cm_frame,
-            cm_to_map_tx, cm_to_map_ty, cm_to_map_cos, cm_to_map_sin))
-      {
-        publish_execute_for_navigation(nav_id, true);
-        return;
-      }
-    }
-
-    auto map_to_cm_fn = [&](const Point2D & p) -> Point2D {
-      if (same_frame) return p;
-      return {map_to_cm_cos * p.x - map_to_cm_sin * p.y + map_to_cm_tx,
-              map_to_cm_sin * p.x + map_to_cm_cos * p.y + map_to_cm_ty};
-    };
-
-    auto cm_to_map_fn = [&](const Point2D & p) -> Point2D {
-      if (same_frame) return p;
-      return {cm_to_map_cos * p.x - cm_to_map_sin * p.y + cm_to_map_tx,
-              cm_to_map_sin * p.x + cm_to_map_cos * p.y + cm_to_map_ty};
-    };
-
-    // Costmap grid information
-    const auto & info = costmap->info;
-    const double ox  = info.origin.position.x;
-    const double oy  = info.origin.position.y;
-    const double res = info.resolution;
-    const int gw = static_cast<int>(info.width);
-    const int gh = static_cast<int>(info.height);
-
-    auto in_grid = [&](int gx, int gy) {
-      return gx >= 0 && gx < gw && gy >= 0 && gy < gh;
-    };
-
-    auto world_to_grid = [&](const Point2D & p) -> std::pair<int, int> {
-      return {static_cast<int>((p.x - ox) / res),
-              static_cast<int>((p.y - oy) / res)};
-    };
-
-    auto grid_to_world = [&](int gx, int gy) -> Point2D {
-      return {ox + (gx + 0.5) * res, oy + (gy + 0.5) * res};
-    };
-
-    // Determine the target point local_plan_horizon [m] ahead on the global path
-    const size_t nearest_idx = find_nearest_index(path, robot);
-    const double horizon = get_parameter("local_plan_horizon").as_double();
-
-    size_t target_idx = path.size() - 1;
-    double accumulated = 0.0;
-    for (size_t i = nearest_idx + 1; i < path.size(); ++i) {
-      accumulated += distance(path[i - 1], path[i]);
-      if (accumulated >= horizon) {
-        target_idx = i;
-        break;
-      }
-    }
-
-    // Scan from target_idx toward nearest_idx and select the farthest
-    // waypoint that fits within the local costmap as the target
-    Point2D target_in_cm;
-    bool found_target = false;
-    for (size_t i = target_idx + 1; i-- > nearest_idx; ) {
-      const Point2D wp_cm = map_to_cm_fn(path[i]);
-      auto [gx, gy] = world_to_grid(wp_cm);
-      if (in_grid(gx, gy)) {
-        target_in_cm = wp_cm;
-        found_target = true;
-        break;
-      }
-    }
-
-    if (!found_target) {
-      // All waypoints of the global path are outside the costmap: continue executing the current path as is
-      publish_execute_for_navigation(nav_id, true);
-      return;
-    }
-
-    // Run A*
-    const Point2D robot_in_cm = map_to_cm_fn(robot);
-
-    auto [start_gx, start_gy] = world_to_grid(robot_in_cm);
-    auto [goal_gx, goal_gy]   = world_to_grid(target_in_cm);
-
-    start_gx = std::clamp(start_gx, 0, gw - 1);
-    start_gy = std::clamp(start_gy, 0, gh - 1);
-
-    if (!in_grid(goal_gx, goal_gy)) {
-      publish_execute_for_navigation(nav_id, true);
-      return;
-    }
-
-    auto grid_copy = costmap->data;
-
-    // Overlay values from augmented_local_costmap (obstacle memory, map frame)
-    // onto the local costmap grid (take the larger value)
-    {
+    bool path_blocked = false;
+    if (use_memory) {
       std::lock_guard<std::mutex> lock(memory_mutex_);
       if (memory_initialized_) {
         const double mox  = memory_info_.origin.position.x;
         const double moy  = memory_info_.origin.position.y;
         const double mres = memory_info_.resolution;
-        const int mw = static_cast<int>(memory_info_.width);
-        const int mh = static_cast<int>(memory_info_.height);
+        const int    mw   = static_cast<int>(memory_info_.width);
+        const int    mh   = static_cast<int>(memory_info_.height);
 
-        for (int ly = 0; ly < gh; ++ly) {
-          for (int lx = 0; lx < gw; ++lx) {
-            const Point2D cell_map = cm_to_map_fn(grid_to_world(lx, ly));
-            const int mx = static_cast<int>((cell_map.x - mox) / mres);
-            const int my = static_cast<int>((cell_map.y - moy) / mres);
-            if (mx < 0 || mx >= mw || my < 0 || my >= mh) continue;
-            const int8_t mem_val = memory_grid_[static_cast<size_t>(my * mw + mx)];
-            auto & cell = grid_copy[static_cast<size_t>(ly * gw + lx)];
-            if (mem_val > cell) cell = mem_val;
+        double acc = 0.0;
+        for (size_t i = nearest_idx; i < path.size(); ++i) {
+          if (i > nearest_idx) acc += distance(path[i - 1], path[i]);
+          if (acc > check_horizon) break;
+
+          const int mx = static_cast<int>((path[i].x - mox) / mres);
+          const int my = static_cast<int>((path[i].y - moy) / mres);
+          if (mx < 0 || mx >= mw || my < 0 || my >= mh) continue;
+
+          if (static_cast<int>(memory_grid_[static_cast<size_t>(my * mw + mx)]) >= obs_threshold) {
+            path_blocked = true;
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+              "Path blocked by obstacle at (%.2f, %.2f)", path[i].x, path[i].y);
+            publish_blocked_marker(path[i].x, path[i].y);
+            break;
+          }
+        }
+      }
+    } else {
+      nav_msgs::msg::OccupancyGrid::SharedPtr costmap;
+      {
+        std::lock_guard<std::mutex> lock(costmap_mutex_);
+        costmap = local_costmap_;
+      }
+      if (costmap) {
+        const auto & info      = costmap->info;
+        const std::string & cm_frame = costmap->header.frame_id;
+        const double ox  = info.origin.position.x;
+        const double oy  = info.origin.position.y;
+        const double res = info.resolution;
+        const int    cw  = static_cast<int>(info.width);
+        const int    ch  = static_cast<int>(info.height);
+
+        double tx = 0.0, ty = 0.0, cos_r = 1.0, sin_r = 0.0;
+        bool tf_ok = true;
+        const bool same_frame = (cm_frame.empty() || cm_frame == map_frame_);
+        if (!same_frame) {
+          try {
+            const auto tf = tf_buffer_->lookupTransform(cm_frame, map_frame_, tf2::TimePointZero);
+            tx    = tf.transform.translation.x;
+            ty    = tf.transform.translation.y;
+            const double yaw = yaw_from_quat(tf.transform.rotation);
+            cos_r = std::cos(yaw);
+            sin_r = std::sin(yaw);
+          } catch (const tf2::TransformException & ex) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 3000,
+              "path_check TF %s->%s: %s", map_frame_.c_str(), cm_frame.c_str(), ex.what());
+            tf_ok = false;
+          }
+        }
+
+        if (tf_ok) {
+          double acc = 0.0;
+          for (size_t i = nearest_idx; i < path.size(); ++i) {
+            if (i > nearest_idx) acc += distance(path[i - 1], path[i]);
+            if (acc > check_horizon) break;
+
+            const double cx = same_frame ? path[i].x : cos_r * path[i].x - sin_r * path[i].y + tx;
+            const double cy = same_frame ? path[i].y : sin_r * path[i].x + cos_r * path[i].y + ty;
+            const int gx = static_cast<int>((cx - ox) / res);
+            const int gy = static_cast<int>((cy - oy) / res);
+            if (gx < 0 || gx >= cw || gy < 0 || gy >= ch) continue;
+
+            if (static_cast<int>(costmap->data[static_cast<size_t>(gy * cw + gx)]) >= obs_threshold) {
+              path_blocked = true;
+              RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                "Path blocked by obstacle at (%.2f, %.2f)", path[i].x, path[i].y);
+              publish_blocked_marker(path[i].x, path[i].y);
+              break;
+            }
           }
         }
       }
     }
 
-    grid_copy[static_cast<size_t>(start_gy * gw + start_gx)] = 0;
-    grid_copy[static_cast<size_t>(goal_gy  * gw + goal_gx)]  = 0;
-
-    const int obs_thr = get_parameter("local_plan_obstacle_threshold").as_int();
-
-    auto result = astar(
-      grid_copy, gw, gh,
-      start_gx, start_gy, goal_gx, goal_gy,
-      obs_thr, nullptr, 0, 0.0f);
-
-    // A* failed — request global replan
-    if (!result || result->empty()) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-        "Local A* failed — requesting global replan");
+    if (path_blocked) {
       publish_execute_for_navigation(nav_id, false);
-
       const rclcpp::Time now_t = get_clock()->now();
       const double cooldown = get_parameter("replan_cooldown").as_double();
       if (!replan_initialized_ ||
@@ -925,38 +856,6 @@ private:
       return;
     }
 
-    // A* succeeded — smooth if needed, build path in map frame, and publish
-    std::vector<std::pair<float, float>> waypoints;
-    if (get_parameter("use_local_smoothing").as_bool()) {
-      waypoints = smooth_path(*result);
-    } else {
-      for (const auto & [x, y] : *result) {
-        waypoints.emplace_back(static_cast<float>(x), static_cast<float>(y));
-      }
-    }
-
-    nav_msgs::msg::Path local_plan;
-    local_plan.header.stamp    = now();
-    local_plan.header.frame_id = map_frame_;
-
-    for (const auto & [gx, gy] : waypoints) {
-      const Point2D wp_cm  = {ox + (gx + 0.5f) * static_cast<float>(res),
-                               oy + (gy + 0.5f) * static_cast<float>(res)};
-      const Point2D wp_map = cm_to_map_fn(wp_cm);
-
-      geometry_msgs::msg::PoseStamped pose;
-      pose.header          = local_plan.header;
-      pose.pose.position.x = wp_map.x;
-      pose.pose.position.y = wp_map.y;
-      local_plan.poses.push_back(pose);
-    }
-
-    if (!local_plan.poses.empty() && target_idx == path.size() - 1) {
-      local_plan.poses.back().pose.orientation = stored_goal.pose.orientation;
-    }
-
-    if (!is_active_navigation(nav_id)) return;
-    current_plan_pub_->publish(local_plan);
     publish_execute_for_navigation(nav_id, true);
 
     {
@@ -991,27 +890,6 @@ private:
     }
   }
 
-  // Retrieve transform parameters from from_frame to to_frame
-  bool get_transform(
-    const std::string & to_frame, const std::string & from_frame,
-    double & tx, double & ty, double & cos_r, double & sin_r) const
-  {
-    try {
-      const auto tf = tf_buffer_->lookupTransform(to_frame, from_frame, tf2::TimePointZero);
-      tx    = tf.transform.translation.x;
-      ty    = tf.transform.translation.y;
-      const double yaw = yaw_from_quat(tf.transform.rotation);
-      cos_r = std::cos(yaw);
-      sin_r = std::sin(yaw);
-      return true;
-    } catch (const tf2::TransformException & ex) {
-      RCLCPP_WARN_THROTTLE(get_logger(), const_cast<rclcpp::Clock&>(*get_clock()), 3000,
-        "get_transform %s -> %s failed: %s",
-        from_frame.c_str(), to_frame.c_str(), ex.what());
-      return false;
-    }
-  }
-
   size_t find_nearest_index(
     const std::vector<Point2D> & path,
     const Point2D & pose) const
@@ -1039,12 +917,32 @@ private:
     }
   }
 
+  void publish_blocked_marker(double x, double y)
+  {
+    visualization_msgs::msg::Marker m;
+    m.header.stamp    = now();
+    m.header.frame_id = map_frame_;
+    m.ns              = "path_blocked";
+    m.id              = 0;
+    m.type            = visualization_msgs::msg::Marker::SPHERE;
+    m.action          = visualization_msgs::msg::Marker::ADD;
+    m.pose.position.x = x;
+    m.pose.position.y = y;
+    m.pose.position.z = 0.2;
+    m.pose.orientation.w = 1.0;
+    m.scale.x = m.scale.y = m.scale.z = 0.3;
+    m.color.r = 1.0f; m.color.g = 0.0f; m.color.b = 0.0f; m.color.a = 1.0f;
+    m.lifetime = rclcpp::Duration::from_seconds(2.0);
+    blocked_marker_pub_->publish(m);
+  }
+
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr    costmap_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr    map_sub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr                current_plan_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr                execute_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr       augmented_costmap_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr    blocked_marker_pub_;
   rclcpp::Client<nav_msgs::srv::GetPlan>::SharedPtr                plan_client_;
   rclcpp::Client<MoveServo>::SharedPtr                             move_servo_client_;
   rclcpp::TimerBase::SharedPtr                                     local_plan_timer_;

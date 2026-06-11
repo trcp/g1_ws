@@ -18,6 +18,7 @@ find_package(std_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(g1_srvs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
 add_executable(global_planner
   src/astar.cpp
@@ -37,6 +38,10 @@ target_compile_definitions(local_costmap_node PRIVATE RUN_LOCAL_COSTMAP)
 
 add_executable(local_planner
   src/pure_pursuit_local_planner.cpp
+)
+
+add_executable(dwa_local_planner
+  src/dwa_local_planner.cpp
 )
 
 add_executable(navigation_manager
@@ -60,6 +65,11 @@ target_include_directories(local_costmap_node PUBLIC
 )
 
 target_include_directories(local_planner PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+target_include_directories(dwa_local_planner PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
@@ -102,6 +112,16 @@ ament_target_dependencies(local_planner
   tf2_ros
 )
 
+ament_target_dependencies(dwa_local_planner
+  rclcpp
+  nav_msgs
+  geometry_msgs
+  std_msgs
+  visualization_msgs
+  tf2
+  tf2_ros
+)
+
 ament_target_dependencies(navigation_manager
   rclcpp
   rclcpp_action
@@ -112,9 +132,10 @@ ament_target_dependencies(navigation_manager
   g1_srvs
   tf2
   tf2_ros
+  visualization_msgs
 )
 
-install(TARGETS global_planner costmap_node local_costmap_node local_planner navigation_manager
+install(TARGETS global_planner costmap_node local_costmap_node local_planner dwa_local_planner navigation_manager
   DESTINATION lib/${PROJECT_NAME}
 )
 
