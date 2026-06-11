@@ -46,7 +46,7 @@
 ---
 
 ```bash
-docker compose run --name colcon_build --rm g1 bash -ic "colcon build --symlink-install --packages-up-to erasers_g1 --cmake-args -DROS_ED
+docker compose run --name colcon_build --rm erasers_g1 bash -ic "colcon build --symlink-install --packages-up-to erasers_g1 --cmake-args -DROS_ED
 ITION="ROS2" -DHUMBLE_ROS=humble --cmake-clean-cache"
 ```
 ```bash
