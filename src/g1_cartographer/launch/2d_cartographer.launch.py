@@ -151,7 +151,7 @@ def generate_launch_description():
     #ld.add_action(pointcloud_to_laserscan)
     ld.add_action(cartographer_node)
     ld.add_action(cartographer_occupancy_grid_node)
-    ld.add_action(auto_map_saver)
+    #ld.add_action(auto_map_saver)
 
 
     # launchers
