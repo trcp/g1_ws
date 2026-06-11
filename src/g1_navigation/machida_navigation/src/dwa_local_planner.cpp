@@ -66,6 +66,7 @@ public:
     declare_parameter("vx_samples",     10);     // forward velocity samples
     declare_parameter("vy_samples",     5);      // lateral velocity samples (holonomic only)
     declare_parameter("vth_samples",    20);     // angular velocity samples
+    declare_parameter("max_lateral_velocity", 0.3);  // max lateral (y) velocity [m/s] holonomic only
     declare_parameter("heading_bias",   24.0);   // weight for heading score
     declare_parameter("path_bias",      32.0);   // weight for path following score
     declare_parameter("speed_bias",      6.0);   // weight for speed score
@@ -356,23 +357,39 @@ private:
     const auto vx_vals  = linspace(vx_n, vx_lo, vx_hi);
     const auto vw_vals  = linspace(vw_n, w_lo, w_hi);
 
-    // --- evaluate all candidates (vx, w only — vy=0) ---
+    // Lateral velocity samples (holonomic only)
+    std::vector<double> vy_vals;
+    int vy_n = 1;
+    if (holo) {
+      const double max_vy = get_parameter("max_lateral_velocity").as_double();
+      vy_n = std::max(2, (int)get_parameter("vy_samples").as_int());
+      const double vy_lo = std::max(-max_vy, prev_vy_ - max_av * win_dt);
+      const double vy_hi = std::min( max_vy, prev_vy_ + max_av * win_dt);
+      vy_vals = linspace(vy_n, vy_lo, vy_hi);
+    } else {
+      vy_vals = {0.0};
+    }
+
+    // --- evaluate all candidates ---
     struct Candidate { Vel vel; double h_err; double p_dist; double spd; std::vector<State> traj; };
     std::vector<Candidate> cands;
-    cands.reserve(vx_n * vw_n);
+    cands.reserve(vx_n * vy_n * vw_n);
 
     for (double vx : vx_vals) {
-      for (double w : vw_vals) {
-        std::vector<State> pts;
-        const State end = simulate(pose, {vx, 0.0, w}, sim_t, sim_dt, holo, &pts);
-        pts.push_back(end);
-        cands.push_back({
-          {vx, 0.0, w},
-          heading_error(end, target),
-          traj_path_dist(pts, path, near_idx),
-          vx,
-          std::move(pts)
-        });
+      for (double vy : vy_vals) {
+        for (double w : vw_vals) {
+          std::vector<State> pts;
+          const State end = simulate(pose, {vx, vy, w}, sim_t, sim_dt, holo, &pts);
+          pts.push_back(end);
+          const double spd = holo ? std::hypot(vx, vy) : vx;
+          cands.push_back({
+            {vx, vy, w},
+            heading_error(end, target),
+            traj_path_dist(pts, path, near_idx),
+            spd,
+            std::move(pts)
+          });
+        }
       }
     }
 
@@ -446,14 +463,15 @@ private:
       traj_pub_->publish(ma);
     }
 
-    // Apply min velocity dead-band (robot unresponsive below this threshold)
-    const double spd = std::hypot(best.vx, best.vy);
-    if (spd > 1e-6 && spd < min_v) {
-      const double scale = min_v / spd;
+    // Apply min velocity dead-band after EMA so the final published values are enforced.
+    // Use max(|vx|,|vy|) so the dominant axis reaches min_v regardless of the other component.
+    const double max_linear = std::max(std::abs(best.vx), std::abs(best.vy));
+    if (max_linear > 1e-6 && max_linear < min_v) {
+      const double scale = min_v / max_linear;
       best.vx *= scale;
       best.vy *= scale;
     }
-    if (spd < 1e-3) {
+    if (max_linear < 1e-3) {
       const double min_w_p = get_parameter("min_angular_velocity").as_double();
       if      (best.w > 0.0 && best.w <  min_w_p) best.w =  min_w_p;
       else if (best.w < 0.0 && best.w > -min_w_p) best.w = -min_w_p;
