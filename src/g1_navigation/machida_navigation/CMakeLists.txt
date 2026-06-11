@@ -130,6 +130,7 @@ ament_target_dependencies(navigation_manager
   nav2_msgs
   tf2
   tf2_ros
+  visualization_msgs
 )
 
 install(TARGETS global_planner costmap_node local_costmap_node local_planner dwa_local_planner navigation_manager

@@ -8,6 +8,7 @@
 
 #include "geometry_msgs/msg/point.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/bool.hpp"
@@ -67,10 +68,12 @@ public:
     declare_parameter("vy_samples",     5);      // lateral velocity samples (holonomic only)
     declare_parameter("vth_samples",    20);     // angular velocity samples
     declare_parameter("max_lateral_velocity", 0.3);  // max lateral (y) velocity [m/s] holonomic only
-    declare_parameter("heading_bias",   24.0);   // weight for heading score
-    declare_parameter("path_bias",      32.0);   // weight for path following score
-    declare_parameter("speed_bias",      6.0);   // weight for speed score
-    declare_parameter("ema_alpha",       0.4);   // EMA smoothing factor (0=hold, 1=no filter)
+    declare_parameter("heading_bias",    24.0);   // weight for heading score
+    declare_parameter("path_bias",       32.0);   // weight for path following score
+    declare_parameter("speed_bias",       6.0);   // weight for speed score
+    declare_parameter("obstacle_bias",   24.0);   // weight for obstacle clearance score
+    declare_parameter("ema_alpha",        0.4);   // EMA smoothing factor (0=hold, 1=no filter)
+    declare_parameter("costmap_topic",   std::string("/local_costmap"));
     declare_parameter("viz_topic",       std::string("/dwa_trajectories"));
 
     path_topic_       = get_parameter("path_topic").as_string();
@@ -88,6 +91,10 @@ public:
     execute_sub_ = create_subscription<std_msgs::msg::Bool>(
       get_parameter("execute_topic").as_string(), 1,
       std::bind(&DWALocalPlanner::execute_callback, this, std::placeholders::_1));
+
+    costmap_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
+      get_parameter("costmap_topic").as_string(), 1,
+      std::bind(&DWALocalPlanner::costmap_callback, this, std::placeholders::_1));
 
     cmd_pub_  = create_publisher<geometry_msgs::msg::Twist>(cmd_vel_topic_, 10);
     traj_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
@@ -133,6 +140,12 @@ private:
   {
     std::lock_guard<std::mutex> lk(exec_mutex_);
     executing_ = msg->data;
+  }
+
+  void costmap_callback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg)
+  {
+    std::lock_guard<std::mutex> lk(costmap_mutex_);
+    costmap_ = msg;
   }
 
   // ---- DWA helpers ----
@@ -204,6 +217,48 @@ private:
   {
     const double desired = std::atan2(target.y - end.y, target.x - end.x);
     return std::abs(normalize_angle(desired - end.theta));
+  }
+
+  // Maximum costmap value encountered along trajectory (0–100). Lower is better.
+  // Trajectory points are in map frame; transforms to costmap frame if needed.
+  double traj_obstacle_cost(const std::vector<State> & pts,
+                             const nav_msgs::msg::OccupancyGrid & cm) const
+  {
+    const auto & info = cm.info;
+    const std::string & cm_frame = cm.header.frame_id;
+    const double ox  = info.origin.position.x;
+    const double oy  = info.origin.position.y;
+    const double res = info.resolution;
+    const int gw = static_cast<int>(info.width);
+    const int gh = static_cast<int>(info.height);
+
+    // Compute transform from map frame to costmap frame (once per call)
+    double tx = 0.0, ty = 0.0, cos_r = 1.0, sin_r = 0.0;
+    const bool same_frame = (cm_frame.empty() || cm_frame == map_frame_);
+    if (!same_frame) {
+      try {
+        const auto tf = tf_buffer_->lookupTransform(cm_frame, map_frame_, tf2::TimePointZero);
+        tx    = tf.transform.translation.x;
+        ty    = tf.transform.translation.y;
+        const double yaw = yaw_from_quat(tf.transform.rotation);
+        cos_r = std::cos(yaw);
+        sin_r = std::sin(yaw);
+      } catch (const tf2::TransformException &) {
+        return 0.0;  // TF not ready; skip obstacle scoring
+      }
+    }
+
+    double max_cost = 0.0;
+    for (const auto & s : pts) {
+      const double cx = same_frame ? s.x : cos_r * s.x - sin_r * s.y + tx;
+      const double cy = same_frame ? s.y : sin_r * s.x + cos_r * s.y + ty;
+      const int gx = static_cast<int>((cx - ox) / res);
+      const int gy = static_cast<int>((cy - oy) / res);
+      if (gx < 0 || gx >= gw || gy < 0 || gy >= gh) continue;
+      const double val = static_cast<double>(cm.data[static_cast<size_t>(gy * gw + gx)]);
+      if (val > max_cost) max_cost = val;
+    }
+    return max_cost;
   }
 
   // In-place normalize vector to [0,1]; invert=true means lower raw → higher norm.
@@ -370,8 +425,18 @@ private:
       vy_vals = {0.0};
     }
 
+    // Snapshot costmap for this control cycle
+    nav_msgs::msg::OccupancyGrid::SharedPtr costmap;
+    {
+      std::lock_guard<std::mutex> lk(costmap_mutex_);
+      costmap = costmap_;
+    }
+
     // --- evaluate all candidates ---
-    struct Candidate { Vel vel; double h_err; double p_dist; double spd; std::vector<State> traj; };
+    struct Candidate {
+      Vel vel; double h_err; double p_dist; double spd; double obs_cost;
+      std::vector<State> traj;
+    };
     std::vector<Candidate> cands;
     cands.reserve(vx_n * vy_n * vw_n);
 
@@ -382,11 +447,13 @@ private:
           const State end = simulate(pose, {vx, vy, w}, sim_t, sim_dt, holo, &pts);
           pts.push_back(end);
           const double spd = holo ? std::hypot(vx, vy) : vx;
+          const double obs = costmap ? traj_obstacle_cost(pts, *costmap) : 0.0;
           cands.push_back({
             {vx, vy, w},
             heading_error(end, target),
             traj_path_dist(pts, path, near_idx),
             spd,
+            obs,
             std::move(pts)
           });
         }
@@ -397,24 +464,27 @@ private:
 
     // --- normalize scores and pick best ---
     const size_t N = cands.size();
-    std::vector<double> h_s(N), p_s(N), sp_s(N);
+    std::vector<double> h_s(N), p_s(N), sp_s(N), obs_s(N);
     for (size_t i = 0; i < N; ++i) {
-      h_s[i]  = cands[i].h_err;
-      p_s[i]  = cands[i].p_dist;
-      sp_s[i] = cands[i].spd;
+      h_s[i]   = cands[i].h_err;
+      p_s[i]   = cands[i].p_dist;
+      sp_s[i]  = cands[i].spd;
+      obs_s[i] = cands[i].obs_cost;
     }
-    normalize(h_s,  true);   // lower heading error → higher score
-    normalize(p_s,  true);   // lower path dist    → higher score
-    normalize(sp_s, false);  // higher speed        → higher score
+    normalize(h_s,   true);   // lower heading error  → higher score
+    normalize(p_s,   true);   // lower path dist      → higher score
+    normalize(sp_s,  false);  // higher speed          → higher score
+    normalize(obs_s, true);   // lower obstacle cost  → higher score
 
     const double alpha = get_parameter("heading_bias").as_double();
     const double beta  = get_parameter("path_bias").as_double();
     const double gamma = get_parameter("speed_bias").as_double();
+    const double delta = get_parameter("obstacle_bias").as_double();
 
     size_t best_i = 0;
     double best_score = -std::numeric_limits<double>::max();
     for (size_t i = 0; i < N; ++i) {
-      const double score = alpha * h_s[i] + beta * p_s[i] + gamma * sp_s[i];
+      const double score = alpha * h_s[i] + beta * p_s[i] + gamma * sp_s[i] + delta * obs_s[i];
       if (score > best_score) { best_score = score; best_i = i; }
     }
 
@@ -508,6 +578,7 @@ private:
   // ---- ROS handles ----
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr                   path_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr                   execute_sub_;
+  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr          costmap_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr                cmd_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr     traj_pub_;
   rclcpp::TimerBase::SharedPtr                                           timer_;
@@ -530,6 +601,9 @@ private:
   std::mutex exec_mutex_;
   bool executing_{false};
   bool prev_executing_{false};
+
+  std::mutex costmap_mutex_;
+  nav_msgs::msg::OccupancyGrid::SharedPtr costmap_;
 
   double prev_vx_{0.0};
   double prev_vy_{0.0};
