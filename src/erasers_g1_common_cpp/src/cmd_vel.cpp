@@ -1,5 +1,6 @@
 #include "rclcpp/rclcpp.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include "g1/g1_loco_client.hpp"
 #include "common/ut_errror.hpp"
 
@@ -42,6 +43,13 @@ class CmdVelSubscriberNode : public rclcpp::Node {
         std::bind(&CmdVelSubscriberNode::cmdVelCallback, this, std::placeholders::_1),
         sub_opt);
 
+    auto emergency_stop_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
+    emergency_stop_subscription_ = this->create_subscription<std_msgs::msg::Bool>(
+        "/emergency_stop/active",
+        emergency_stop_qos,
+        std::bind(&CmdVelSubscriberNode::emergencyStopCallback, this, std::placeholders::_1),
+        sub_opt);
+
     // --- タイマーの設定 ---
     // 第3引数に callback_group_timer_ を指定するのが重要
     control_timer_ = this->create_wall_timer(
@@ -67,15 +75,87 @@ class CmdVelSubscriberNode : public rclcpp::Node {
  private:
   void cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg) {
     std::lock_guard<std::mutex> lock(cmd_mutex_);
+    if (emergency_stop_active_.load()) {
+      target_vx_ = 0.0f;
+      target_vy_ = 0.0f;
+      target_omega_ = 0.0f;
+
+      bool non_zero_cmd = std::abs(msg->linear.x) > 0.001 ||
+                          std::abs(msg->linear.y) > 0.001 ||
+                          std::abs(msg->angular.z) > 0.001;
+      if (non_zero_cmd) {
+        RCLCPP_WARN_THROTTLE(
+          this->get_logger(), *this->get_clock(), 1000,
+          "Ignoring /cmd_vel because emergency stop is active.");
+      }
+      return;
+    }
+
     target_vx_ = msg->linear.x;
     target_vy_ = msg->linear.y;
     target_omega_ = msg->angular.z;
     last_cmd_vel_received_time_ = this->now();
   }
 
+  void emergencyStopCallback(const std_msgs::msg::Bool::SharedPtr msg) {
+    if (!msg->data) {
+      if (emergency_stop_active_.load()) {
+        std::lock_guard<std::mutex> lock(cmd_mutex_);
+        target_vx_ = 0.0f;
+        target_vy_ = 0.0f;
+        target_omega_ = 0.0f;
+        last_cmd_vel_received_time_ = this->now();
+        last_sent_vx_ = 0.0f;
+        last_sent_vy_ = 0.0f;
+        last_sent_omega_ = 0.0f;
+        is_stopped_ = true;
+        RCLCPP_INFO(this->get_logger(), "Emergency stop released. /cmd_vel input remains disabled until restart.");
+      }
+      return;
+    }
+
+    bool was_active = emergency_stop_active_.exchange(true);
+    {
+      std::lock_guard<std::mutex> lock(cmd_mutex_);
+      target_vx_ = 0.0f;
+      target_vy_ = 0.0f;
+      target_omega_ = 0.0f;
+      last_cmd_vel_received_time_ = this->now();
+    }
+
+    if (!was_active) {
+      RCLCPP_ERROR(this->get_logger(), "Emergency stop active. /cmd_vel input will be ignored until restart.");
+    }
+  }
+
   void controlLoopCallback() {
     float vx, vy, omega;
     bool is_timeout = false;
+
+    if (emergency_stop_active_.load()) {
+      {
+        std::lock_guard<std::mutex> lock(cmd_mutex_);
+        target_vx_ = 0.0f;
+        target_vy_ = 0.0f;
+        target_omega_ = 0.0f;
+      }
+
+      int32_t ret = client_.Move(0.0, 0.0, 0.0);
+      auto now = this->now();
+      last_api_call_time_ = now;
+      last_sent_vx_ = 0.0f;
+      last_sent_vy_ = 0.0f;
+      last_sent_omega_ = 0.0f;
+
+      if (ret == 0) {
+        is_stopped_ = true;
+      } else {
+        RCLCPP_WARN_THROTTLE(
+          this->get_logger(), *this->get_clock(), 1000,
+          "Emergency stop zero Move API call failed: %d", ret);
+      }
+      return;
+    }
 
     // 現在時刻と最終受信時刻を比較
     {
@@ -149,6 +229,7 @@ class CmdVelSubscriberNode : public rclcpp::Node {
 
   // ROS メンバ
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_subscription_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_stop_subscription_;
   rclcpp::CallbackGroup::SharedPtr callback_group_subscriber_;
   rclcpp::CallbackGroup::SharedPtr callback_group_timer_; // ★追加
   rclcpp::TimerBase::SharedPtr control_timer_;
@@ -164,6 +245,7 @@ class CmdVelSubscriberNode : public rclcpp::Node {
   rclcpp::Time last_cmd_vel_received_time_;
   rclcpp::Duration watchdog_timeout_;
   bool is_stopped_{true};
+  std::atomic<bool> emergency_stop_active_{false};
   
   // 送信最適化用
   float last_sent_vx_{0.0f};

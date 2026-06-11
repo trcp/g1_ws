@@ -16,6 +16,7 @@ find_package(unitree_go REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(urdf REQUIRED)
 find_package(g1_srvs REQUIRED)
 find_package(tf2 REQUIRED)
@@ -47,6 +48,7 @@ target_include_directories(cmd_vel PUBLIC
 ament_target_dependencies(cmd_vel
     rclcpp
     geometry_msgs
+    std_msgs
     unitree_api
 )
 
@@ -123,6 +125,7 @@ ament_target_dependencies(arm_joint_control
     unitree_hg
     unitree_api
     sensor_msgs
+    std_msgs
     urdf
 )
 
@@ -160,9 +163,11 @@ ament_target_dependencies(arm_endeffector_control
 add_executable(emergency_stop src/emergency_stop.cpp)
 ament_target_dependencies(emergency_stop
     rclcpp
+    geometry_msgs
     unitree_go
     g1_srvs
     sensor_msgs
+    std_msgs
 )
 
 # cartesian_trajectory_planner

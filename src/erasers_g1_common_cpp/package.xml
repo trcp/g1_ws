@@ -13,6 +13,7 @@
   <depend>unitree_hg</depend>
   <depend>unitree_go</depend>
   <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
   <depend>urdf</depend>
   <depend>joy</depend>
   <depend>control_msgs</depend>

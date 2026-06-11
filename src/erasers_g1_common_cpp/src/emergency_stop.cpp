@@ -3,7 +3,9 @@
 #include <functional>
 
 #include "rclcpp/rclcpp.hpp"
+#include "geometry_msgs/msg/twist.hpp"
 #include "sensor_msgs/msg/joy.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include "unitree_go/msg/wireless_controller.hpp"
 #include "g1_srvs/srv/pose_policy.hpp"
 #include "g1_srvs/srv/audio_client.hpp"
@@ -16,7 +18,8 @@ class EmergencyStopNode : public rclcpp::Node
 public:
   EmergencyStopNode()
   : Node("emergency_stop_node"), prev_button_state_(false), is_processing_(false), 
-    is_armed_(false), initial_warning_sent_(false)
+    is_armed_(false), initial_warning_sent_(false), safety_active_(false),
+    restart_warning_active_(false)
   {
     this->declare_parameter<int>("emc_button_index", 0);
     this->declare_parameter<std::string>("emc_pose", "damp");
@@ -30,6 +33,15 @@ public:
 
     pose_policy_client_ = this->create_client<g1_srvs::srv::PosePolicy>("/pose_policy");
     audio_client_ = this->create_client<g1_srvs::srv::AudioClient>("/play_audio");
+
+    auto emergency_stop_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
+    emergency_active_pub_ = this->create_publisher<std_msgs::msg::Bool>(
+      "/emergency_stop/active", emergency_stop_qos);
+    zero_cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
+    zero_cmd_timer_ = this->create_wall_timer(
+      50ms, std::bind(&EmergencyStopNode::publish_safety_zero_cmd, this));
+    restart_warning_timer_ = this->create_wall_timer(
+      10s, std::bind(&EmergencyStopNode::publish_restart_warning_tts, this));
 
     RCLCPP_INFO(this->get_logger(), "Emergency Stop Node has been started.");
   }
@@ -51,6 +63,10 @@ private:
     if (!is_armed_) {
       if (!current_button_state) {
         is_armed_ = true;
+        publish_emergency_active(false);
+        if (initial_warning_sent_) {
+          start_restart_warning_tts();
+        }
         RCLCPP_INFO(this->get_logger(), "Emergency button is released. System is now ARMED.");
       } else if (!initial_warning_sent_) {
         send_tts_request("Please release the emergency button");
@@ -63,6 +79,8 @@ private:
 
     if (current_button_state && !prev_button_state_) {
       execute_emergency_sequence("JOY");
+    } else if (!current_button_state && prev_button_state_ && safety_active_) {
+      deactivate_safety_stop();
     }
 
     prev_button_state_ = current_button_state;
@@ -86,6 +104,15 @@ private:
     is_processing_ = true;
     std::string emc_pose = this->get_parameter("emc_pose").as_string();
     RCLCPP_ERROR(this->get_logger(), "EMERGENCY STOP BY %s!!!!! Triggering pose policy: '%s'", source.c_str(), emc_pose.c_str());
+
+    if (emc_pose == "safety") {
+      activate_safety_stop();
+      send_tts_request("Emergency Stop!");
+      RCLCPP_INFO(this->get_logger(), "Safety emergency stop request from %s latched.", source.c_str());
+      return;
+    }
+
+    send_tts_request("Emergency Stop!");
     
     // 1段階目: 指定されたポーズ (emc_pose) を適用
     call_pose_policy_service(emc_pose, [this, source]() {
@@ -103,6 +130,60 @@ private:
         is_processing_ = false; // zero_torque が無効な場合はここで完了
       }
     });
+  }
+
+  void activate_safety_stop()
+  {
+    safety_active_ = true;
+
+    publish_emergency_active(true);
+
+    publish_safety_zero_cmd();
+    RCLCPP_ERROR(this->get_logger(), "Safety emergency stop is active. Publishing zero /cmd_vel continuously.");
+  }
+
+  void deactivate_safety_stop()
+  {
+    safety_active_ = false;
+    is_processing_ = false;
+    publish_emergency_active(false);
+    start_restart_warning_tts();
+    RCLCPP_INFO(this->get_logger(), "Safety emergency stop has been released. Restart container is required.");
+  }
+
+  void publish_emergency_active(bool active)
+  {
+    auto active_msg = std_msgs::msg::Bool();
+    active_msg.data = active;
+    emergency_active_pub_->publish(active_msg);
+  }
+
+  void publish_safety_zero_cmd()
+  {
+    if (!safety_active_) {
+      return;
+    }
+
+    auto zero_cmd = geometry_msgs::msg::Twist();
+    zero_cmd.linear.x = 0.0;
+    zero_cmd.linear.y = 0.0;
+    zero_cmd.angular.z = 0.0;
+    zero_cmd_vel_pub_->publish(zero_cmd);
+  }
+
+  void start_restart_warning_tts()
+  {
+    restart_warning_active_ = true;
+    publish_restart_warning_tts();
+  }
+
+  void publish_restart_warning_tts()
+  {
+    if (!restart_warning_active_) {
+      return;
+    }
+
+    send_tts_request("Emergency button disarmed. Please restart container");
   }
 
   void send_tts_request(const std::string & text)
@@ -163,6 +244,10 @@ private:
 
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
   rclcpp::Subscription<unitree_go::msg::WirelessController>::SharedPtr wireless_sub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr emergency_active_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr zero_cmd_vel_pub_;
+  rclcpp::TimerBase::SharedPtr zero_cmd_timer_;
+  rclcpp::TimerBase::SharedPtr restart_warning_timer_;
   rclcpp::Client<g1_srvs::srv::PosePolicy>::SharedPtr pose_policy_client_;
   rclcpp::Client<g1_srvs::srv::AudioClient>::SharedPtr audio_client_;
   
@@ -170,6 +255,8 @@ private:
   bool is_processing_;    
   bool is_armed_;
   bool initial_warning_sent_;
+  bool safety_active_;
+  bool restart_warning_active_;
 };
 
 int main(int argc, char * argv[])

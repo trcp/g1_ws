@@ -149,8 +149,8 @@ def generate_launch_description():
     emergency_stop = Node(
         package='erasers_g1_common_cpp',
         executable='emergency_stop',
+        parameters=[{"emc_pose":"safety"}],
         emulate_tty=True,
-        condition=IfCondition(use_emc)
     )
     # Mic server
     mic_server = Node(
@@ -162,7 +162,8 @@ def generate_launch_description():
     emc_joy_node = Node(
         package='joy',
         executable='joy_node',
-        namespace='emc'
+        namespace='emc',
+        condition=IfCondition(use_emc)
     )
 
     ld.add_action(loco_service_client)
@@ -177,7 +178,7 @@ def generate_launch_description():
     ld.add_action(amazing_hand)
     ld.add_action(emergency_stop)
     ld.add_action(mic_server)
-    #ld.add_action(emc_joy_node)
+    ld.add_action(emc_joy_node)
 
 
     pointcloud_to_laserscan = Node(
