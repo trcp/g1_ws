@@ -10,14 +10,9 @@ local task = {
       display_name = "G1 Bring up",
       description = "",
       commands = {
-        g1 = {
-          template = "cd /home/unitree/g1_ws && /usr/bin/docker compose up erasers_g1",
-          kill = "cd /home/unitree/g1_ws && /usr/bin/docker compose stop erasers_g1",
-          variables = {},
-        },
-        katana = {
-          template = "cd /home/roboworks/g1_ws && /usr/bin/docker compose up katana",
-          kill = "cd /home/roboworks/g1_ws && /usr/bin/docker compose stop katana",
+        default = {
+          template = "cd /home/unitree/g1_ws && /usr/bin/docker compose run --name erasers_g1 --rm erasers_g1 bash -ic \"ros2 launch g1_bringup bringup.launch.py\"",
+          kill = "/usr/bin/docker stop erasers_g1",
           variables = {},
         },
       },
@@ -28,7 +23,7 @@ local task = {
       commands = {
         default = {
           template = "cd /home/unitree/g1_ws && /usr/bin/docker compose run --name nav --rm erasers_g1 bash -ic \"ros2 launch machida_navigation machida_navigation.launch.py map_dir:=/home/unitree/colcon_ws/map\"",
-          kill = "docker stop nav",
+          kill = "/usr/bin/docker stop nav",
           variables = {},
         },
       },
@@ -39,7 +34,7 @@ local task = {
       commands = {
         default = {
           template = "cd /home/roboworks/g1_ws && /usr/bin/docker compose run --name ri --rm katana bash -ic \"ros2 run robot_tasks robot_inspection\"",
-          kill = "docker stop ri",
+          kill = "/usr/bin/docker stop ri",
           variables = {},
         },
       },

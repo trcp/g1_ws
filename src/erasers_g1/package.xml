@@ -24,6 +24,7 @@
   <depend>g1_moveit</depend>
   <!--depend>g1_slam</depend-->
   <depend>head_servo_controller</depend>
+  <depend>robot_tasks</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

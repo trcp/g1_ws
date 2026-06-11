@@ -1,7 +1,3 @@
-# Dependencies Packages
-src/thirdparty/*
-!src/thirdparty/.gitkeep
-
 # ros workspace
 build/**
 install/**

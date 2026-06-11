@@ -41,3 +41,15 @@
     ```bash
     chronyc sources
     ```
+
+
+---
+
+```bash
+docker compose run --name colcon_build --rm g1 bash -ic "colcon build --symlink-install --packages-up-to erasers_g1 --cmake-args -DROS_ED
+ITION="ROS2" -DHUMBLE_ROS=humble --cmake-clean-cache"
+```
+```bash
+docker compose run --name colcon_build --rm katana bash -ic "colcon build --symlink-install --packages-up-to erasers_g1 --cmake-args -DROS_ED
+ITION="ROS2" -DHUMBLE_ROS=humble --cmake-clean-cache"
+```

@@ -70,7 +70,7 @@ services:
         - TARGET_ARCH=cuda
         - CUDA=13.0.0
   
-  erasers_g1:
+  g1:
     image: erasers_g1:g1
     container_name: erasers_g1.g1
     <<: *gpu

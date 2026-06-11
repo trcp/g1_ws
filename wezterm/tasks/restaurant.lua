@@ -49,8 +49,19 @@ local task = {
       description = "Bringup the Restaurant Task",
       commands = {
         default = {
-          template = "cd /home/roboworks/g1_ws && /usr/bin/docker compose run --name restaurant --rm katana bash -ic \"ros2 run robot_tasks restaurant\"",
+          template = "export DISPLAY=:1 && cd /home/roboworks/g1_ws && /usr/bin/docker compose run --name restaurant --rm katana bash -ic \"ros2 run robot_tasks restaurant_task\"",
           kill = "docker stop restaurant",
+          variables = {},
+        },
+      },
+    },
+    recongnition = {
+      display_name = "Recongnition",
+      description = "Bringup the Recongnition",
+      commands = {
+        default = {
+          template = "export DISPLAY=:1 && cd /home/roboworks/g1_ws && /usr/bin/docker compose run --name recongnition --rm katana bash -ic \"ros2 launch robot_tasks restaurant_depends.launch.py\"",
+          kill = "docker stop recongnition",
           variables = {},
         },
       },
@@ -65,6 +76,7 @@ local task = {
         panes = {
           { program = "g1_bringup" },
           { program = "restaurant" },
+          { program = "recongnition" },
         },
       },
       {
