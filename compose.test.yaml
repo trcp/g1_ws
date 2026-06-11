@@ -1,0 +1,139 @@
+# ==========
+# NVIDIA GPU
+# ==========
+x-gpu: &gpu
+  environment:
+    - __NV_PRIME_RENDER_OFFLOAD=1
+    - __GLX_VENDOR_LIBRARY_NAME=nvidia
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
+
+
+# ==================
+# KATANA Services
+# ==================
+services:
+  katana:
+    image: erasers_g1:katana
+    container_name: erasers_g1.katana
+    <<: *gpu
+    privileged: true
+    ipc: host
+    network_mode: host
+    tty: true
+    stdin_open: true
+    stop_signal: SIGINT
+    environment:
+      # Preference settings DO NOT EDIT
+      - DISPLAY=${DISPLAY}
+      - LC_TIME
+      - TZ=Asia/Tokyo
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///tmp/cyclonedds/cyclonedds.katana.xml
+      - ROS_DOMAIN_ID=0
+      # GPU settings. DO NOT EDIT
+      - XAUTHORITY=/tmp/.docker.xauth
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_VISIBLE_DEVICES=all
+      # GEMINI API KEY
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      # mount directories, DO NOT EDIT
+      - ./src:$HOME/colcon_ws/src
+      - ./install:$HOME/colcon_ws/install
+      - ./build:$HOME/colcon_ws/build
+      - ./rosbag:$HOME/colcon_ws/rosbag
+      - ./map:$HOME/colcon_ws/map
+      - ./cyclonedds:/tmp/cyclonedds
+      - /tmp/.X11-unix/:/tmp/.X11-unix
+      - /tmp/.docker.xauth:/tmp/.docker.xauth
+      - $HOME/.Xauthority/:/root/.Xauthority
+    devices:
+      - /dev:/dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: main
+      args:
+        # DO NOT EDIT
+        - OS=22.04
+        - ROS=humble
+        - USERNAME=${USER}
+        - GROUPNAME=${USER}
+        - PASSWORD
+        # Arch settings
+        - TARGET_ARCH=cuda
+        - CUDA=13.0.0
+  
+  g1:
+    image: erasers_g1:g1
+    container_name: erasers_g1.g1
+    <<: *gpu
+    runtime: nvidia
+    privileged: true
+    ipc: host
+    network_mode: host
+    tty: true
+    stdin_open: true
+    stop_signal: SIGINT
+    environment:
+      # Preference settings DO NOT EDIT
+      - DISPLAY=${DISPLAY}
+      - LC_TIME
+      - TZ=Asia/Tokyo
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///tmp/cyclonedds/cyclonedds.g1.xml
+      - ROS_DOMAIN_ID=0
+      # G1 Robot Settings
+      - AH_PATH="/dev/ttyACM0"
+      - DX_PATH="/dev/ttyCH341USB0"
+      - USE_EMC=true
+      # GPU settings. DO NOT EDIT
+      - XAUTHORITY=/tmp/.docker.xauth
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - NVIDIA_VISIBLE_DEVICES=all
+      # GEMINI API KEY
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      # mount directories, DO NOT EDIT
+      - ./src:$HOME/colcon_ws/src
+      - ./install:$HOME/colcon_ws/install
+      - ./build:$HOME/colcon_ws/build
+      - ./rosbag:$HOME/colcon_ws/rosbag
+      - ./map:$HOME/colcon_ws/map
+      - ./cyclonedds:/tmp/cyclonedds
+      - /tmp/.X11-unix/:/tmp/.X11-unix
+      - /tmp/.docker.xauth:/tmp/.docker.xauth
+      - $HOME/.Xauthority/:/root/.Xauthority
+      # Jetson
+      - /run/jtop.sock:/run/jtop.sock
+      - /tmp/argus_socket:/tmp/argus_socket
+      - /etc/enctune.conf:/etc/enctune.conf
+      - /etc/nv_tegra_release:/etc/nv_tegra_release
+      - /tmp/nv_jetson_model:/tmp/nv_jetson_model
+      - /var/run/dbus:/var/run/dbus
+      - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "audio"
+      - "video"
+      - "input"
+    devices:
+      - /dev:/dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: main
+      args:
+        # DO NOT EDIT
+        - L4T_VERSION=36.4
+        - SOC=t234
+        - USERNAME=${USER}
+        - GROUPNAME=${USER}
+        # Arch settings
+        - TARGET_ARCH=jetson

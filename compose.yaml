@@ -276,7 +276,8 @@ services:
       - /tmp/.docker.xauth:/tmp/.docker.xauth
       - $HOME/.Xauthority/:/root/.Xauthority
     #command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py & terminator\""
-    command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py \""
+    #command: "/bin/bash -ci \"ros2 launch g1_bringup ptl.launch.py \""
+    command: "terminator"
 
 
   # ===============================================

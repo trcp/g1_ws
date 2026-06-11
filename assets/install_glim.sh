@@ -6,11 +6,97 @@ if [ -z "$ROS_DISTRO" ]; then
     echo "Error: ROS distribution name is required."
     exit 1
 fi
-REQUESTED_CUDA_VER=${2:-auto}
 
 echo "========================================"
 echo " Installing GLIM for ROS 2 ${ROS_DISTRO} "
 echo "========================================"
+
+GLIM_WS=/opt/glim_ws
+SOURCE_DIR=/tmp/glim_source
+
+apt_package_exists() {
+    apt-cache show "$1" >/dev/null 2>&1
+}
+
+install_glim_from_apt() {
+    local gtsam_points_package=$1
+    local glim_package=$2
+
+    echo "Installing GLIM from apt packages..."
+    apt-get install -y "${gtsam_points_package}" "${glim_package}"
+}
+
+build_glim_from_source() {
+    echo "Building GLIM from source with CUDA support..."
+
+    apt-get install -y \
+        build-essential \
+        cmake \
+        git \
+        libboost-all-dev \
+        libeigen3-dev \
+        libfmt-dev \
+        libglfw3-dev \
+        libglm-dev \
+        libjpeg-dev \
+        libmetis-dev \
+        libomp-dev \
+        libpng-dev \
+        libspdlog-dev
+
+    rm -rf "${SOURCE_DIR}" "${GLIM_WS}"
+    mkdir -p "${SOURCE_DIR}" "${GLIM_WS}/src"
+
+    git clone https://github.com/borglab/gtsam "${SOURCE_DIR}/gtsam"
+    (
+        cd "${SOURCE_DIR}/gtsam"
+        git checkout 4.3a0
+        cmake -S . -B build \
+            -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
+            -DGTSAM_BUILD_TESTS=OFF \
+            -DGTSAM_WITH_TBB=OFF \
+            -DGTSAM_USE_SYSTEM_EIGEN=ON \
+            -DGTSAM_BUILD_WITH_MARCH_NATIVE=OFF
+        cmake --build build -j"$(nproc)"
+        cmake --install build
+    )
+
+    git clone --recursive https://github.com/koide3/iridescence "${SOURCE_DIR}/iridescence"
+    (
+        cd "${SOURCE_DIR}/iridescence"
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build -j"$(nproc)"
+        cmake --install build
+    )
+
+    git clone https://github.com/koide3/gtsam_points "${SOURCE_DIR}/gtsam_points"
+    (
+        cd "${SOURCE_DIR}/gtsam_points"
+        cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_WITH_CUDA=ON \
+            -DBUILD_WITH_MARCH_NATIVE=OFF
+        cmake --build build -j"$(nproc)"
+        cmake --install build
+    )
+
+    git clone https://github.com/koide3/glim "${GLIM_WS}/src/glim"
+    git clone https://github.com/koide3/glim_ros2 "${GLIM_WS}/src/glim_ros2"
+    (
+        cd "${GLIM_WS}"
+        . "/opt/ros/${ROS_DISTRO}/setup.bash"
+        colcon build --merge-install --cmake-args \
+            -DBUILD_WITH_CUDA=ON \
+            -DBUILD_WITH_VIEWER=ON \
+            -DBUILD_WITH_MARCH_NATIVE=OFF
+    )
+
+    if ! grep -q ". ${GLIM_WS}/install/setup.bash" /etc/skel/.bashrc; then
+        echo ". ${GLIM_WS}/install/setup.bash" >> /etc/skel/.bashrc
+    fi
+
+    rm -rf "${SOURCE_DIR}" "${GLIM_WS}/src" "${GLIM_WS}/build" "${GLIM_WS}/log"
+}
 
 apt-get update
 apt-get install -y curl gpg sudo
@@ -19,30 +105,24 @@ curl -s https://koide3.github.io/ppa/setup_ppa.sh | sudo bash
 apt-get update
 apt-get install -y libiridescence-dev libboost-all-dev libglfw3-dev libmetis-dev
 
-if [ "$REQUESTED_CUDA_VER" != "auto" ]; then
-    CUDA_VER="$REQUESTED_CUDA_VER"
-    echo "Using requested CUDA Version: ${CUDA_VER}"
-elif command -v nvcc &> /dev/null; then
+if command -v nvcc &> /dev/null; then
     CUDA_VER=$(nvcc --version | grep "release" | sed -E 's/.*release ([0-9]+\.[0-9]+).*/\1/')
     echo "Detected CUDA Version: ${CUDA_VER}"
-else
-    CUDA_VER=""
-    echo "No CUDA detected. Installing CPU version."
-fi
 
-case "$CUDA_VER" in
-    "12.2"|"12.6"|"13.1")
-        echo "Installing GLIM with CUDA ${CUDA_VER} support..."
-        apt-get install -y libgtsam-points-cuda${CUDA_VER}-dev ros-${ROS_DISTRO}-glim-ros-cuda${CUDA_VER}
-        ;;
-    "")
-        apt-get install -y libgtsam-points-dev ros-${ROS_DISTRO}-glim-ros
-        ;;
-    *)
-        echo "Warning: Official PPA does not support CUDA ${CUDA_VER}. Falling back to CPU version."
-        apt-get install -y libgtsam-points-dev ros-${ROS_DISTRO}-glim-ros
-        ;;
-esac
+    GTSAM_POINTS_PACKAGE="libgtsam-points-cuda${CUDA_VER}-dev"
+    GLIM_ROS_PACKAGE="ros-${ROS_DISTRO}-glim-ros-cuda${CUDA_VER}"
+
+    if apt_package_exists "${GTSAM_POINTS_PACKAGE}" && apt_package_exists "${GLIM_ROS_PACKAGE}"; then
+        echo "Installing GLIM with CUDA ${CUDA_VER} support from apt..."
+        install_glim_from_apt "${GTSAM_POINTS_PACKAGE}" "${GLIM_ROS_PACKAGE}"
+    else
+        echo "CUDA ${CUDA_VER} GLIM apt packages are not available."
+        build_glim_from_source
+    fi
+else
+    echo "No CUDA detected. Installing CPU version."
+    install_glim_from_apt libgtsam-points-dev ros-${ROS_DISTRO}-glim-ros
+fi
 
 rm -rf /var/lib/apt/lists/*
 ldconfig
