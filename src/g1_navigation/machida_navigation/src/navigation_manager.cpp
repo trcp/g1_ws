@@ -52,7 +52,8 @@ public:
     declare_parameter("local_costmap_topic",     std::string("/local_costmap"));
     declare_parameter("augmented_costmap_topic", std::string("/augmented_local_costmap"));
     declare_parameter("path_obstacle_threshold", 75);
-    declare_parameter("path_check_horizon",      3.0);   // how far ahead to check for obstacles [m]
+    declare_parameter("path_check_horizon",      1.5);   // how far ahead to check for obstacles [m]
+    declare_parameter("path_check_use_memory",   true);  // true=memory grid, false=raw local costmap
     declare_parameter("local_plan_frequency",    5.0);
     declare_parameter("goal_tolerance",          0.15);
     declare_parameter("replan_cooldown",         2.0);
@@ -450,13 +451,14 @@ private:
       return;
     }
 
-    // Check path points ahead for obstacles using the obstacle memory grid (map frame)
+    // Check path points ahead for obstacles
     const size_t nearest_idx   = find_nearest_index(path, robot);
     const double check_horizon = get_parameter("path_check_horizon").as_double();
     const int    obs_threshold = get_parameter("path_obstacle_threshold").as_int();
+    const bool   use_memory    = get_parameter("path_check_use_memory").as_bool();
 
     bool path_blocked = false;
-    {
+    if (use_memory) {
       std::lock_guard<std::mutex> lock(memory_mutex_);
       if (memory_initialized_) {
         const double mox  = memory_info_.origin.position.x;
@@ -480,6 +482,61 @@ private:
               "Path blocked by obstacle at (%.2f, %.2f)", path[i].x, path[i].y);
             publish_blocked_marker(path[i].x, path[i].y);
             break;
+          }
+        }
+      }
+    } else {
+      nav_msgs::msg::OccupancyGrid::SharedPtr costmap;
+      {
+        std::lock_guard<std::mutex> lock(costmap_mutex_);
+        costmap = local_costmap_;
+      }
+      if (costmap) {
+        const auto & info      = costmap->info;
+        const std::string & cm_frame = costmap->header.frame_id;
+        const double ox  = info.origin.position.x;
+        const double oy  = info.origin.position.y;
+        const double res = info.resolution;
+        const int    cw  = static_cast<int>(info.width);
+        const int    ch  = static_cast<int>(info.height);
+
+        double tx = 0.0, ty = 0.0, cos_r = 1.0, sin_r = 0.0;
+        bool tf_ok = true;
+        const bool same_frame = (cm_frame.empty() || cm_frame == map_frame_);
+        if (!same_frame) {
+          try {
+            const auto tf = tf_buffer_->lookupTransform(cm_frame, map_frame_, tf2::TimePointZero);
+            tx    = tf.transform.translation.x;
+            ty    = tf.transform.translation.y;
+            const double yaw = yaw_from_quat(tf.transform.rotation);
+            cos_r = std::cos(yaw);
+            sin_r = std::sin(yaw);
+          } catch (const tf2::TransformException & ex) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 3000,
+              "path_check TF %s->%s: %s", map_frame_.c_str(), cm_frame.c_str(), ex.what());
+            tf_ok = false;
+          }
+        }
+
+        if (tf_ok) {
+          double acc = 0.0;
+          for (size_t i = nearest_idx; i < path.size(); ++i) {
+            if (i > nearest_idx) acc += distance(path[i - 1], path[i]);
+            if (acc > check_horizon) break;
+
+            const double cx = same_frame ? path[i].x : cos_r * path[i].x - sin_r * path[i].y + tx;
+            const double cy = same_frame ? path[i].y : sin_r * path[i].x + cos_r * path[i].y + ty;
+            const int gx = static_cast<int>((cx - ox) / res);
+            const int gy = static_cast<int>((cy - oy) / res);
+            if (gx < 0 || gx >= cw || gy < 0 || gy >= ch) continue;
+
+            if (static_cast<int>(costmap->data[static_cast<size_t>(gy * cw + gx)]) >= obs_threshold) {
+              path_blocked = true;
+              RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                "Path blocked by obstacle at (%.2f, %.2f)", path[i].x, path[i].y);
+              publish_blocked_marker(path[i].x, path[i].y);
+              break;
+            }
           }
         }
       }
