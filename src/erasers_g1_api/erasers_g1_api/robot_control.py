@@ -538,7 +538,9 @@ class G1Navigation:
             msg.header.frame_id = reference_frame
             msg.pose.pose.position.x = float(pose[0])
             msg.pose.pose.position.y = float(pose[1])
-            msg.pose.pose.position.z = 0.0
+            # TODO: 変数として受け取るような仕様のほうがいいかも？
+            # 1.3 is unitree g1 lidar height from ground level
+            msg.pose.pose.position.z = 1.3
 
             q = quaternion_from_euler(0, 0, pose[2])
             msg.pose.pose.orientation.x = q[0]
