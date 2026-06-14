@@ -4,6 +4,7 @@
 #include <map>
 #include <cmath>
 #include <mutex>
+#include <algorithm>
 #include <urdf/model.h>
 
 #include "rclcpp/rclcpp.hpp"
@@ -60,10 +61,6 @@ public:
       "/upper_joints_control", 10,
       std::bind(&ArmJointControl::jointStateCallback, this, std::placeholders::_1));
 
-    upper_joint_state_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
-      "/upper_joint_state", 10,
-      std::bind(&ArmJointControl::upperJointStateCallback, this, std::placeholders::_1));
-
     auto emergency_stop_qos = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
     emergency_stop_sub_ = this->create_subscription<std_msgs::msg::Bool>(
       "/emergency_stop/active", emergency_stop_qos,
@@ -103,19 +100,12 @@ private:
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
     
+    updateLatestFeedbackLocked(msg);
+
     // Initialize current commands with actual feedback positions only once
     if (!initialized_)
     {
-      for (const auto& pair : joint_map_)
-      {
-        int idx = pair.second;
-        if (idx >= 0 && idx < 35) // Bounds check based on G1 motor count
-        {
-           double current_pos = msg->motor_state[idx].q;
-           current_cmd_[idx] = current_pos;
-           target_pos_[idx] = current_pos; // Set initial target to current pos
-        }
-      }
+      syncCommandToFeedbackLocked();
       initialized_ = true;
       RCLCPP_INFO(this->get_logger(), "Initialized joint positions from LowState.");
     }
@@ -153,22 +143,37 @@ private:
     }
   }
 
-  void upperJointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg)
+  void updateLatestFeedbackLocked(const LowState::SharedPtr msg)
   {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-
-    last_upper_joint_pos_.clear();
-    for (size_t i = 0; i < msg->name.size() && i < msg->position.size(); ++i)
+    latest_feedback_pos_.clear();
+    for (const auto& pair : joint_map_)
     {
-      if (joint_map_.find(msg->name[i]) != joint_map_.end())
+      int idx = pair.second;
+      if (idx >= 0 && idx < 35)
       {
-        int motor_idx = joint_map_[msg->name[i]];
-        if (motor_idx >= 0 && motor_idx < 35)
-        {
-          last_upper_joint_pos_[motor_idx] = msg->position[i];
-        }
+        latest_feedback_pos_[idx] = msg->motor_state[idx].q;
       }
     }
+  }
+
+  void syncCommandToFeedbackLocked()
+  {
+    if (latest_feedback_pos_.empty()) {
+      return;
+    }
+
+    current_cmd_ = latest_feedback_pos_;
+    target_pos_ = latest_feedback_pos_;
+    target_vel_.clear();
+    for (const auto& pair : latest_feedback_pos_) {
+      target_vel_[pair.first] = 0.0;
+    }
+  }
+
+  bool isArmControlActiveLocked() const
+  {
+    double time_since_topic = (this->now() - last_topic_time_).seconds();
+    return control_weight_ > 0.0 || prev_topic_active_ || time_since_topic < timeout_duration_;
   }
 
   void emergencyStopCallback(const std_msgs::msg::Bool::SharedPtr msg)
@@ -179,19 +184,29 @@ private:
       upper_joint_control_locked_ = true;
       if (!emergency_stop_active_) {
         emergency_stop_active_ = true;
-        hold_joint_pos_ = last_upper_joint_pos_.empty() ? current_cmd_ : last_upper_joint_pos_;
-        for (const auto& pair : hold_joint_pos_) {
-          target_pos_[pair.first] = pair.second;
-          target_vel_[pair.first] = 0.0;
+        emergency_hold_active_ = isArmControlActiveLocked();
+        if (emergency_hold_active_) {
+          hold_joint_pos_ = latest_feedback_pos_.empty() ? current_cmd_ : latest_feedback_pos_;
+          for (const auto& pair : hold_joint_pos_) {
+            target_pos_[pair.first] = pair.second;
+            target_vel_[pair.first] = 0.0;
+          }
+          last_topic_time_ = this->now();
+          RCLCPP_ERROR(this->get_logger(), "Emergency stop active. Holding current feedback posture.");
+        } else {
+          hold_joint_pos_.clear();
+          syncCommandToFeedbackLocked();
+          RCLCPP_ERROR(this->get_logger(), "Emergency stop active. Arm SDK is inactive; keeping upper body control disabled.");
         }
-        last_topic_time_ = this->now();
-        RCLCPP_ERROR(this->get_logger(), "Emergency stop active. Holding upper body joint posture.");
       }
       return;
     }
 
     if (emergency_stop_active_) {
       emergency_stop_active_ = false;
+      emergency_hold_active_ = false;
+      hold_joint_pos_.clear();
+      syncCommandToFeedbackLocked();
       last_topic_time_ = this->now() - rclcpp::Duration::from_seconds(timeout_duration_ * 2);
       RCLCPP_INFO(this->get_logger(), "Emergency stop released. Upper body joint hold is disabled.");
     }
@@ -205,9 +220,9 @@ private:
     LowCmd cmd;
     bool has_active_joints = false;
 
-    if (emergency_stop_active_) {
+    if (emergency_hold_active_) {
       if (hold_joint_pos_.empty()) {
-        hold_joint_pos_ = current_cmd_;
+        hold_joint_pos_ = latest_feedback_pos_.empty() ? current_cmd_ : latest_feedback_pos_;
       }
       for (const auto& pair : hold_joint_pos_) {
         target_pos_[pair.first] = pair.second;
@@ -261,7 +276,7 @@ private:
 
     // Fade logic
     double time_since_topic = (this->now() - last_topic_time_).seconds();
-    bool is_topic_active = emergency_stop_active_ || time_since_topic < timeout_duration_;
+    bool is_topic_active = emergency_hold_active_ || time_since_topic < timeout_duration_;
     double fade_step = control_dt_ / fade_duration_;
 
     if (is_topic_active && !prev_topic_active_) {
@@ -285,7 +300,8 @@ private:
     }
     
     if (control_weight_ == 0.0 && prev_control_weight_ > 0.0) {
-         RCLCPP_INFO(this->get_logger(), "Arm control: Released (Weight 0.0).");
+         syncCommandToFeedbackLocked();
+         RCLCPP_INFO(this->get_logger(), "Arm control: Released (Weight 0.0). Command state synced to feedback.");
     }
     if (control_weight_ == 1.0 && prev_control_weight_ < 1.0) {
          RCLCPP_INFO(this->get_logger(), "Arm control: Fully Active (Weight 1.0).");
@@ -297,7 +313,6 @@ private:
 
   rclcpp::Publisher<LowCmd>::SharedPtr pub_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_target_sub_;
-  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr upper_joint_state_sub_;
   rclcpp::Subscription<LowState>::SharedPtr low_state_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_stop_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -306,12 +321,13 @@ private:
   std::map<int, double> current_cmd_;
   std::map<int, double> target_pos_;
   std::map<int, double> target_vel_;
-  std::map<int, double> last_upper_joint_pos_;
+  std::map<int, double> latest_feedback_pos_;
   std::map<int, double> hold_joint_pos_;
   
   std::mutex data_mutex_;
   bool initialized_ = false;
   bool emergency_stop_active_ = false;
+  bool emergency_hold_active_ = false;
   bool upper_joint_control_locked_ = false;
   double control_frequency_;
   double control_dt_;
