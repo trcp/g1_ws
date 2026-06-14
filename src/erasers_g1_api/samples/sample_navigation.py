@@ -18,11 +18,6 @@ def main():
     node = Node('sample_head_control')
 
     # init
-    tts = TTS(node)
-    robot = G1Control(node)
     navigation = G1Navigation(node)
 
-    tts.say('both hand for walking')
-    robot.hand_control(command='walk', hand='both')
-
-    navigation.move_rel(yaw=1.57)
+    navigation.move_abs()
