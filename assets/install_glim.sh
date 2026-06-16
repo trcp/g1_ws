@@ -18,6 +18,32 @@ apt_package_exists() {
     apt-cache show "$1" >/dev/null 2>&1
 }
 
+detect_cuda_version() {
+    local cuda_dir=/usr/local/cuda
+    local cuda_realpath
+
+    if [ ! -d "${cuda_dir}" ]; then
+        return 1
+    fi
+
+    if [ -f "${cuda_dir}/version.json" ]; then
+        grep -oE '"version"[[:space:]]*:[[:space:]]*"[0-9]+\.[0-9]+' "${cuda_dir}/version.json" \
+            | head -n 1 \
+            | sed -E 's/.*"([0-9]+\.[0-9]+)$/\1/' && return 0
+    fi
+
+    if [ -f "${cuda_dir}/version.txt" ]; then
+        grep -oE '[0-9]+\.[0-9]+' "${cuda_dir}/version.txt" | head -n 1 && return 0
+    fi
+
+    cuda_realpath=$(readlink -f "${cuda_dir}" 2>/dev/null || true)
+    if [ -n "${cuda_realpath}" ]; then
+        echo "${cuda_realpath}" | grep -oE 'cuda-?[0-9]+\.[0-9]+' | tail -n 1 | grep -oE '[0-9]+\.[0-9]+' && return 0
+    fi
+
+    return 1
+}
+
 install_glim_from_apt() {
     local gtsam_points_package=$1
     local glim_package=$2
@@ -105,18 +131,24 @@ curl -s https://koide3.github.io/ppa/setup_ppa.sh | sudo bash
 apt-get update
 apt-get install -y libiridescence-dev libboost-all-dev libglfw3-dev libmetis-dev
 
-if command -v nvcc &> /dev/null; then
-    CUDA_VER=$(nvcc --version | grep "release" | sed -E 's/.*release ([0-9]+\.[0-9]+).*/\1/')
-    echo "Detected CUDA Version: ${CUDA_VER}"
+if [ -d /usr/local/cuda ]; then
+    CUDA_VER=$(detect_cuda_version || true)
 
-    GTSAM_POINTS_PACKAGE="libgtsam-points-cuda${CUDA_VER}-dev"
-    GLIM_ROS_PACKAGE="ros-${ROS_DISTRO}-glim-ros-cuda${CUDA_VER}"
+    if [ -n "${CUDA_VER}" ]; then
+        echo "Detected CUDA Version: ${CUDA_VER}"
 
-    if apt_package_exists "${GTSAM_POINTS_PACKAGE}" && apt_package_exists "${GLIM_ROS_PACKAGE}"; then
-        echo "Installing GLIM with CUDA ${CUDA_VER} support from apt..."
-        install_glim_from_apt "${GTSAM_POINTS_PACKAGE}" "${GLIM_ROS_PACKAGE}"
+        GTSAM_POINTS_PACKAGE="libgtsam-points-cuda${CUDA_VER}-dev"
+        GLIM_ROS_PACKAGE="ros-${ROS_DISTRO}-glim-ros-cuda${CUDA_VER}"
+
+        if apt_package_exists "${GTSAM_POINTS_PACKAGE}" && apt_package_exists "${GLIM_ROS_PACKAGE}"; then
+            echo "Installing GLIM with CUDA ${CUDA_VER} support from apt..."
+            install_glim_from_apt "${GTSAM_POINTS_PACKAGE}" "${GLIM_ROS_PACKAGE}"
+        else
+            echo "CUDA ${CUDA_VER} GLIM apt packages are not available."
+            build_glim_from_source
+        fi
     else
-        echo "CUDA ${CUDA_VER} GLIM apt packages are not available."
+        echo "CUDA directory exists but version could not be detected. Building GLIM from source with CUDA support."
         build_glim_from_source
     fi
 else
