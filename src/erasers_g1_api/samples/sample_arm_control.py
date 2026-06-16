@@ -25,12 +25,15 @@ def main():
     say = tts.say
 
     # init arm pose
+    say("Armed upper body control.")
+    print(arm.get_current_joints_pose())
+    arm.enable_upper_body_control(True)
+
     say("Init pose")
-    arm.move_groupstate()
-    arm.move_rel(planning_group="arm_left", roll=1.57, x=0.2)
-    arm.move_groupstate()
-    arm.move_rel(planning_group="arm_right", roll=-1.57, x=0.2)
-    arm.move_groupstate()
+    arm.move_groupstate(group_state="walk")
+
+    say("Disarmed upper body control.")
+    arm.enable_upper_body_control(False)
 
 if __name__ == '__main__':
     main()

@@ -17,5 +17,5 @@ def main():
     play_audio = tts.audio
 
     say("Hello, I am Erasers G1.")
-    play_audio(os.path.join(get_package_share_directory('erasers_g1_api'), 'config', 'unitree.wav'), wait=True)
+    play_audio(os.path.join(get_package_share_directory('erasers_g1_api'), 'config', 'declare_bringup.wav'), wait=True)
     play_audio(os.path.join(get_package_share_directory('erasers_g1_api'), 'config', 'req_sound.wav'), wait=False)
