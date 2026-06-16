@@ -69,6 +69,7 @@ services:
         # Arch settings
         - TARGET_ARCH=cuda
         - CUDA=13.0.0
+        - GLIM_INSTALL_MODE=cuda-source
   
   erasers_g1:
     image: erasers_g1:g1
@@ -137,3 +138,4 @@ services:
         - GROUPNAME=${USER}
         # Arch settings
         - TARGET_ARCH=jetson
+        - GLIM_INSTALL_MODE=cuda-source

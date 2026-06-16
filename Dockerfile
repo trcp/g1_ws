@@ -6,6 +6,7 @@ ARG SOC=t234
 ARG TARGET_ARCH=amd64
 ARG ROS=humble
 ARG GLIM_CUDA_VERSION=auto
+ARG GLIM_INSTALL_MODE=auto
 
 
 # ===============
@@ -24,6 +25,7 @@ FROM ros2-${TARGET_ARCH} AS main
 
 ARG ROS=humble
 ARG GLIM_CUDA_VERSION=auto
+ARG GLIM_INSTALL_MODE=auto
 
 # build args
 ARG USERNAME
@@ -54,7 +56,7 @@ RUN mkdir -p /etc/apt/keyrings &&\
 # install GLIM
 COPY assets/install_glim.sh /tmp/install_glim.sh
 RUN chmod +x /tmp/install_glim.sh && \
-    /tmp/install_glim.sh ${ROS} ${GLIM_CUDA_VERSION} && \
+    /tmp/install_glim.sh ${ROS} ${GLIM_INSTALL_MODE} ${CUDA} && \
     rm /tmp/install_glim.sh
 
 # resolve mapeditor depends
