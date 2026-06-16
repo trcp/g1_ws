@@ -22,6 +22,17 @@ local task = {
         },
       },
     },
+    manipulation = {
+      display_name = "Manipulation",
+      description = "Launch Moveit!",
+      commands = {
+        default = {
+          template = "cd /home/unitree/g1_ws && /usr/bin/docker compose run --name moveit --rm erasers_g1 bash -ic \"ros2 launch g1_moveit moveit_control_bringup.launch.py\"",
+          kill = "docker stop moveit",
+          variables = {},
+        },
+      },
+    },
     navigation = {
       display_name = "Navigation",
       description = "all navigation launch",
@@ -83,6 +94,7 @@ local task = {
         direction = "vertical",
         panes = {
            { program = "navigation" },
+           { program = "manipulation" },
         },
       },
     },
