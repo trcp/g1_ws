@@ -262,7 +262,7 @@ def generate_launch_description():
 
     # 起動時にロボットが発話する
     audio_path = os.path.join(
-        get_package_share_directory('erasers_g1_api'), 'config/unitree.wav'
+        get_package_share_directory('erasers_g1_api'), 'config/declare_bringup.wav'
     )
     start_speech_cmd = ExecuteProcess(
         cmd=[
