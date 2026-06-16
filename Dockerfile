@@ -24,6 +24,7 @@ FROM gai313/ros2:humble.jetson.${SOC}.r${L4T_VERSION}.runtime AS ros2-jetson
 FROM ros2-${TARGET_ARCH} AS main
 
 ARG ROS=humble
+ARG CUDA=13.0.0
 ARG GLIM_CUDA_VERSION=auto
 ARG GLIM_INSTALL_MODE=auto
 
@@ -108,7 +109,8 @@ RUN . /opt/ros/${ROS}/setup.bash &&\
     --skip-keys direct_lidar_inertial_odometry \
     --skip-keys fast_lio \
     --skip-keys lightweight_openpose_ros2 \
-    --skip-keys sam3_ros &&\
+    --skip-keys sam3_ros \
+    --skip-keys glim_ros &&\
     rm -rf /var/lib/apt/lists/*
 
 # Optimize pointcloud_to_2dmap for the ROS Humble/PCL toolchain

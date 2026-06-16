@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch.conditions import IfCondition, UnlessCondition
 
 from ament_index_python.packages import get_package_share_directory
@@ -159,7 +159,9 @@ MAP_DIR="$HOME/colcon_ws/map"
 POINTCLOUD_TO_2DMAP="$HOME/colcon_ws/build/pointcloud_to_2dmap/pointcloud_to_2dmap"
 RECENT_FILES="/tmp/tmp_recent_files.ini"
 
-export DISPLAY=:1001
+if [ "$MODE" = "edit" ] && [ -z "${DISPLAY:-}" ]; then
+  echo "Warning: The DISPLAY environment variable is not set. GUI applications may fail to launch." >&2
+fi
 
 map_stem() {
   local stem
@@ -196,10 +198,18 @@ save_pcd_to_2d_map() {
     return 0
   fi
 
+  echo "Export 2D map from ${MAP_DIR}/${pcd_file}"
   (
     cd "$MAP_DIR" && \
-    "$POINTCLOUD_TO_2DMAP" "$pcd_file" . --min_height "$MIN_HEIGHT" --max_height "$MAX_HEIGHT"
-  ) || true
+    "$POINTCLOUD_TO_2DMAP" \
+      --input_pcd "$pcd_file" \
+      --dest_directory . \
+      --min_height "$MIN_HEIGHT" \
+      --max_height "$MAX_HEIGHT"
+  ) || {
+    echo "Failed to export 2D map from ${MAP_DIR}/${pcd_file}" >&2
+    return 0
+  }
 }
 
 has_submap_points() {
@@ -312,6 +322,7 @@ def generate_launch_description():
     config_path = LaunchConfiguration('config_path')
     use_sim_time = LaunchConfiguration('use_sim_time')
     edit_map = LaunchConfiguration('edit_map')
+    display = LaunchConfiguration('display')
     edited_dump_dir = LaunchConfiguration('edited_dump_dir')
     # 生成されるマップの設定
     map_name = LaunchConfiguration('map_name')
@@ -330,6 +341,10 @@ def generate_launch_description():
     declare_edit_map = DeclareLaunchArgument(
         'edit_map', default_value='false',
         description='Run GLIM map_editor against /tmp/dump instead of glim_rosnode'
+    )
+    declare_display = DeclareLaunchArgument(
+        'display', default_value=EnvironmentVariable('DISPLAY', default_value=''),
+        description='DISPLAY value used by GLIM GUI processes'
     )
     declare_edited_dump_dir = DeclareLaunchArgument(
         'edited_dump_dir', default_value='',
@@ -350,6 +365,7 @@ def generate_launch_description():
     ld.add_action(declare_config_path)
     ld.add_action(declare_use_sim_time)
     ld.add_action(declare_edit_map)
+    ld.add_action(declare_display)
     ld.add_action(declare_edited_dump_dir)
     ld.add_action(declare_map_name)
     ld.add_action(declare_min_height)
@@ -373,7 +389,7 @@ def generate_launch_description():
         name='glim_rosnode',
         output='screen',
         additional_env={
-            'DISPLAY': ':1001',
+            'DISPLAY': display,
             'DUMP_TO_PCD_SCRIPT': DUMP_TO_PCD_SCRIPT,
         },
         sigterm_timeout='30',
@@ -397,7 +413,7 @@ def generate_launch_description():
         name='glim_map_editor',
         output='screen',
         additional_env={
-            'DISPLAY': ':1001',
+            'DISPLAY': display,
             'DUMP_TO_PCD_SCRIPT': DUMP_TO_PCD_SCRIPT,
         },
         sigterm_timeout='30',

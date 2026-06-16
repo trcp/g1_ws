@@ -105,6 +105,62 @@ configure_cuda_environment() {
     export LD_LIBRARY_PATH="${cuda_root}/lib64:${cuda_root}/targets/$(uname -m)-linux/lib:${LD_LIBRARY_PATH:-}"
 }
 
+cuda_header_exists() {
+    local header=$1
+    local include_dir
+
+    for include_dir in \
+        "${CUDAToolkit_ROOT}/include" \
+        "${CUDAToolkit_ROOT}/targets/$(uname -m)-linux/include"; do
+        if [ -f "${include_dir}/${header}" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+ensure_cuda_dev_headers() {
+    local cuda_version=$1
+    local suffix
+    local missing=0
+    local header
+
+    for header in cublas_v2.h cusolverDn.h cusparse.h curand.h; do
+        if ! cuda_header_exists "$header"; then
+            missing=1
+        fi
+    done
+
+    if [ "$missing" = "0" ]; then
+        return 0
+    fi
+
+    suffix=$(cuda_package_suffix "$cuda_version") || {
+        echo "Error: CUDA version is required to install CUDA dev headers." >&2
+        exit 1
+    }
+
+    echo "CUDA dev headers were not found. Installing CUDA library development packages for CUDA ${cuda_version}..."
+    apt-get update
+    if ! apt-get install -y "cuda-libraries-dev-${suffix}"; then
+        apt-get install -y \
+            "cuda-cudart-dev-${suffix}" \
+            "libcublas-dev-${suffix}" \
+            "libcusolver-dev-${suffix}" \
+            "libcusparse-dev-${suffix}" \
+            "libcurand-dev-${suffix}"
+    fi
+
+    configure_cuda_environment "$cuda_version"
+    for header in cublas_v2.h cusolverDn.h cusparse.h curand.h; do
+        if ! cuda_header_exists "$header"; then
+            echo "Error: ${header} is still not available after CUDA dev package installation." >&2
+            exit 1
+        fi
+    done
+}
+
 ensure_nvcc() {
     local cuda_version=$1
     local suffix
@@ -112,6 +168,7 @@ ensure_nvcc() {
     configure_cuda_environment "$cuda_version"
     if command -v nvcc >/dev/null 2>&1; then
         nvcc --version
+        ensure_cuda_dev_headers "$cuda_version"
         return 0
     fi
 
@@ -135,6 +192,61 @@ ensure_nvcc() {
         exit 1
     fi
     nvcc --version
+    ensure_cuda_dev_headers "$cuda_version"
+}
+
+detect_cuda_architectures() {
+    if [ -n "${CMAKE_CUDA_ARCHITECTURES:-}" ]; then
+        echo "${CMAKE_CUDA_ARCHITECTURES}"
+        return 0
+    fi
+
+    if is_jetson; then
+        echo "87"
+        return 0
+    fi
+
+    if [ "$(uname -m)" = "aarch64" ]; then
+        echo "87"
+        return 0
+    fi
+
+    return 1
+}
+
+ubuntu_opencv_package_version() {
+    apt-cache madison libopencv-dev \
+        | awk '/4\.5\.4\+dfsg-9ubuntu4/ { print $3; exit }'
+}
+
+install_opencv_dev() {
+    local opencv_version
+
+    opencv_version=$(ubuntu_opencv_package_version || true)
+    if [ -n "$opencv_version" ]; then
+        apt-get install -y --allow-downgrades "libopencv-dev=${opencv_version}"
+        apt-mark hold libopencv-dev
+        return 0
+    fi
+
+    apt-get install -y libopencv-dev
+}
+
+opencv_cmake_dir() {
+    local multiarch
+
+    multiarch=$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || true)
+    if [ -n "$multiarch" ] && [ -f "/usr/lib/${multiarch}/cmake/opencv4/OpenCVConfig.cmake" ]; then
+        printf '%s\n' "/usr/lib/${multiarch}/cmake/opencv4"
+        return 0
+    fi
+
+    if [ -f /usr/lib/cmake/opencv4/OpenCVConfig.cmake ]; then
+        printf '%s\n' "/usr/lib/cmake/opencv4"
+        return 0
+    fi
+
+    return 1
 }
 
 install_glim_from_apt() {
@@ -171,10 +283,19 @@ install_glim_setup_hooks() {
     done
 }
 
+source_ros_setup() {
+    set +u
+    . "/opt/ros/${ROS_DISTRO}/setup.bash"
+    set -u
+}
+
 build_glim_from_source() {
     local build_with_cuda=$1
     local cuda_version=${2:-}
+    local cuda_architectures
+    local opencv_dir
     local cmake_cuda_args=()
+    local cmake_common_args=()
 
     if [ "$build_with_cuda" = "ON" ]; then
         if [ -z "$cuda_version" ]; then
@@ -186,6 +307,12 @@ build_glim_from_source() {
         fi
         ensure_nvcc "$cuda_version"
         cmake_cuda_args=(-DCUDAToolkit_ROOT="${CUDAToolkit_ROOT}")
+
+        cuda_architectures=$(detect_cuda_architectures || true)
+        if [ -n "$cuda_architectures" ]; then
+            echo "Using CMAKE_CUDA_ARCHITECTURES=${cuda_architectures}"
+            cmake_cuda_args+=(-DCMAKE_CUDA_ARCHITECTURES="${cuda_architectures}")
+        fi
     fi
 
     echo "Building GLIM from source with CUDA=${build_with_cuda}..."
@@ -204,7 +331,21 @@ build_glim_from_source() {
         libmetis-dev \
         libomp-dev \
         libpng-dev \
-        libspdlog-dev
+        libspdlog-dev \
+        "ros-${ROS_DISTRO}-cv-bridge" \
+        "ros-${ROS_DISTRO}-image-transport" \
+        "ros-${ROS_DISTRO}-rclcpp-components" \
+        "ros-${ROS_DISTRO}-rosbag2-compression" \
+        "ros-${ROS_DISTRO}-rosbag2-cpp" \
+        "ros-${ROS_DISTRO}-rosbag2-storage" \
+        "ros-${ROS_DISTRO}-tf2-ros"
+    install_opencv_dev
+
+    opencv_dir=$(opencv_cmake_dir || true)
+    if [ -n "$opencv_dir" ]; then
+        echo "Using OpenCV_DIR=${opencv_dir}"
+        cmake_common_args+=(-DOpenCV_DIR="${opencv_dir}")
+    fi
 
     rm -rf "${SOURCE_DIR}" "${GLIM_WS}"
     mkdir -p "${SOURCE_DIR}" "${GLIM_WS}/src"
@@ -247,8 +388,9 @@ build_glim_from_source() {
     git clone https://github.com/koide3/glim_ros2 "${GLIM_WS}/src/glim_ros2"
     (
         cd "${GLIM_WS}"
-        . "/opt/ros/${ROS_DISTRO}/setup.bash"
+        source_ros_setup
         colcon build --merge-install --cmake-args \
+            "${cmake_common_args[@]}" \
             -DBUILD_WITH_CUDA="${build_with_cuda}" \
             -DBUILD_WITH_VIEWER=ON \
             -DBUILD_WITH_MARCH_NATIVE=OFF \
