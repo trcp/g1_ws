@@ -58,7 +58,7 @@ private:
       return;
     }
 
-    bool current_button_state = (msg->buttons[button_index] == 0);
+    bool current_button_state = (msg->buttons[button_index] == 1);
 
     if (!is_armed_) {
       if (!current_button_state) {
