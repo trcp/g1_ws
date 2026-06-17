@@ -1,0 +1,367 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import signal
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+
+IDENTITY = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+]
+
+
+class GlimWrapper:
+    def __init__(self, args):
+        self.args = args
+        self.home = Path.home()
+        self.map_dir = self.home / 'colcon_ws' / 'map'
+        self.recent_files = Path('/tmp/tmp_recent_files.ini')
+        self.target = None
+        self.interrupted = False
+        self.terminating = False
+
+    def log(self, message):
+        print(message, flush=True)
+
+    def warn(self, message):
+        print(message, file=sys.stderr, flush=True)
+
+    def map_stem(self):
+        stem = Path(self.args.map_name).name
+        if stem.endswith('.pcd'):
+            stem = stem[:-4]
+        return stem or 'map'
+
+    def signal_handler(self, signum, _frame):
+        self.interrupted = True
+        self.terminating = True
+        self.stop_target(signum)
+
+    def stop_target(self, signum=signal.SIGINT):
+        if self.target is None or self.target.poll() is not None:
+            return
+
+        try:
+            os.killpg(self.target.pid, signum)
+        except ProcessLookupError:
+            return
+
+        deadline = time.monotonic() + 30.0
+        while self.target.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.1)
+
+        if self.target.poll() is None:
+            self.warn('GLIM target did not stop after signal; killing it.')
+            try:
+                os.killpg(self.target.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    def target_command(self):
+        if self.args.mode == 'edit':
+            return ['ros2', 'run', 'glim_ros', 'map_editor', '/tmp/dump/']
+
+        if self.args.mode == 'run':
+            return [
+                'ros2',
+                'run',
+                'glim_ros',
+                'glim_rosnode',
+                '--ros-args',
+                '-p',
+                f'config_path:={self.args.config_path}',
+                '-p',
+                f'use_sim_time:={self.args.use_sim_time}',
+            ]
+
+        raise ValueError(f'Unknown GLIM wrapper mode: {self.args.mode}')
+
+    def run_target(self):
+        if self.args.mode == 'edit' and not os.environ.get('DISPLAY'):
+            self.warn('Warning: The DISPLAY environment variable is not set. GUI applications may fail to launch.')
+
+        command = self.target_command()
+        self.target = subprocess.Popen(command, start_new_session=True)
+
+        while True:
+            return_code = self.target.poll()
+            if return_code is not None:
+                return return_code
+            time.sleep(0.2)
+
+    def load_t_world_origin(self, data_path):
+        if not data_path.is_file():
+            return IDENTITY
+
+        lines = data_path.read_text(encoding='utf-8').splitlines()
+        for index, line in enumerate(lines):
+            if line.strip() == 'T_world_origin:':
+                return [
+                    [float(value) for value in lines[index + row + 1].split()]
+                    for row in range(4)
+                ]
+
+        return IDENTITY
+
+    def transform_point(self, matrix, point):
+        x, y, z = point
+        return (
+            matrix[0][0] * x + matrix[0][1] * y + matrix[0][2] * z + matrix[0][3],
+            matrix[1][0] * x + matrix[1][1] * y + matrix[1][2] * z + matrix[1][3],
+            matrix[2][0] * x + matrix[2][1] * y + matrix[2][2] * z + matrix[2][3],
+        )
+
+    def iter_submap_points(self, submap_dir):
+        points_path = submap_dir / 'points_compact.bin'
+        intensities_path = submap_dir / 'intensities_compact.bin'
+        if not points_path.is_file():
+            return
+
+        matrix = self.load_t_world_origin(submap_dir / 'data.txt')
+        points_blob = points_path.read_bytes()
+        intensities_blob = intensities_path.read_bytes() if intensities_path.is_file() else b''
+        num_points = len(points_blob) // 12
+        num_intensities = len(intensities_blob) // 4
+
+        for index in range(num_points):
+            point = struct.unpack_from('<fff', points_blob, index * 12)
+            intensity = 0.0
+            if index < num_intensities:
+                intensity = struct.unpack_from('<f', intensities_blob, index * 4)[0]
+            yield (*self.transform_point(matrix, point), intensity)
+
+    def has_submap_points(self, dump_dir):
+        return any((path / 'points_compact.bin').is_file() for path in dump_dir.iterdir() if path.is_dir())
+
+    def is_glim_dump_dir(self, dump_dir):
+        return (
+            dump_dir
+            and dump_dir.is_dir()
+            and (dump_dir / 'graph.bin').is_file()
+            and (dump_dir / 'values.bin').is_file()
+            and self.has_submap_points(dump_dir)
+        )
+
+    def recent_saved_dump_dir(self):
+        if not self.recent_files.is_file():
+            return None
+
+        for line in self.recent_files.read_text(encoding='utf-8').splitlines():
+            if line.startswith('offline_viewer_save='):
+                return Path(line.split('=', 1)[1].rstrip(';'))
+        return None
+
+    def resolve_dump_dir(self):
+        if self.args.mode != 'edit':
+            return Path('/tmp/dump')
+
+        edited_dump_dir = Path(self.args.edited_dump_dir) if self.args.edited_dump_dir else None
+        if edited_dump_dir and self.is_glim_dump_dir(edited_dump_dir):
+            return edited_dump_dir
+
+        recent_dir = self.recent_saved_dump_dir()
+        if recent_dir and self.is_glim_dump_dir(recent_dir):
+            return recent_dir
+
+        self.warn('Skip edited map export: map_editor save directory was not found.')
+        self.warn('Use map_editor Save map, then choose a dump directory, or pass edited_dump_dir:=<dir> and save there.')
+        return None
+
+    def collect_points(self, dump_dir):
+        if not dump_dir.is_dir():
+            return []
+
+        points = []
+        submap_dirs = sorted(path for path in dump_dir.iterdir() if path.is_dir() and path.name.isdigit())
+        for submap_dir in submap_dirs:
+            points.extend(self.iter_submap_points(submap_dir) or [])
+        return points
+
+    def write_pcd(self, points, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = [
+            '# .PCD v0.7 - Point Cloud Data file format',
+            'VERSION 0.7',
+            'FIELDS x y z intensity',
+            'SIZE 4 4 4 4',
+            'TYPE F F F F',
+            'COUNT 1 1 1 1',
+            f'WIDTH {len(points)}',
+            'HEIGHT 1',
+            'VIEWPOINT 0 0 0 1 0 0 0',
+            f'POINTS {len(points)}',
+            'DATA binary',
+        ]
+
+        tmp_path = path.with_suffix(path.suffix + '.tmp')
+        with tmp_path.open('wb') as pcd:
+            pcd.write(('\n'.join(header) + '\n').encode('ascii'))
+            for point in points:
+                pcd.write(struct.pack('<ffff', *point))
+        tmp_path.replace(path)
+
+    def save_dump_to_pcd(self):
+        dump_dir = self.resolve_dump_dir()
+        if dump_dir is None:
+            return False
+
+        self.log(f'Export GLIM dump from {dump_dir}')
+        points = self.collect_points(dump_dir)
+        if not points:
+            self.log(f'No GLIM dump points found under {dump_dir}')
+            return False
+
+        map_path = self.map_dir / f'{self.map_stem()}.pcd'
+        self.write_pcd(points, map_path)
+        self.log(f'Saved GLIM dump map: {map_path} ({len(points)} points)')
+        return True
+
+    def pointcloud_to_2dmap_candidates(self):
+        env_path = os.environ.get('POINTCLOUD_TO_2DMAP')
+        if env_path:
+            yield Path(env_path)
+
+        yield self.home / 'colcon_ws' / 'build' / 'pointcloud_to_2dmap' / 'pointcloud_to_2dmap'
+        yield self.home / 'colcon_ws' / 'install' / 'pointcloud_to_2dmap' / 'lib' / 'pointcloud_to_2dmap' / 'pointcloud_to_2dmap'
+
+    def resolve_pointcloud_to_2dmap(self):
+        for candidate in self.pointcloud_to_2dmap_candidates():
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate
+
+        from_path = shutil.which('pointcloud_to_2dmap')
+        if from_path:
+            return Path(from_path)
+
+        return None
+
+    def save_pcd_to_2d_map(self):
+        pcd_path = self.map_dir / f'{self.map_stem()}.pcd'
+        if not pcd_path.is_file():
+            self.log(f'Skip 2D map export: {pcd_path} does not exist')
+            return False
+
+        pointcloud_to_2dmap = self.resolve_pointcloud_to_2dmap()
+        if pointcloud_to_2dmap is None:
+            candidates = ', '.join(str(path) for path in self.pointcloud_to_2dmap_candidates())
+            self.log(f'Skip 2D map export: pointcloud_to_2dmap is not executable. Checked: {candidates}')
+            return False
+
+        self.log(f'Export 2D map from {pcd_path}')
+        with tempfile.TemporaryDirectory(prefix=f'.{self.map_stem()}_2d_', dir=self.map_dir) as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            command = [
+                str(pointcloud_to_2dmap),
+                '--input_pcd',
+                pcd_path.name,
+                '--dest_directory',
+                str(tmp_path),
+                '--min_height',
+                str(self.args.min_height),
+                '--max_height',
+                str(self.args.max_height),
+            ]
+
+            try:
+                subprocess.run(command, cwd=self.map_dir, check=True)
+            except subprocess.CalledProcessError as error:
+                self.warn(f'Failed to export 2D map from {pcd_path}: exit code {error.returncode}')
+                return False
+
+            return self.install_2d_map_outputs(tmp_path)
+
+    def install_2d_map_outputs(self, output_dir):
+        stem = self.map_stem()
+        source_yaml = output_dir / 'map.yaml'
+        if not source_yaml.is_file():
+            self.warn(f'Failed to export 2D map: {source_yaml} was not created')
+            return False
+
+        yaml_lines = source_yaml.read_text(encoding='utf-8').splitlines()
+        source_image = None
+        for line in yaml_lines:
+            if line.startswith('image:'):
+                image_value = line.split(':', 1)[1].strip().strip('"\'')
+                source_image = output_dir / image_value
+                break
+
+        if source_image is None:
+            for candidate in (output_dir / 'map.png', output_dir / 'map.pgm'):
+                if candidate.is_file():
+                    source_image = candidate
+                    break
+
+        if source_image is None or not source_image.is_file():
+            self.warn(f'Failed to export 2D map: image file was not created under {output_dir}')
+            return False
+
+        final_image = self.map_dir / f'{stem}{source_image.suffix}'
+        final_yaml = self.map_dir / f'{stem}.yaml'
+        source_image.replace(final_image)
+
+        rewritten = []
+        image_line_written = False
+        for line in yaml_lines:
+            if line.startswith('image:'):
+                rewritten.append(f'image: {final_image.name}')
+                image_line_written = True
+            else:
+                rewritten.append(line)
+        if not image_line_written:
+            rewritten.insert(0, f'image: {final_image.name}')
+
+        final_yaml.write_text('\n'.join(rewritten) + '\n', encoding='utf-8')
+        self.log(f'Saved 2D map: {final_yaml} and {final_image}')
+        return True
+
+    def cleanup(self):
+        if self.save_dump_to_pcd():
+            return self.save_pcd_to_2d_map()
+        return False
+
+    def run(self):
+        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGTERM, self.signal_handler)
+
+        target_code = 1
+        cleanup_ok = False
+        try:
+            target_code = self.run_target()
+        finally:
+            if not self.terminating:
+                self.stop_target()
+            cleanup_ok = self.cleanup()
+
+        if self.interrupted:
+            return 0 if cleanup_ok else 1
+        return target_code
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Run GLIM and export GLIM dump maps.')
+    parser.add_argument('mode', choices=['run', 'edit'])
+    parser.add_argument('config_path')
+    parser.add_argument('use_sim_time')
+    parser.add_argument('map_name')
+    parser.add_argument('min_height')
+    parser.add_argument('max_height')
+    parser.add_argument('edited_dump_dir', nargs='?', default='')
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    return GlimWrapper(args).run()
+
+
+if __name__ == '__main__':
+    sys.exit(main())
