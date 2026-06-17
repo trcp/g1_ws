@@ -316,6 +316,7 @@ private:
 
     cancel_pending_start_servo(previous_nav_id);
     mark_planning_complete(previous_nav_id);
+    cancel_plan_retry();
 
     std::shared_ptr<NavigateGoalHandle> goal_to_abort;
     {
@@ -483,6 +484,45 @@ private:
     }
   }
 
+  void schedule_plan_retry(uint64_t nav_id, const geometry_msgs::msg::PoseStamped & goal)
+  {
+    const double cooldown = std::max(0.5, get_parameter("replan_cooldown").as_double());
+    std::lock_guard<std::mutex> lock(retry_mutex_);
+    if (plan_retry_timer_) {
+      plan_retry_timer_->cancel();
+    }
+    plan_retry_timer_ = create_wall_timer(
+      std::chrono::duration<double>(cooldown),
+      [this, nav_id, goal]() {
+        {
+          std::lock_guard<std::mutex> lk(retry_mutex_);
+          if (plan_retry_timer_) {
+            plan_retry_timer_->cancel();
+            plan_retry_timer_.reset();
+          }
+        }
+        if (!is_active_navigation(nav_id)) return;
+        {
+          std::lock_guard<std::mutex> alock(action_mutex_);
+          if (active_goal_handle_ && active_goal_handle_->is_canceling()) {
+            finish_navigation(nav_id, NavigationFinishReason::Cancel);
+            return;
+          }
+        }
+        RCLCPP_INFO(get_logger(), "Retrying global plan...");
+        request_plan(nav_id, goal);
+      });
+  }
+
+  void cancel_plan_retry()
+  {
+    std::lock_guard<std::mutex> lock(retry_mutex_);
+    if (plan_retry_timer_) {
+      plan_retry_timer_->cancel();
+      plan_retry_timer_.reset();
+    }
+  }
+
   void send_finish_servo(const std::string & reason)
   {
     const double tilt = get_parameter("navigation_finish_tilt").as_double();
@@ -535,6 +575,7 @@ private:
 
     cancel_pending_start_servo(nav_id);
     mark_planning_complete(nav_id);
+    cancel_plan_retry();
 
     {
       std::lock_guard<std::mutex> lock(path_mutex_);
@@ -646,8 +687,12 @@ private:
           if (!is_active_navigation(nav_id)) return;
 
           if (!response || response->plan.poses.empty()) {
-            RCLCPP_FATAL(get_logger(), "Global planner returned empty path");
-            finish_navigation(nav_id, NavigationFinishReason::Fatal);
+            RCLCPP_WARN(get_logger(),
+              "Global planner returned empty path; retrying in %.1f s",
+              get_parameter("replan_cooldown").as_double());
+            if (is_active_navigation(nav_id)) {
+              schedule_plan_retry(nav_id, goal);
+            }
             return;
           }
 
@@ -976,6 +1021,9 @@ private:
   std::mutex servo_mutex_;
   bool       start_servo_pending_{false};
   uint64_t   pending_start_servo_nav_id_{0};
+
+  std::mutex retry_mutex_;
+  rclcpp::TimerBase::SharedPtr plan_retry_timer_;
 
   std::atomic<uint64_t> next_navigation_id_{0};
   std::atomic<uint64_t> active_navigation_id_{0};
