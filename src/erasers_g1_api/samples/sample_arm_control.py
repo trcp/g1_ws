@@ -26,11 +26,19 @@ def main():
 
     # init arm pose
     say("Armed upper body control.")
-    print(arm.get_current_joints_pose())
     arm.enable_upper_body_control(True)
 
     say("Init pose")
+    arm.move_groupstate(group_state="home")
+
+    say("Walk pose")
     arm.move_groupstate(group_state="walk")
+
+    say("Joint Control")
+    arm.joint_control(left_shoulder_pitch_joint=-0.735,
+                      left_wrist_roll_joint=-1.57,
+                      right_shoulder_pitch_joint=-0.735,
+                      right_wrist_roll_joint=1.57,)
 
     say("Disarmed upper body control.")
     arm.enable_upper_body_control(False)

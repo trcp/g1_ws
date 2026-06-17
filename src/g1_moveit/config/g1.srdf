@@ -82,6 +82,59 @@
     <joint name="right_wrist_roll_joint" value="0"/>
   </group_state>
 
+  <!-- 上半身: 現在の歩行姿勢 -->
+  <group_state name="walk" group="upper_body">
+    <joint name="waist_yaw_joint" value="0.009360934607684612"/>
+    <joint name="left_shoulder_pitch_joint" value="0.2895388901233673"/>
+    <joint name="left_shoulder_roll_joint" value="0.2295578271150589"/>
+    <joint name="left_shoulder_yaw_joint" value="0.0"/>
+    <joint name="left_elbow_joint" value="0.9739100337028503"/>
+    <joint name="left_wrist_roll_joint" value="0.0"/>
+    <joint name="right_shoulder_pitch_joint" value="0.2881966531276703"/>
+    <joint name="right_shoulder_roll_joint" value="-0.23443540930747986"/>
+    <joint name="right_shoulder_yaw_joint" value="0.0"/>
+    <joint name="right_elbow_joint" value="0.982143223285675"/>
+    <joint name="right_wrist_roll_joint" value="-0.12782374024391174"/>
+  </group_state>
+
+  <!-- 左腕: 現在の歩行姿勢 -->
+  <group_state name="walk" group="arm_left">
+    <joint name="waist_yaw_joint" value="0.009360934607684612"/>
+    <joint name="left_shoulder_pitch_joint" value="0.2507699131965637"/>
+    <joint name="left_shoulder_roll_joint" value="0.28615933656692505"/>
+    <joint name="left_shoulder_yaw_joint" value="-0.07515307515859604"/>
+    <joint name="left_elbow_joint" value="0.8112002015113831"/>
+    <joint name="left_wrist_roll_joint" value="0.0013901700731366873"/>
+  </group_state>
+
+  <!-- 右腕: 現在の歩行姿勢 -->
+  <group_state name="walk" group="arm_right">
+    <joint name="waist_yaw_joint" value="0.009360934607684612"/>
+    <joint name="right_shoulder_pitch_joint" value="0.25317874550819397"/>
+    <joint name="right_shoulder_roll_joint" value="-0.2920435965061188"/>
+    <joint name="right_shoulder_yaw_joint" value="0.08481236547231674"/>
+    <joint name="right_elbow_joint" value="0.7723953127861023"/>
+    <joint name="right_wrist_roll_joint" value="-0.0025166873820126057"/>
+  </group_state>
+
+  <!-- 内部左腕: 現在の歩行姿勢 -->
+  <group_state name="walk" group="__pure_arm_left">
+    <joint name="left_shoulder_pitch_joint" value="0.2507699131965637"/>
+    <joint name="left_shoulder_roll_joint" value="0.28615933656692505"/>
+    <joint name="left_shoulder_yaw_joint" value="-0.07515307515859604"/>
+    <joint name="left_elbow_joint" value="0.8112002015113831"/>
+    <joint name="left_wrist_roll_joint" value="0.0013901700731366873"/>
+  </group_state>
+
+  <!-- 内部右腕: 現在の歩行姿勢 -->
+  <group_state name="walk" group="__pure_arm_right">
+    <joint name="right_shoulder_pitch_joint" value="0.25317874550819397"/>
+    <joint name="right_shoulder_roll_joint" value="-0.2920435965061188"/>
+    <joint name="right_shoulder_yaw_joint" value="0.08481236547231674"/>
+    <joint name="right_elbow_joint" value="0.7723953127861023"/>
+    <joint name="right_wrist_roll_joint" value="-0.0025166873820126057"/>
+  </group_state>
+
   <!-- ============================================================ -->
   <!-- Disable Collisions (Adjacent Links) -->
   <!-- ============================================================ -->

@@ -42,7 +42,13 @@ from tf_transformations import euler_from_quaternion, quaternion_from_euler
 import time
 import math
 import copy
+import os
+import xml.etree.ElementTree as ET
 from rclpy.action import ActionClient
+from ament_index_python.packages import (
+    PackageNotFoundError,
+    get_package_share_directory,
+)
 
 # ArmControl specific imports
 from std_srvs.srv import SetBool, Trigger
@@ -984,6 +990,7 @@ class ArmControl:
 
         # Joint states storage
         self.__joint_states = {}
+        self.__srdf_group_states = None
         self.__joint_sub = self.node.create_subscription(
             JointState, "/joint_states", self.__joint_state_callback, 10
         )
@@ -1013,6 +1020,76 @@ class ArmControl:
     def __joint_state_callback(self, msg: JointState):
         for name, pos in zip(msg.name, msg.position):
             self.__joint_states[name] = pos
+
+    def __load_srdf_group_states(self):
+        if self.__srdf_group_states is not None:
+            return self.__srdf_group_states
+
+        try:
+            g1_moveit_share = get_package_share_directory("g1_moveit")
+        except PackageNotFoundError:
+            self.node.get_logger().error("Package 'g1_moveit' was not found.")
+            return None
+
+        srdf_path = os.path.join(g1_moveit_share, "config", "g1.srdf")
+        try:
+            root = ET.parse(srdf_path).getroot()
+        except (OSError, ET.ParseError) as err:
+            self.node.get_logger().error(f"Failed to load SRDF '{srdf_path}': {err}")
+            return None
+
+        group_states = {}
+        for group_state in root.findall("group_state"):
+            state_name = group_state.get("name")
+            group_name = group_state.get("group")
+            if not state_name or not group_name:
+                continue
+
+            joints = {}
+            for joint in group_state.findall("joint"):
+                joint_name = joint.get("name")
+                joint_value = joint.get("value")
+                if not joint_name or joint_value is None:
+                    continue
+
+                try:
+                    joints[joint_name] = float(joint_value)
+                except ValueError:
+                    self.node.get_logger().error(
+                        f"Invalid SRDF value for {group_name}/{state_name}: "
+                        f"{joint_name}={joint_value}"
+                    )
+                    return None
+
+            group_states[(group_name, state_name)] = joints
+
+        self.__srdf_group_states = group_states
+        return self.__srdf_group_states
+
+    def __get_srdf_group_state_joints(self, group_name: str, group_state: str):
+        group_states = self.__load_srdf_group_states()
+        if group_states is None:
+            return None
+
+        joints = group_states.get((group_name, group_state))
+        if joints is None:
+            available = ", ".join(
+                f"{group}/{state}" for group, state in sorted(group_states.keys())
+            )
+            self.node.get_logger().error(
+                f"SRDF group_state '{group_state}' for group '{group_name}' "
+                f"was not found. Available states: {available}"
+            )
+            return None
+
+        if not joints:
+            self.node.get_logger().error(
+                f"SRDF group_state '{group_state}' for group '{group_name}' "
+                "does not define any joints."
+            )
+            return None
+
+        return joints
     
     def enable_upper_body_control(self, enable:bool=True):
         req = SetBool.Request()
@@ -1608,49 +1685,18 @@ class ArmControl:
         """
         定義済み状態への遷移．
         """
+        joints = self.__get_srdf_group_state_joints(group_name, group_state)
+        if joints is None:
+            return False
+
         goal_msg = MoveGroup.Goal()
         goal_msg.request.group_name = group_name
 
-        joints = []
-        if group_name == "arm_left":
-            joints = [
-                "left_shoulder_pitch_joint",
-                "left_shoulder_roll_joint",
-                "left_shoulder_yaw_joint",
-                "left_elbow_joint",
-                "left_wrist_roll_joint",
-            ]
-        elif group_name == "arm_right":
-            joints = [
-                "right_shoulder_pitch_joint",
-                "right_shoulder_roll_joint",
-                "right_shoulder_yaw_joint",
-                "right_elbow_joint",
-                "right_wrist_roll_joint",
-            ]
-        elif group_name == "upper_body":
-            joints = [
-                "waist_yaw_joint",
-                "left_shoulder_pitch_joint",
-                "left_shoulder_roll_joint",
-                "left_shoulder_yaw_joint",
-                "left_elbow_joint",
-                "left_wrist_roll_joint",
-                "right_shoulder_pitch_joint",
-                "right_shoulder_roll_joint",
-                "right_shoulder_yaw_joint",
-                "right_elbow_joint",
-                "right_wrist_roll_joint",
-            ]
-        else:
-            self.node.get_logger().error(f"Unsupported group: {group_name}")
-            return False
-
         constraints = Constraints()
-        for j in joints:
+        for joint_name, joint_value in joints.items():
             jc = JointConstraint()
-            jc.joint_name = j
-            jc.position = 0.0  # 'home' assumes all zero
+            jc.joint_name = joint_name
+            jc.position = joint_value
             jc.tolerance_above = 0.01
             jc.tolerance_below = 0.01
             jc.weight = 1.0
