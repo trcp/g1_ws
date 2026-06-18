@@ -59,6 +59,7 @@ class LOR(smach.State):
         scan_sec: int = 3,
         timeout_sec: int = 5,
         detect_condition: str = "normal",
+        hand_up_margin: float = 0.05,
         searching_area: List[float] = [[0.0, 0.0], [0.0, 0.0]],
         number_of_searching: int = 3,
     ):
@@ -84,6 +85,8 @@ class LOR(smach.State):
             検出処理の最大待機時間（秒）。
         detect_condition : str, optional
             検出条件。'normal' または 'hand_up' を指定可能。
+        hand_up_margin : float, optional
+            手を挙げたと判定する手首と肩の高さ差の最小値(m)。
         searching_area : List[List[float, float], List[float, float]], optional
             頭部カメラの探索範囲。[[tilt_min, pan_min], [tilt_max, pan_max]] の形式で指定。
         number_of_searching : int, optional
@@ -124,6 +127,7 @@ class LOR(smach.State):
         self.__scan_sec: int = scan_sec
         self.__timeout_sec: int = timeout_sec
         self.__detect_condition: str = detect_condition  # normal, hand_up
+        self.__hand_up_margin: float = hand_up_margin
         self.__searching_area: List[List[float, float], List[float, float]] = (
             searching_area  # [[tilt_min, pan_min], [tilt_max, pan_max]]
         )
@@ -145,6 +149,30 @@ class LOR(smach.State):
         )
         return response.success
 
+    @staticmethod
+    def __is_valid_keypoint(point) -> bool:
+        values = [point.x, point.y, point.z]
+        return bool(np.all(np.isfinite(values))) and any(
+            abs(v) > 1e-6 for v in values
+        )
+
+    def __is_hand_up(
+        self, person: Person3D, wrist_index: int, shoulder_index: int
+    ) -> bool:
+        try:
+            wrist = person.keypoints[wrist_index]
+            shoulder = person.keypoints[shoulder_index]
+        except IndexError:
+            return False
+
+        if not (
+            self.__is_valid_keypoint(wrist)
+            and self.__is_valid_keypoint(shoulder)
+        ):
+            return False
+
+        return wrist.z > shoulder.z + self.__hand_up_margin
+
     def __person_cb(self, msg: Persons3D):
         print(msg)
         if self.__detect_condition == "normal":
@@ -156,15 +184,12 @@ class LOR(smach.State):
                 # 2:r_sho, 3:r_elb, 4:r_wri,
                 # 5:l_sho, 6:l_elb, 7:l_wri
 
-                # Check Right Hand
-                r_wri = person.keypoints[4]
-                r_sho = person.keypoints[2]
-                is_r_hand_up = r_wri.z > r_sho.z
-
-                # Check Left Hand
-                l_wri = person.keypoints[7]
-                l_sho = person.keypoints[5]
-                is_l_hand_up = l_wri.z > l_sho.z
+                is_r_hand_up = self.__is_hand_up(
+                    person, wrist_index=4, shoulder_index=2
+                )
+                is_l_hand_up = self.__is_hand_up(
+                    person, wrist_index=7, shoulder_index=5
+                )
 
                 if is_r_hand_up or is_l_hand_up:
                     self.__person_poses.append(person)
