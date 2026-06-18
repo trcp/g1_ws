@@ -23,6 +23,7 @@ from typing import List
 import traceback
 import yaml
 import os
+import time
 
 
 """
@@ -53,6 +54,7 @@ def move_to_pose_cb(
                     userdata.initial_pose[2],
                 ]
             )
+        time.sleep(2)
         navigation.move_abs(
             userdata.abs_pose[0], userdata.abs_pose[1], userdata.abs_pose[2]
         )
@@ -85,9 +87,9 @@ def main():
     sm = smach.StateMachine(outcomes=["success", "failure"])
 
     # userdatas
-    sm.userdata.initial_pose = [-1.08, 0.0, -1.57]
-    sm.userdata.inspection_point = [-4.35, -2.36, 2.9]
-    sm.userdata.exit_point = [-2.5, -5.0, -1.57]
+    sm.userdata.initial_pose = [0.0, 0.1, 2.98]
+    sm.userdata.inspection_point = [-2.8, 2.8, -1.6]
+    sm.userdata.exit_point = [-4.301, 0.504, 3.16]
     sm.userdata.success_keywards = ["yes", "YES", "Yes"]
     sm.userdata.num_challenge = 0
 
@@ -96,7 +98,7 @@ def main():
     with sm:
         smach.StateMachine.add(
             "WAIT_DOOR_OPEN",
-            WaitDoorOpen(node=node, tts_say=SAY, timeout_sec=20, threshold=1.5),
+            WaitDoorOpen(node=node, tts_say=SAY, timeout_sec=20, threshold=1.0),
             transitions={
                 "success": "MOVE_INSPECTION_POINT",
                 "timeout": "WAIT_DOOR_OPEN",

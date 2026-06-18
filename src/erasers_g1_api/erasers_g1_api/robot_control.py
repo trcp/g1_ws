@@ -185,6 +185,8 @@ class G1Navigation:
             TF2 バッファオブジェクト。None の場合は新規作成。デフォルトは None。
         """
         self.node = node
+        self.TIMEOUT_SEC = 60.0
+        self.FACE_GOAL_TIMEOUT_SEC = 10.0
         self.__current_goal_handle = None
 
         # TF2 Setup
@@ -245,6 +247,52 @@ class G1Navigation:
                 self.node.get_logger().debug(f"TF Lookup failed: {str(e)}")
                 continue
 
+    def __get_pose_yaw(self, pose: PoseStamped) -> float:
+        q = pose.pose.orientation
+        (_, _, yaw) = euler_from_quaternion([q.x, q.y, q.z, q.w])
+        return yaw
+
+    def __face_goal_pose(self, goal_pose: PoseStamped) -> bool:
+        current_pose = self.get_current_pose(simple=True)
+        if current_pose is None:
+            self.node.get_logger().warn("Could not get current pose to face goal")
+            return False
+
+        goal_x = goal_pose.pose.position.x
+        goal_y = goal_pose.pose.position.y
+        dx = goal_x - current_pose[0]
+        dy = goal_y - current_pose[1]
+        distance = math.hypot(dx, dy)
+        target_yaw = (
+            math.atan2(dy, dx)
+            if distance > 1e-3
+            else self.__get_pose_yaw(goal_pose)
+        )
+
+        face_pose = PoseStamped()
+        face_pose.header.frame_id = "map"
+        face_pose.header.stamp = self.node.get_clock().now().to_msg()
+        face_pose.pose.position.x = current_pose[0]
+        face_pose.pose.position.y = current_pose[1]
+        face_pose.pose.position.z = 0.0
+
+        q = quaternion_from_euler(0, 0, target_yaw)
+        face_pose.pose.orientation.x = q[0]
+        face_pose.pose.orientation.y = q[1]
+        face_pose.pose.orientation.z = q[2]
+        face_pose.pose.orientation.w = q[3]
+
+        self.node.get_logger().info(
+            f"Facing goal pose before stopping (yaw={target_yaw:.3f})."
+        )
+        return self.move_to_pose(
+            face_pose,
+            tolerance=0.0,
+            reference_frame="map",
+            wait=True,
+            timeout=self.FACE_GOAL_TIMEOUT_SEC,
+        )
+
     def move_to_pose(
         self,
         pose,
@@ -268,7 +316,8 @@ class G1Navigation:
         wait : bool, optional
             移動完了まで処理をブロックするかどうか。デフォルトは True。
         timeout : float, optional
-            ナビゲーションのタイムアウト時間(秒)。指定時間を超えた場合はキャンセルして False を返す。デフォルトは None (タイムアウトなし)。
+            ナビゲーションのタイムアウト時間(秒)。指定時間を超えた場合はキャンセルして False を返す。
+            デフォルトは None (self.TIMEOUT_SEC を使用)。0 以下の場合はタイムアウトなし。
 
         Returns
         -------
@@ -336,13 +385,12 @@ class G1Navigation:
             result_future = goal_handle.get_result_async()
 
             nav_success = False
+            timeout_sec = self.TIMEOUT_SEC if timeout is None else timeout
             start_time = time.time()
             while rclpy.ok() and not result_future.done():
-                if timeout is not None and timeout > 0:
-                    if time.time() - start_time > timeout:
-                        self.node.get_logger().warn(
-                            f"Navigation timed out after {timeout} seconds. Canceling goal."
-                        )
+                if timeout_sec is not None and timeout_sec > 0:
+                    if time.time() - start_time > timeout_sec:
+                        self.node.get_logger().error("TIMEOUT NAVIGATION!")
                         cancel_future = goal_handle.cancel_goal_async()
                         rclpy.spin_until_future_complete(
                             self.node, cancel_future, timeout_sec=5.0
@@ -351,7 +399,7 @@ class G1Navigation:
 
                 rclpy.spin_once(self.node, timeout_sec=0.1)
 
-                if tolerance is not None:
+                if tolerance is not None and tolerance > 0.0:
                     # 目標位置までの距離をチェック
                     current_pose = self.get_current_pose(simple=True)
                     if current_pose is not None:
@@ -370,8 +418,8 @@ class G1Navigation:
                             rclpy.spin_until_future_complete(
                                 self.node, cancel_future, timeout_sec=5.0
                             )
-                            nav_success = True
-                            break
+                            self.__current_goal_handle = None
+                            return self.__face_goal_pose(goal_pose)
 
             if not nav_success:
                 result = result_future.result()
@@ -546,7 +594,7 @@ class G1Navigation:
             msg.pose.pose.position.y = float(pose[1])
             # TODO: 変数として受け取るような仕様のほうがいいかも？
             # 1.3 is unitree g1 lidar height from ground level
-            msg.pose.pose.position.z = 1.3
+            msg.pose.pose.position.z = 1.0
 
             q = quaternion_from_euler(0, 0, pose[2])
             msg.pose.pose.orientation.x = q[0]

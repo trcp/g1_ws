@@ -120,6 +120,55 @@ cuda_header_exists() {
     return 1
 }
 
+installed_package_version() {
+    local package=$1
+
+    dpkg-query -W -f='${Version}' "$package" 2>/dev/null || true
+}
+
+apt_candidate_version() {
+    local package=$1
+
+    apt-cache policy "$package" \
+        | awk '/Candidate:/ && $2 != "(none)" { print $2; exit }'
+}
+
+matching_cuda_dev_version() {
+    local dev_package=$1
+    local runtime_package=$2
+    local runtime_version
+
+    runtime_version=$(installed_package_version "$runtime_package")
+    if [ -z "$runtime_version" ]; then
+        return 1
+    fi
+
+    apt-cache madison "$dev_package" \
+        | awk -v runtime_version="$runtime_version" '$3 == runtime_version { print $3; exit }'
+}
+
+install_cuda_dev_package() {
+    local dev_package=$1
+    local runtime_package=${2:-}
+    local dev_version
+
+    if [ -n "$runtime_package" ]; then
+        dev_version=$(matching_cuda_dev_version "$dev_package" "$runtime_package" || true)
+        if [ -n "$dev_version" ]; then
+            apt-get install -y "${dev_package}=${dev_version}"
+            return 0
+        fi
+    fi
+
+    dev_version=$(apt_candidate_version "$dev_package")
+    if [ -n "$dev_version" ]; then
+        apt-get install -y "${dev_package}=${dev_version}"
+        return 0
+    fi
+
+    apt-get install -y "$dev_package"
+}
+
 ensure_cuda_dev_headers() {
     local cuda_version=$1
     local suffix
@@ -144,12 +193,11 @@ ensure_cuda_dev_headers() {
     echo "CUDA dev headers were not found. Installing CUDA library development packages for CUDA ${cuda_version}..."
     apt-get update
     if ! apt-get install -y "cuda-libraries-dev-${suffix}"; then
-        apt-get install -y \
-            "cuda-cudart-dev-${suffix}" \
-            "libcublas-dev-${suffix}" \
-            "libcusolver-dev-${suffix}" \
-            "libcusparse-dev-${suffix}" \
-            "libcurand-dev-${suffix}"
+        install_cuda_dev_package "cuda-cudart-dev-${suffix}" "cuda-cudart-${suffix}"
+        install_cuda_dev_package "libcublas-dev-${suffix}" "libcublas-${suffix}"
+        install_cuda_dev_package "libcusolver-dev-${suffix}" "libcusolver-${suffix}"
+        install_cuda_dev_package "libcusparse-dev-${suffix}" "libcusparse-${suffix}"
+        install_cuda_dev_package "libcurand-dev-${suffix}" "libcurand-${suffix}"
     fi
 
     configure_cuda_environment "$cuda_version"
