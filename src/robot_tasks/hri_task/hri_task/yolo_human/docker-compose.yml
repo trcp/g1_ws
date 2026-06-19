@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  yolo_human:
+    build: .
+    container_name: yolo_human_node
+    network_mode: "host"
+    volumes:
+      - ./yolo_human_node.py:/app/yolo_human_node.py
+      - ./clothing_analyzer.py:/app/clothing_analyzer.py
+      - ./extract_person_features.py:/app/extract_person_features.py
+      - ~/.cache:/root/.cache
+      - /home/roboworks/g1_ws/cyclonedds/cyclonedds.katana.xml:/tmp/cyclonedds.xml
+    env_file:
+      - .env
+    environment:
+      - CYCLONEDDS_URI=file:///tmp/cyclonedds.xml
+      - PYTHONUNBUFFERED=1
+    # コンテナが落ちても自動再起動
+    restart: unless-stopped
+
+    # GPU使用
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
