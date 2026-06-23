@@ -82,14 +82,15 @@ def main():
     SAY = tts.say
     CONTROL = G1Control(node)
     NAVIGATION = G1Navigation(node)
+    NAVIGATION.TIMEOUT_SEC=120.0
 
     # init smach
     sm = smach.StateMachine(outcomes=["success", "failure"])
 
     # userdatas
-    sm.userdata.initial_pose = [0.0, 0.1, 2.98]
-    sm.userdata.inspection_point = [-2.8, 2.8, -1.6]
-    sm.userdata.exit_point = [-4.301, 0.504, 3.16]
+    sm.userdata.initial_pose = [0.0, 0.0, 2.88]
+    sm.userdata.inspection_point = [-5.45, -8.09, -0.24]
+    sm.userdata.exit_point = [0.0, 0.0, 2.88]
     sm.userdata.success_keywards = ["yes", "YES", "Yes"]
     sm.userdata.num_challenge = 0
 
