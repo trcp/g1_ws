@@ -110,11 +110,6 @@ def generate_launch_description():
             default_value='0.2',
             description='Min distance from RealSense sensor origin to accept a point [m]',
         ),
-        DeclareLaunchArgument(
-            'min_robot_range',
-            default_value='0.4',
-            description='Min distance from robot center (odom frame) to accept a point as obstacle [m]. 0 disables.',
-        ),
 
         # GlobalCostmapNode: /map2d -> /global_costmap
         Node(
@@ -158,7 +153,6 @@ def generate_launch_description():
                 'realsense_min_obstacle_height':  LaunchConfiguration('realsense_min_obstacle_height'),
                 'realsense_max_obstacle_height':  LaunchConfiguration('realsense_max_obstacle_height'),
                 'realsense_min_sensor_range':     LaunchConfiguration('realsense_min_sensor_range'),
-                'min_robot_range':                LaunchConfiguration('min_robot_range'),
             }],
         ),
     ])

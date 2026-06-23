@@ -109,7 +109,6 @@ public:
     declare_parameter("realsense_min_obstacle_height", 0.02);
     declare_parameter("realsense_max_obstacle_height", 1.0);
     declare_parameter("realsense_min_sensor_range",    0.2);
-    declare_parameter("min_robot_range",               0.0);
     declare_parameter("free_space_weight",             0.0);
     declare_parameter("unknown_cost",                  0);
 
@@ -239,8 +238,7 @@ private:
     const float local_height = static_cast<float>(get_parameter("local_height").as_double());
     const float min_h        = static_cast<float>(get_parameter("min_obstacle_height").as_double());
     const float max_h        = static_cast<float>(get_parameter("max_obstacle_height").as_double());
-    const float min_range        = static_cast<float>(get_parameter("min_sensor_range").as_double());
-    const float min_robot_range  = static_cast<float>(get_parameter("min_robot_range").as_double());
+    const float min_range    = static_cast<float>(get_parameter("min_sensor_range").as_double());
     const std::string footprint_str  = get_parameter("footprint").as_string();
     const float clearance            = static_cast<float>(get_parameter("clearance").as_double());
     const int obstacle_threshold     = get_parameter("obstacle_threshold").as_int();
@@ -294,22 +292,6 @@ private:
     auto inflated = distance_transform_grid(raw_grid, grid_w, grid_h,
       footprint_cells, padding_cells, obstacle_threshold, 100, 99, 98,
       free_space_weight, unknown_cost);
-
-    // Clear inflated costs within min_robot_range of the robot center
-    if (min_robot_range > 0.0f) {
-      const int clear_cells = static_cast<int>(min_robot_range / resolution);
-      const int cx = grid_w / 2;
-      const int cy = grid_h / 2;
-      for (int dy = -clear_cells; dy <= clear_cells; ++dy) {
-        for (int dx = -clear_cells; dx <= clear_cells; ++dx) {
-          if (dx*dx + dy*dy > clear_cells*clear_cells) continue;
-          const int nx = cx + dx, ny = cy + dy;
-          if (nx >= 0 && nx < grid_w && ny >= 0 && ny < grid_h) {
-            inflated[static_cast<size_t>(ny * grid_w + nx)] = 0;
-          }
-        }
-      }
-    }
 
     // Publish
     nav_msgs::msg::OccupancyGrid out;

@@ -458,8 +458,6 @@ def generate_launch_description():
         DeclareLaunchArgument('realsense_min_obstacle_height', default_value='0.1'),
         DeclareLaunchArgument('realsense_max_obstacle_height', default_value='1.0'),
         DeclareLaunchArgument('realsense_min_sensor_range',    default_value='0.2'),
-        DeclareLaunchArgument('min_robot_range', default_value='0.4',
-            description='Min distance from robot center to accept inflated costs [m]. 0 disables.'),
         DeclareLaunchArgument('use_smoothing', default_value='true'),
         DeclareLaunchArgument('obstacle_cost_weight', default_value='5.0'),
         DeclareLaunchArgument('planner_obstacle_threshold', default_value='99'),
@@ -634,7 +632,6 @@ def generate_launch_description():
             'realsense_min_obstacle_height':  LaunchConfiguration('realsense_min_obstacle_height'),
             'realsense_max_obstacle_height':  LaunchConfiguration('realsense_max_obstacle_height'),
             'realsense_min_sensor_range':     LaunchConfiguration('realsense_min_sensor_range'),
-            'min_robot_range':                LaunchConfiguration('min_robot_range'),
         }],
     )
 
