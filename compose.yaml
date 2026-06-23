@@ -125,7 +125,7 @@ services:
       - "video"
       - "input"
     devices:
-      - /dev:/dev
+      - /dev:/dev:rw
     build:
       context: .
       dockerfile: Dockerfile
