@@ -156,11 +156,10 @@ private:
 
   // Extract (x, y) obstacle candidates from a PointCloud2 message and append to out.
   // min_range_sq: squared minimum distance in sensor frame to reject near-field noise.
-  // min_robot_range_sq: squared minimum distance from robot center in world frame (0 = disabled).
   void collect_obstacle_points(
     const sensor_msgs::msg::PointCloud2 & msg,
     float min_h, float max_h, float min_range_sq,
-    double robot_x, double robot_y, double robot_z, float min_robot_range_sq,
+    double robot_z,
     const geometry_msgs::msg::TransformStamped & cloud_tf,
     std::vector<std::pair<float, float>> & out) const
   {
@@ -200,12 +199,6 @@ private:
 
       double rx, ry, rz;
       transform_point(lx, ly, lz, cqx, cqy, cqz, cqw, ctx, cty, ctz, rx, ry, rz);
-
-      if (min_robot_range_sq > 0.0f) {
-        float dx = static_cast<float>(rx - robot_x);
-        float dy = static_cast<float>(ry - robot_y);
-        if (dx*dx + dy*dy < min_robot_range_sq) continue;
-      }
 
       const float dz = static_cast<float>(rz - robot_z);
       if (dz < min_h || dz > max_h) continue;
@@ -265,8 +258,7 @@ private:
 
     // LiDAR points
     collect_obstacle_points(*msg, min_h, max_h, min_range * min_range,
-      robot_x, robot_y, robot_z, min_robot_range * min_robot_range,
-      cloud_tf, obstacle_points);
+      robot_z, cloud_tf, obstacle_points);
 
     // RealSense cached points (merged if available)
     {
@@ -283,8 +275,7 @@ private:
             odom_frame, realsense_cache_->header.frame_id, tf2::TimePointZero);
           collect_obstacle_points(*realsense_cache_,
             rs_min_h, rs_max_h, rs_min_r * rs_min_r,
-            robot_x, robot_y, robot_z, min_robot_range * min_robot_range,
-            rs_tf, obstacle_points);
+            robot_z, rs_tf, obstacle_points);
         } catch (const tf2::TransformException & ex) {
           RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
             "RealSense TF lookup failed: %s", ex.what());
@@ -303,6 +294,22 @@ private:
     auto inflated = distance_transform_grid(raw_grid, grid_w, grid_h,
       footprint_cells, padding_cells, obstacle_threshold, 100, 99, 98,
       free_space_weight, unknown_cost);
+
+    // Clear inflated costs within min_robot_range of the robot center
+    if (min_robot_range > 0.0f) {
+      const int clear_cells = static_cast<int>(min_robot_range / resolution);
+      const int cx = grid_w / 2;
+      const int cy = grid_h / 2;
+      for (int dy = -clear_cells; dy <= clear_cells; ++dy) {
+        for (int dx = -clear_cells; dx <= clear_cells; ++dx) {
+          if (dx*dx + dy*dy > clear_cells*clear_cells) continue;
+          const int nx = cx + dx, ny = cy + dy;
+          if (nx >= 0 && nx < grid_w && ny >= 0 && ny < grid_h) {
+            inflated[static_cast<size_t>(ny * grid_w + nx)] = 0;
+          }
+        }
+      }
+    }
 
     // Publish
     nav_msgs::msg::OccupancyGrid out;
