@@ -461,6 +461,10 @@ def generate_launch_description():
         DeclareLaunchArgument('use_smoothing', default_value='true'),
         DeclareLaunchArgument('obstacle_cost_weight', default_value='5.0'),
         DeclareLaunchArgument('planner_obstacle_threshold', default_value='99'),
+        DeclareLaunchArgument('goal_snap_to_free', default_value='true',
+            description='Snap goal to nearest free cell when goal is inside an obstacle'),
+        DeclareLaunchArgument('goal_snap_max_dist', default_value='1.0',
+            description='Max search radius for goal snapping [m]'),
         DeclareLaunchArgument('path_obstacle_threshold', default_value='75'),
         DeclareLaunchArgument('path_check_horizon', default_value='1.5'),
         DeclareLaunchArgument('path_check_use_memory', default_value='true'),
@@ -651,6 +655,8 @@ def generate_launch_description():
             'unknown_cost': LaunchConfiguration('unknown_cost'),
             'robot_base_frame': robot_base_frame,
             'local_costmap_topic': LaunchConfiguration('augmented_costmap_topic'),
+            'goal_snap_to_free': LaunchConfiguration('goal_snap_to_free'),
+            'goal_snap_max_dist': LaunchConfiguration('goal_snap_max_dist'),
         }],
     )
 
