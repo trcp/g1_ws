@@ -30,7 +30,7 @@
     twist_prediction_use_angular_velocity: false
     max_twist_prediction_dt: 0.5
     use_imu: false
-    use_imu_preintegration: true
+    use_imu_preintegration: false
     imu_prediction_correction_guard_translation_m: 2.0
     imu_prediction_correction_guard_yaw_deg: 4.0
     enable_reinitialization_request_output: true

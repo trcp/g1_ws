@@ -22,7 +22,7 @@ local task = {
       description = "all navigation and localization launch",
       commands = {
         default = {
-          template = "cd /home/unitree/g1_ws && /usr/bin/docker compose run --name nav --rm erasers_g1 bash -ic \"ros2 launch machida_navigation machida_navigation.launch.py map_dir:=/home/unitree/colcon_ws/map map_name:=room220\"",
+          template = "cd /home/unitree/g1_ws && /usr/bin/docker compose run --name nav --rm erasers_g1 bash -ic \"ros2 launch machida_navigation machida_navigation.launch.py map_dir:=/home/unitree/colcon_ws/map map_name:=kufusha\"",
           kill = "/usr/bin/docker stop nav",
           variables = {},
         },
