@@ -452,7 +452,7 @@ def generate_launch_description():
         DeclareLaunchArgument('min_sensor_range', default_value='0.5'),
         DeclareLaunchArgument(
             'realsense_topic',
-            default_value='/head_camera/d455/depth/color/points',
+            default_value='/head_camera/d455/depth/color/points_delete',
             description='RealSense PointCloud2 topic for local costmap. Empty to disable.',
         ),
         DeclareLaunchArgument('realsense_min_obstacle_height', default_value='0.1'),
@@ -468,7 +468,7 @@ def generate_launch_description():
         DeclareLaunchArgument('path_obstacle_threshold', default_value='75'),
         DeclareLaunchArgument('path_check_horizon', default_value='1.5'),
         DeclareLaunchArgument('path_check_use_memory', default_value='true'),
-        DeclareLaunchArgument('path_check_skip_radius', default_value='0.0',
+        DeclareLaunchArgument('path_check_skip_radius', default_value='0.5',
             description='Skip path points within this distance of robot in path blocked check [m]. 0 disables.'),
         DeclareLaunchArgument('local_plan_frequency', default_value='5.0'),
         DeclareLaunchArgument('goal_tolerance', default_value='0.15'),
