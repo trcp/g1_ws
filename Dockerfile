@@ -132,7 +132,7 @@ RUN pip install --index-url https://pypi.org/simple -r requirements.txt &&\
 WORKDIR /home/${USERNAME}/colcon_ws
 RUN pip install --index-url https://pypi.org/simple -U ultralytics &&\
     pip install --index-url https://pypi.org/simple git+https://github.com/openai/CLIP.git &&\
-    pip install --index-url https://pypi.org/simple "numpy==1.22.4"
+    pip install --index-url https://pypi.org/simple "numpy==1.23"
 
 # setup robotics ER
 RUN pip install --index-url https://pypi.org/simple -q google-genai
