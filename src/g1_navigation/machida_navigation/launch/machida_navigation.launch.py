@@ -252,7 +252,7 @@ def _start_map_server(context, *args, **kwargs):
 def generate_launch_description():
     home = os.environ.get('HOME', '/home/roboworks')
 
-    default_map_dir = os.path.join(home, 'colcon_ws', 'map')
+    default_map_dir = os.path.join(home, 'g1_ws', 'map')
     default_map_name = 'map'
     default_localization_param_dir = os.path.join(
         get_package_share_directory('g1_navigation'),
@@ -464,6 +464,8 @@ def generate_launch_description():
         DeclareLaunchArgument('path_obstacle_threshold', default_value='75'),
         DeclareLaunchArgument('path_check_horizon', default_value='1.5'),
         DeclareLaunchArgument('path_check_use_memory', default_value='true'),
+        DeclareLaunchArgument('path_check_skip_radius', default_value='0.0',
+            description='Skip path points within this distance of robot in path blocked check [m]. 0 disables.'),
         DeclareLaunchArgument('local_plan_frequency', default_value='5.0'),
         DeclareLaunchArgument('goal_tolerance', default_value='0.15'),
         DeclareLaunchArgument('goal_yaw_tolerance', default_value='0.05'),
@@ -665,6 +667,7 @@ def generate_launch_description():
             'path_obstacle_threshold': LaunchConfiguration('path_obstacle_threshold'),
             'path_check_horizon': LaunchConfiguration('path_check_horizon'),
             'path_check_use_memory': LaunchConfiguration('path_check_use_memory'),
+            'path_check_skip_radius': LaunchConfiguration('path_check_skip_radius'),
             'local_plan_frequency': LaunchConfiguration('local_plan_frequency'),
             'goal_tolerance': LaunchConfiguration('goal_tolerance'),
             'goal_yaw_tolerance': LaunchConfiguration('goal_yaw_tolerance'),
