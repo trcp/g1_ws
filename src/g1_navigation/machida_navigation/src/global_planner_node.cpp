@@ -181,6 +181,12 @@ private:
         "Start (%d,%d) is inside an actual obstacle (val=%d)", start_gx, start_gy, start_val);
       return;
     }
+
+    // Build planning grid before goal-snap BFS so BFS can check costmap traversability
+    auto grid_data = current_costmap->data;
+    overlay_local_costmap(grid_data, info, frame_id);
+    grid_data[start_gy * info.width + start_gx] = 0;
+
     int8_t goal_val = orig[goal_gy * info.width + goal_gx];
     if ((unknown_is_obstacle && goal_val < 0) || static_cast<int>(goal_val) >= obstacle_threshold) {
       const bool snap = get_parameter("goal_snap_to_free").as_bool();
@@ -194,6 +200,7 @@ private:
 
       const double snap_max_dist = get_parameter("goal_snap_max_dist").as_double();
       const int max_cells = static_cast<int>(snap_max_dist / info.resolution);
+      const int orig_goal_gx = goal_gx, orig_goal_gy = goal_gy;
 
       std::queue<std::pair<int, int>> bfs_q;
       std::vector<bool> visited(info.width * info.height, false);
@@ -205,13 +212,12 @@ private:
         auto [cx, cy] = bfs_q.front();
         bfs_q.pop();
 
-        int8_t cv = orig[static_cast<size_t>(cy * info.width + cx)];
-        if (!(unknown_is_obstacle && cv < 0) && static_cast<int>(cv) < obstacle_threshold) {
+        if (static_cast<int>(grid_data[static_cast<size_t>(cy * info.width + cx)]) < planner_obstacle_threshold) {
           auto [snapped_wx, snapped_wy] = grid_to_world(
             static_cast<float>(cx), static_cast<float>(cy), info);
           RCLCPP_WARN(get_logger(),
             "Goal (%.3f,%.3f) is inside obstacle (val=%d); "
-            "snapped to nearest free cell (%.3f,%.3f) [%.2f m away]",
+            "snapped to nearest traversable cell (%.3f,%.3f) [%.2f m away]",
             request->goal.pose.position.x, request->goal.pose.position.y,
             static_cast<int>(goal_val),
             snapped_wx, snapped_wy,
@@ -229,7 +235,7 @@ private:
             int nx = cx + dx, ny = cy + dy;
             if (!in_bounds(nx, ny, info)) continue;
             if (visited[static_cast<size_t>(ny * info.width + nx)]) continue;
-            int ddx = nx - goal_gx, ddy = ny - goal_gy;
+            int ddx = nx - orig_goal_gx, ddy = ny - orig_goal_gy;
             if (ddx * ddx + ddy * ddy > max_cells * max_cells) continue;
             visited[static_cast<size_t>(ny * info.width + nx)] = true;
             bfs_q.push({nx, ny});
@@ -239,8 +245,8 @@ private:
 
       if (!found) {
         RCLCPP_ERROR(get_logger(),
-          "Goal (%d,%d) is inside obstacle; no free cell found within %.2f m",
-          goal_gx, goal_gy, snap_max_dist);
+          "Goal (%d,%d) is inside obstacle; no traversable cell found within %.2f m",
+          orig_goal_gx, orig_goal_gy, snap_max_dist);
         return;
       }
     }
@@ -252,11 +258,6 @@ private:
     int log_interval = get_parameter("log_interval").as_int();
     auto t_start = now();
 
-    // Make a local copy of the costmap, overlay the local costmap, then
-    // zero-clear start and goal to allow planning through inflation regions
-    auto grid_data = current_costmap->data;
-    overlay_local_costmap(grid_data, info, frame_id);
-    grid_data[start_gy * info.width + start_gx] = 0;
     grid_data[goal_gy  * info.width + goal_gx]  = 0;
 
     ProgressCb progress_cb = nullptr;
