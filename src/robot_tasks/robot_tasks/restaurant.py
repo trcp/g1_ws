@@ -10,6 +10,7 @@ import rclpy
 import smach
 
 # interfaces
+from geometry_msgs.msg import PoseStamped
 from lor_interfaces.msg import Person3D, Persons3D  # Light Weight Open Pose
 
 # eraasers g1 APIs
@@ -90,24 +91,36 @@ def cb_state_create_around_map(
 
 
 @smach.cb_interface(
-    outcomes=["success", "failure"], input_keys=["person_poses"], output_keys=[]
+    outcomes=["success", "failure"], input_keys=["person_poses", "person_poses_header"], output_keys=[]
 )
 def cb_state_move_to_customer(
-    userdata, node: Node, tts_say: TTS.say, navigation: G1Navigation, control: G1Control
+    userdata,
+    node: Node,
+    tts_say: TTS.say,
+    navigation: G1Navigation,
+    control: G1Control,
+    tolerance: float = 0.8,
 ):
     try:
         control.pose_policy("running")
         tts_say("I will move to the customer. Please wait a moment.")
         person_pose: Person3D = userdata.person_poses[0]
-        node.get_logger().info("PERSON POSE")
-        node.get_logger().info("x %f" % (person_pose.pose.position.x))
-        node.get_logger().info("y %f" % (person_pose.pose.position.y))
-        navigation.move_rel(
-            x=person_pose.pose.position.x,
-            y=person_pose.pose.position.y,
-            yaw=0.0,
-            tolerance=0.25,
-        )
+        person_x = person_pose.pose.position.x
+        person_y = person_pose.pose.position.y
+        person_header = userdata.person_poses_header
+
+        node.get_logger().info("frame_id: %s" % person_header.frame_id)
+        node.get_logger().info("pose x: %f" % person_x)
+        node.get_logger().info("pose y: %f" % person_y)
+
+        customer_pose = PoseStamped()
+        customer_pose.header = person_header
+        customer_pose.pose = person_pose.pose
+        if not navigation.move_to_pose(customer_pose, tolerance=tolerance):
+            node.get_logger().error("Failed to move to customer")
+            control.pose_policy("start")
+            return "failure"
+
         tts_say("I reached the customer!")
         control.pose_policy("start")
         return "success"

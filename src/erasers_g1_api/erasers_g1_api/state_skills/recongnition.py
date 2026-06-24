@@ -13,7 +13,8 @@ import tf2_geometry_msgs
 # interfaces
 from sensor_msgs.msg import Image, CameraInfo
 from std_srvs.srv import SetBool
-from std_msgs.msg import Int16MultiArray
+from std_msgs.msg import Header, Int16MultiArray
+from geometry_msgs.msg import PoseArray, PoseStamped
 from lor_interfaces.msg import Person3D, Persons3D  # Light Weight Open Pose
 from sam3_ros_interfaces.msg import PredictArray, Predict
 from sam3_ros_interfaces.srv import ExecPredict
@@ -38,6 +39,7 @@ from typing import List
 import numpy as np
 import traceback
 import time
+import copy
 import os
 
 
@@ -62,6 +64,7 @@ class LOR(smach.State):
         hand_up_margin: float = 0.05,
         searching_area: List[float] = [[0.0, 0.0], [0.0, 0.0]],
         number_of_searching: int = 3,
+        person_pose_array_topic: str = "detected_person_poses",
     ):
         """人物検出。
 
@@ -91,12 +94,16 @@ class LOR(smach.State):
             頭部カメラの探索範囲。[[tilt_min, pan_min], [tilt_max, pan_max]] の形式で指定。
         number_of_searching : int, optional
             探索ポイントの数。探索範囲内でこの数だけ頭部カメラを移動させて検出を試みる。
+        person_pose_array_topic : str, optional
+            detect_condition に合致した人物の位置姿勢を PoseArray で publish するトピック名。
 
         userdata
         --------
         Output Keys:
             person_poses : List[Person3D]
                 見つかった人物の3Dポーズ情報。成功時に出力される。
+            person_poses_header : Header
+                person_poses の基準座標系とタイムスタンプ。
 
         Outcomes
         ----------
@@ -113,7 +120,7 @@ class LOR(smach.State):
             self,
             outcomes=["success", "timeout", "failure"],
             input_keys=[],
-            output_keys=["person_poses"],
+            output_keys=["person_poses", "person_poses_header"],
         )
 
         # init values
@@ -133,6 +140,14 @@ class LOR(smach.State):
         )
         self.__number_of_searching: int = number_of_searching
         self.__person_poses: List[Person3D] = []
+        self.__person_poses_header: Header = Header()
+        self.__person_pose_array_pub = self.__node.create_publisher(
+            PoseArray, person_pose_array_topic, 10
+        )
+
+        # TF2 Setup
+        self.__tf_buffer = Buffer()
+        self.__tf_listener = TransformListener(self.__tf_buffer, self.__node)
 
         # service
         self.__lor_cli = self.__node.create_client(SetBool, "execute_person_detect")
@@ -173,12 +188,81 @@ class LOR(smach.State):
 
         return wrist.z > shoulder.z + self.__hand_up_margin
 
+    def __transform_person_poses_to_map(
+        self, persons: List[Person3D], header: Header
+    ) -> bool:
+        if not persons:
+            self.__person_poses = []
+            self.__person_poses_header = Header()
+            return True
+
+        if not header.frame_id:
+            self.__node.get_logger().warn(
+                "Person pose header frame_id is empty. Dropping detected persons."
+            )
+            self.__person_poses = []
+            self.__person_poses_header = Header()
+            return False
+
+        map_header = Header()
+        map_header.stamp = header.stamp
+        map_header.frame_id = "map"
+
+        if header.frame_id == "map":
+            self.__person_poses = [copy.deepcopy(person) for person in persons]
+            self.__person_poses_header = map_header
+            return True
+
+        try:
+            transform = self.__tf_buffer.lookup_transform(
+                "map",
+                header.frame_id,
+                rclpy.time.Time.from_msg(header.stamp),
+                rclpy.duration.Duration(seconds=1.0),
+            )
+        except Exception as e:
+            self.__node.get_logger().warn(
+                "Failed to transform person poses from %s to map: %s"
+                % (header.frame_id, str(e))
+            )
+            self.__person_poses = []
+            self.__person_poses_header = Header()
+            return False
+
+        transformed_persons: List[Person3D] = []
+        for person in persons:
+            pose_stamped = PoseStamped()
+            pose_stamped.header = header
+            pose_stamped.pose = person.pose
+
+            try:
+                pose_transformed = tf2_geometry_msgs.do_transform_pose_stamped(
+                    pose_stamped, transform
+                )
+            except Exception as e:
+                self.__node.get_logger().warn(
+                    "Failed to transform a person pose from %s to map: %s"
+                    % (header.frame_id, str(e))
+                )
+                self.__person_poses = []
+                self.__person_poses_header = Header()
+                return False
+
+            person_transformed = copy.deepcopy(person)
+            person_transformed.pose = pose_transformed.pose
+            transformed_persons.append(person_transformed)
+
+        self.__person_poses = transformed_persons
+        self.__person_poses_header = map_header
+        return True
+
     def __person_cb(self, msg: Persons3D):
         print(msg)
+        filtered_person_poses: List[Person3D] = []
+
         if self.__detect_condition == "normal":
-            self.__person_poses = msg.persons
+            filtered_person_poses = list(msg.persons)
         elif self.__detect_condition == "hand_up":
-            self.__person_poses = []
             for person in msg.persons:
                 # 0:nose, 1:neck,
                 # 2:r_sho, 3:r_elb, 4:r_wri,
@@ -192,7 +276,18 @@ class LOR(smach.State):
                 )
 
                 if is_r_hand_up or is_l_hand_up:
-                    self.__person_poses.append(person)
+                    filtered_person_poses.append(person)
+        else:
+            self.__node.get_logger().warn(
+                "Unsupported detect_condition: %s" % self.__detect_condition
+            )
+
+        self.__transform_person_poses_to_map(filtered_person_poses, msg.header)
+
+        pose_array = PoseArray()
+        pose_array.header = self.__person_poses_header
+        pose_array.poses = [person.pose for person in self.__person_poses]
+        self.__person_pose_array_pub.publish(pose_array)
 
     def execute(self, userdata):
         try:
@@ -201,6 +296,7 @@ class LOR(smach.State):
                 WAIT PERSON RECOGNITION ....
             """)
             self.__person_poses: List[Person3D] = []
+            self.__person_poses_header = Header()
 
             # 探索時にロボットの頭部カメラを旋回させるポイントを作成
             searching_points = np.linspace(
@@ -265,6 +361,7 @@ class LOR(smach.State):
             else:
                 print(self.__person_poses)
                 userdata.person_poses = self.__person_poses
+                userdata.person_poses_header = self.__person_poses_header
                 if not self.__person_poses:
                     self.__node.get_logger().warn("Person is not detected")
                     self.__say(text=self.__timeout_msg)

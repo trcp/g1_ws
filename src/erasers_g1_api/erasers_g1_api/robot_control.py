@@ -171,7 +171,13 @@ class G1Control:
 
 
 class G1Navigation:
-    def __init__(self, node: Node, wait_time: int = 10, tf_buffer: Buffer = None):
+    def __init__(
+        self,
+        node: Node,
+        wait_time: int = 10,
+        tf_buffer: Buffer = None,
+        debug_goal_topic: str = "/api_goal",
+    ):
         """
         G1Navigation クラスのコンストラクタ
 
@@ -183,6 +189,9 @@ class G1Navigation:
             アクションサーバー接続待機時間(秒)。デフォルトは 10。
         tf_buffer : Buffer, optional
             TF2 バッファオブジェクト。None の場合は新規作成。デフォルトは None。
+        debug_goal_topic : str, optional
+            Nav2 に送る最終ゴール PoseStamped を publish するデバッグ用トピック。
+            デフォルトは '/api_goal'。
         """
         self.node = node
         self.TIMEOUT_SEC = 60.0
@@ -204,6 +213,9 @@ class G1Navigation:
         # Initial pose publisher
         self.__initial_pose_pub = self.node.create_publisher(
             PoseWithCovarianceStamped, "/initialpose", 10
+        )
+        self.__debug_goal_pub = self.node.create_publisher(
+            PoseStamped, debug_goal_topic, 10
         )
 
     def get_current_pose(self, simple: bool = False):
@@ -283,7 +295,7 @@ class G1Navigation:
         face_pose.pose.orientation.w = q[3]
 
         self.node.get_logger().info(
-            f"Facing goal pose before stopping (yaw={target_yaw:.3f})."
+            f"Facing original goal pose before stopping (yaw={target_yaw:.3f})."
         )
         return self.move_to_pose(
             face_pose,
@@ -296,7 +308,7 @@ class G1Navigation:
     def move_to_pose(
         self,
         pose,
-        tolerance: float = 0.0,
+        tolerance: float = 0.5,
         reference_frame: str = "map",
         wait: bool = True,
         timeout: float = None,
@@ -310,7 +322,7 @@ class G1Navigation:
         pose : PoseStamped or Pose
             目標とする姿勢情報。Pose メッセージの場合、reference_frame の座標系基準として扱われる。
         tolerance : float, optional
-            目標から指定された距離(m)以内に到達した場合、その時点でナビゲーションを成功として終了する。デフォルトは 0.0。
+            目標から指定された距離(m)以内に到達した場合、その時点でナビゲーションを成功として終了する。デフォルトは 0.5。
         reference_frame : str, optional
             pose が Pose 型の場合の基準フレーム。デフォルトは 'map'。
         wait : bool, optional
@@ -348,7 +360,7 @@ class G1Navigation:
 
                 import tf2_geometry_msgs
 
-                goal_pose = tf2_geometry_msgs.do_transform_pose(goal_pose, transform)
+                goal_pose = tf2_geometry_msgs.do_transform_pose_stamped(goal_pose, transform)
             except Exception as e:
                 self.node.get_logger().error(
                     f"Failed to transform pose to map frame: {str(e)}"
@@ -357,6 +369,7 @@ class G1Navigation:
 
         goal_msg = NavigateToPose.Goal()
         goal_msg.pose = goal_pose
+        self.__debug_goal_pub.publish(goal_pose)
 
         future = self.__action_client.send_goal_async(goal_msg)
 
@@ -400,7 +413,6 @@ class G1Navigation:
                 rclpy.spin_once(self.node, timeout_sec=0.1)
 
                 if tolerance is not None and tolerance > 0.0:
-                    # 目標位置までの距離をチェック
                     current_pose = self.get_current_pose(simple=True)
                     if current_pose is not None:
                         goal_x = goal_pose.pose.position.x
@@ -457,7 +469,7 @@ class G1Navigation:
         x: float = 0.0,
         y: float = 0.0,
         yaw: float = 0.0,
-        tolerance: float = 0.0,
+        tolerance: float = 0.5,
         reference_frame: str = "map",
         wait: bool = True,
         timeout: float = None,
@@ -475,7 +487,7 @@ class G1Navigation:
         yaw : float, optional
             目標姿勢のヨー角（ラジアン）。デフォルトは 0.0。
         tolerance : float, optional
-            目標からの許容誤差半径(m)。指定値以内に到達すれば終了する。デフォルトは 0.0。
+            目標からの許容誤差半径(m)。指定値以内に到達すれば終了する。デフォルトは 0.5。
         reference_frame : str, optional
             座標系の基準フレーム。デフォルトは 'map'。
         wait : bool, optional
@@ -510,7 +522,7 @@ class G1Navigation:
         x: float = 0.0,
         y: float = 0.0,
         yaw: float = 0.0,
-        tolerance: float = 0.0,
+        tolerance: float = 0.5,
         wait: bool = True,
         timeout: float = None,
     ) -> bool:
@@ -527,7 +539,7 @@ class G1Navigation:
         yaw : float, optional
             ロボットの現在角度からの相対的な反時計回りの回転量（ラジアン）。デフォルトは 0.0。
         tolerance : float, optional
-            目標からの許容誤差半径(m)。指定値以内に到達すれば終了する。デフォルトは 0.0。
+            目標からの許容誤差半径(m)。指定値以内に到達すれば終了する。デフォルトは 0.5。
         wait : bool, optional
             移動完了まで処理をブロックするかどうか。デフォルトは True。
         timeout : float, optional
