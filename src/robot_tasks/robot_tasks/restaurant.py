@@ -150,7 +150,7 @@ def cb_state_move_to_customer(
     tts_say: TTS.say,
     navigation: G1Navigation,
     control: G1Control,
-    tolerance: float = 1.5,
+    tolerance: float = 1.0,
 ):
     try:
         control.pose_policy("running")
