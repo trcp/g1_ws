@@ -35,6 +35,12 @@ from typing import List
 import traceback
 import yaml
 import os
+import random  # ランダム選択用に追加
+
+
+# --- デバッグ・シミュレーション用定数 ---
+SKIP_VOICE_INTARACT = True  # True のとき音声対話ステートをスキップして success 扱いにする
+SKIP_HAND_CONTROL = True # True のときハンド操作をスキップする
 
 
 """
@@ -56,6 +62,51 @@ def load_params(node: Node, params_file: str):
     except Exception as e:
         node.get_logger().error(f"Failed to load params: {e}")
         node.get_logger().error(traceback.format_exc())
+
+
+"""
+音声対話スキップ用のダミーステート（SKIP_VOICE_INTARACT = True の時に使用）
+"""
+
+
+@smach.cb_interface(outcomes=["success"], input_keys=["object_keywards"], output_keys=["stt_text", "order_list"])
+def cb_state_skip_request_order(userdata, node: Node):
+    try:
+        kws = userdata.object_keywards
+        # キーワードからランダムに2つ選択（要素数が2未満の場合は全て選択）
+        chosen = random.sample(kws, min(2, len(kws)))
+        
+        # 後続のチェックステート(cb_state_check_order)が壊れないように文字列でも結合して代入
+        userdata.stt_text = " ".join(chosen)
+        userdata.order_list = chosen
+        
+        node.get_logger().info(f"[SKIP_VOICE] Randomly selected orders: {chosen}")
+        return "success"
+    except Exception as e:
+        node.get_logger().error(f"Error in cb_state_skip_request_order: {e}")
+        return "success"
+
+
+@smach.cb_interface(outcomes=["success"], input_keys=[], output_keys=["stt_text"])
+def cb_state_skip_request_apply(userdata, node: Node):
+    # 注文確認で肯定（yes）をシミュレート
+    userdata.stt_text = "yes"
+    node.get_logger().info("[SKIP_VOICE] Skipped request apply -> simulated 'yes'")
+    return "success"
+
+
+@smach.cb_interface(outcomes=["success"], input_keys=[], output_keys=[])
+def cb_state_skip_grasp_apply(userdata, node: Node):
+    node.get_logger().info("[SKIP_VOICE] Skipped grasp apply")
+    return "success"
+
+
+@smach.cb_interface(outcomes=["success"], input_keys=[], output_keys=["stt_text"])
+def cb_state_skip_handover_confirm(userdata, node: Node):
+    # 受け取り確認で肯定（yes）をシミュレート
+    userdata.stt_text = "yes"
+    node.get_logger().info("[SKIP_VOICE] Skipped handover confirm -> simulated 'yes'")
+    return "success"
 
 
 """
@@ -99,7 +150,7 @@ def cb_state_move_to_customer(
     tts_say: TTS.say,
     navigation: G1Navigation,
     control: G1Control,
-    tolerance: float = 0.8,
+    tolerance: float = 1.5,
 ):
     try:
         control.pose_policy("running")
@@ -210,7 +261,7 @@ def cb_state_move_to_bar_counter(
     try:
         control.pose_policy("running")
 
-        navigation.move_abs()
+        navigation.move_abs(0.0, 0.0, 0.0)
 
         control.pose_policy("start")
         return "success"
@@ -263,7 +314,7 @@ def cb_state_order_report(userdata, node: Node, tts_say: TTS.say, arm:ArmControl
 )
 def cb_state_grasp_item(userdata, node: Node, arm:ArmControl):
     try:
-        #arm.hand_control(command="close")
+        if not SKIP_HAND_CONTROL: arm.hand_control(command="close")
         arm.enable_upper_body_control(False)
         return "success"
     except:
@@ -293,7 +344,7 @@ def cb_state_handover_item(userdata, node: Node, tts_say: TTS.say, arm: ArmContr
             right_shoulder_pitch_joint=-0.735,
             right_wrist_roll_joint=1.57,
         )
-        arm.hand_control(command="open")
+        if not SKIP_HAND_CONTROL: arm.hand_control(command="open")
         return "success"
     except:
         node.get_logger().error(
@@ -426,8 +477,8 @@ def main():
     with sm:
         # smach.StateMachine.add('CREATE_AROUND_MAP', smach.CBState(cb=cb_state_create_around_map,
         #                                                           cb_kwargs={'node': node, 'tts_say': SAY, 'navigation': NAVIGATION, 'control': CONROL},),
-        #                         transitions={'success': 'SEARCH_CUSTOMER',
-        #                                      'failure': 'failure'})
+        #                          transitions={'success': 'SEARCH_CUSTOMER',
+        #                                       'failure': 'failure'})
 
         smach.StateMachine.add(
             "SEARCH_CUSTOMER",
@@ -459,28 +510,35 @@ def main():
                     "control": CONROL,
                 },
             ),
-            transitions={"success": "REQUEST_ORDER", "failure": "failure"},
+            transitions={"success": "REQUEST_ORDER", "failure": "REQUEST_ORDER"},
         )
 
-        smach.StateMachine.add(
-            "REQUEST_ORDER",
-            SpeechToText(
-                node=node,
-                tts=tts,
-                start_msg="hi customer. What is your order ? Please speak after the beep sound.",
-                success_msg="OK",
-                timeout_msg="Sorry, I didn't hear your order.",
-                device="cpu",
-                lang="en",
-            ),
-            transitions={
-                "success": "REQUEST_CHECK",
-                #'success': 'success',
-                "timeout": "REQUEST_ORDER",
-                "failure": "failure",
-            },
-            remapping={"success_keywards": "object_keywards"},
-        )
+        # --- REQUEST_ORDER ステートの分岐 ---
+        if SKIP_VOICE_INTARACT:
+            smach.StateMachine.add(
+                "REQUEST_ORDER",
+                smach.CBState(cb=cb_state_skip_request_order, cb_kwargs={"node": node}),
+                transitions={"success": "REQUEST_CHECK"}
+            )
+        else:
+            smach.StateMachine.add(
+                "REQUEST_ORDER",
+                SpeechToText(
+                    node=node,
+                    tts=tts,
+                    start_msg="hi customer. What is your order ? Please speak after the beep sound.",
+                    success_msg="OK",
+                    timeout_msg="Sorry, I didn't hear your order.",
+                    device="cpu",
+                    lang="en",
+                ),
+                transitions={
+                    "success": "REQUEST_CHECK",
+                    "timeout": "REQUEST_ORDER",
+                    "failure": "failure",
+                },
+                remapping={"success_keywards": "object_keywards"},
+            )
 
         smach.StateMachine.add(
             "REQUEST_CHECK",
@@ -495,25 +553,32 @@ def main():
             },
         )
 
-        smach.StateMachine.add(
-            "REQUEST_APPLY",
-            SpeechToText(
-                node=node,
-                tts=tts,
-                start_msg="Is this correct ? Please say yes or no after the beep sound.",
-                success_msg="OK",
-                timeout_msg="OK. I will go back to the bar counter.",
-                device="cpu",
-                lang="en",
-            ),
-            transitions={
-                "success": "ORDER_CONFIRMATION",
-                "timeout": "MOVE_TO_BARCOUNTER",
-                #'timeout': 'ORDER_CONFIRMATION',
-                "failure": "failure",
-            },
-            remapping={"success_keywards": "apply_keywards"},
-        )
+        # --- REQUEST_APPLY ステートの分岐 ---
+        if SKIP_VOICE_INTARACT:
+            smach.StateMachine.add(
+                "REQUEST_APPLY",
+                smach.CBState(cb=cb_state_skip_request_apply, cb_kwargs={"node": node}),
+                transitions={"success": "ORDER_CONFIRMATION"}
+            )
+        else:
+            smach.StateMachine.add(
+                "REQUEST_APPLY",
+                SpeechToText(
+                    node=node,
+                    tts=tts,
+                    start_msg="Is this correct ? Please say yes or no after the beep sound.",
+                    success_msg="OK",
+                    timeout_msg="OK. I will go back to the bar counter.",
+                    device="cpu",
+                    lang="en",
+                ),
+                transitions={
+                    "success": "ORDER_CONFIRMATION",
+                    "timeout": "MOVE_TO_BARCOUNTER",
+                    "failure": "failure",
+                },
+                remapping={"success_keywards": "apply_keywards"},
+            )
 
         smach.StateMachine.add(
             "ORDER_CONFIRMATION",
@@ -523,7 +588,6 @@ def main():
             ),
             transitions={
                 "apply": "MOVE_TO_BARCOUNTER",
-                #'apply': 'ORDER_REPORT',
                 "reject": "REQUEST_ORDER",
                 "failure": "failure",
             },
@@ -547,25 +611,32 @@ def main():
             transitions={"success": "GRASP_APPLY", "failure": "failure"},
         )
 
-        smach.StateMachine.add(
-            "GRASP_APPLY",
-            SpeechToText(
-                node=node,
-                tts=tts,
-                start_msg="Did you put the item in my hand? say yes or no after the beep sound.",
-                success_msg="OK",
-                timeout_msg="OK. I will grasp it.",
-                device="cpu",
-                lang="en",
-            ),
-            transitions={
-                "success": "GRASP",
-                "timeout": "GRASP_APPLY",
-                #'timeout': 'ORDER_CONFIRMATION',
-                "failure": "failure",
-            },
-            remapping={"success_keywards": "apply_keywards"},
-        )
+        # --- GRASP_APPLY ステートの分岐 ---
+        if SKIP_VOICE_INTARACT:
+            smach.StateMachine.add(
+                "GRASP_APPLY",
+                smach.CBState(cb=cb_state_skip_grasp_apply, cb_kwargs={"node": node}),
+                transitions={"success": "GRASP"}
+            )
+        else:
+            smach.StateMachine.add(
+                "GRASP_APPLY",
+                SpeechToText(
+                    node=node,
+                    tts=tts,
+                    start_msg="Did you put the item in my hand? say yes or no after the beep sound.",
+                    success_msg="OK",
+                    timeout_msg="OK. I will grasp it.",
+                    device="cpu",
+                    lang="en",
+                ),
+                transitions={
+                    "success": "GRASP",
+                    "timeout": "GRASP_APPLY",
+                    "failure": "failure",
+                },
+                remapping={"success_keywards": "apply_keywards"},
+            )
 
         smach.StateMachine.add(
             "GRASP",
@@ -602,24 +673,32 @@ def main():
             transitions={"success": "HANDOVER_CONFIRM", "failure": "failure"},
         )
 
-        smach.StateMachine.add(
-            "HANDOVER_CONFIRM",
-            SpeechToText(
-                node=node,
-                tts=tts,
-                start_msg="Did you receive your order? Please say yes or no after the beep sound.",
-                success_msg="OK",
-                timeout_msg="Sorry, I didn't hear you. Please answer yes or no.",
-                device="cpu",
-                lang="en",
-            ),
-            transitions={
-                "success": "CHECK_HANDOVER_CONFIRMATION",
-                "timeout": "HANDOVER_CONFIRM",
-                "failure": "failure",
-            },
-            remapping={"success_keywards": "apply_keywards"},
-        )
+        # --- HANDOVER_CONFIRM ステートの分岐 ---
+        if SKIP_VOICE_INTARACT:
+            smach.StateMachine.add(
+                "HANDOVER_CONFIRM",
+                smach.CBState(cb=cb_state_skip_handover_confirm, cb_kwargs={"node": node}),
+                transitions={"success": "CHECK_HANDOVER_CONFIRMATION"}
+            )
+        else:
+            smach.StateMachine.add(
+                "HANDOVER_CONFIRM",
+                SpeechToText(
+                    node=node,
+                    tts=tts,
+                    start_msg="Did you receive your order? Please say yes or no after the beep sound.",
+                    success_msg="OK",
+                    timeout_msg="Sorry, I didn't hear you. Please answer yes or no.",
+                    device="cpu",
+                    lang="en",
+                ),
+                transitions={
+                    "success": "CHECK_HANDOVER_CONFIRMATION",
+                    "timeout": "HANDOVER_CONFIRM",
+                    "failure": "failure",
+                },
+                remapping={"success_keywards": "apply_keywards"},
+            )
 
         smach.StateMachine.add(
             "CHECK_HANDOVER_CONFIRMATION",
@@ -651,31 +730,6 @@ def main():
                 "failure": "failure",
             },
         )
-
-        # smach.StateMachine.add(
-        #     "OBJECT_DETECTION",
-        #     Sam3ObjectDetector(
-        #         node=node,
-        #         tts_say=tts.say,
-        #         robot_control=CONROL,
-        #         arm_control=ARM,
-        #     ),
-        #     transitions={
-        #         "success": "OBJECT_GRASPING",
-        #         "timeout": "OBJECT_DETECTION",
-        #         "failure": "failure",
-        #     },
-        #     remapping={"objects_dict": "request_objects_dict"},
-        # )
-
-        # smach.StateMachine.add(
-        #     "OBJECT_GRASPING",
-        #     smach.CBState(
-        #         cb=object_grasping,
-        #         cb_kwargs={"node": node, "arm_control": ARM, "tts_say": SAY},
-        #     ),
-        #     transitions={"success": "success", "failure": "failure"},
-        # )
 
     # execute smach states
     outcome = sm.execute()

@@ -308,7 +308,7 @@ class G1Navigation:
     def move_to_pose(
         self,
         pose,
-        tolerance: float = 0.5,
+        tolerance: float = 0.0,
         reference_frame: str = "map",
         wait: bool = True,
         timeout: float = None,
@@ -469,7 +469,7 @@ class G1Navigation:
         x: float = 0.0,
         y: float = 0.0,
         yaw: float = 0.0,
-        tolerance: float = 0.5,
+        tolerance: float = 0.0,
         reference_frame: str = "map",
         wait: bool = True,
         timeout: float = None,
@@ -522,7 +522,7 @@ class G1Navigation:
         x: float = 0.0,
         y: float = 0.0,
         yaw: float = 0.0,
-        tolerance: float = 0.5,
+        tolerance: float = 0.0,
         wait: bool = True,
         timeout: float = None,
     ) -> bool:
