@@ -33,7 +33,45 @@ import time
 
 @smach.cb_interface(
     outcomes=["success", "timeout", "failure"],
-    input_keys=["abs_pose", "initial_pose"],
+    input_keys=["initial_pose"],
+    output_keys=[],
+)
+def initial_pose_cb(
+    userdata,
+    node: Node,
+    tts_say: TTS.say,
+    navigation: G1Navigation,
+    message: str = "I will move.",
+):
+    try:
+        navigation.move_rel(0.8, 0.0, 0.0, use_odom_only=True, tolerance=0.1)
+        navigation.set_initialpose(
+            pose=[
+                userdata.initial_pose[0],
+                userdata.initial_pose[1],
+                userdata.initial_pose[2],
+            ],
+            max_attempts=100,
+            tolerance=0.65,
+            settle_time=3.0,
+        )
+        tts_say(message)
+        return "success"
+    except Exception as e:
+        node.get_logger().error(
+            f"Error in move_to_location_cb: {e}\n{traceback.format_exc()}"
+        )
+        return "failure"
+
+
+"""
+指定されたロケーションに移動する
+"""
+
+
+@smach.cb_interface(
+    outcomes=["success", "timeout", "failure"],
+    input_keys=["abs_pose"],
     output_keys=[],
 )
 def move_to_pose_cb(
@@ -45,19 +83,6 @@ def move_to_pose_cb(
     message: str = "I will move.",
 ):
     try:
-        tts_say(message)
-        if init_pose:
-            navigation.set_initialpose(
-                pose=[
-                    userdata.initial_pose[0],
-                    userdata.initial_pose[1],
-                    userdata.initial_pose[2],
-                ],
-                max_attempts=100,
-                tolerance=0.3,
-                settle_time=2.5,
-            )
-        time.sleep(2)
         navigation.move_abs(
             userdata.abs_pose[0], userdata.abs_pose[1], userdata.abs_pose[2]
         )
@@ -91,7 +116,7 @@ def main():
     sm = smach.StateMachine(outcomes=["success", "failure"])
 
     # userdatas
-    sm.userdata.initial_pose = [0.1, 0.0, 3.549]
+    sm.userdata.initial_pose = [-0.53, -0.59, -2.81]
     sm.userdata.inspection_point = [-2.399, -2.338, 2.036]
     sm.userdata.exit_point = [0.936, -4.187, 0.435]
     sm.userdata.success_keywards = ["yes", "YES", "Yes"]
@@ -104,10 +129,29 @@ def main():
             "WAIT_DOOR_OPEN",
             WaitDoorOpen(node=node, tts_say=SAY, timeout_sec=20, threshold=1.0),
             transitions={
-                "success": "MOVE_INSPECTION_POINT",
+                "success": "INIT_POSE",
                 "timeout": "WAIT_DOOR_OPEN",
                 "failure": "failure",
             },
+        )
+
+        smach.StateMachine.add(
+            "INIT_POSE",
+            smach.CBState(
+                cb=initial_pose_cb,
+                cb_kwargs={
+                    "node": node,
+                    "tts_say": SAY,
+                    "navigation": NAVIGATION,
+                    "message": "I will go to the inspection point.",
+                },
+            ),
+            transitions={
+                "success": "MOVE_INSPECTION_POINT",
+                "timeout": "failure",
+                "failure": "failure",
+            },
+            # remapping={"initial_pose": "inspection_point"},
         )
 
         smach.StateMachine.add(
@@ -119,7 +163,6 @@ def main():
                     "tts_say": SAY,
                     "navigation": NAVIGATION,
                     "init_pose": True,
-                    "message": "I will go to the inspection point.",
                 },
             ),
             transitions={

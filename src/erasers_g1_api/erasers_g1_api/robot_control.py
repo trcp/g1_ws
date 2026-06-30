@@ -11,7 +11,8 @@ import random
 import rclpy
 
 # msgs
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Pose
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Pose, Twist
+from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
 from shape_msgs.msg import SolidPrimitive
 from amazing_hand_interfaces.srv import HandCommand
@@ -196,6 +197,8 @@ class G1Navigation:
         self.TIMEOUT_SEC = 60.0
         self.FACE_GOAL_TIMEOUT_SEC = 10.0
         self.__current_goal_handle = None
+        self.__latest_odom_pose = None
+        self.__odom_lock = threading.Lock()
 
         # TF2 Setup
         self.tf_buffer = tf_buffer or Buffer()
@@ -215,6 +218,10 @@ class G1Navigation:
         )
         self.__debug_goal_pub = self.node.create_publisher(
             PoseStamped, debug_goal_topic, 10
+        )
+        self.__cmd_vel_pub = self.node.create_publisher(Twist, "/cmd_vel", 10)
+        self.__odom_sub = self.node.create_subscription(
+            Odometry, "/odom", self.__odom_callback, 10
         )
 
     def get_current_pose(self, simple: bool = False):
@@ -237,8 +244,14 @@ class G1Navigation:
             rclpy.spin_once(self.node, timeout_sec=0.1)
             try:
                 transform = self.tf_buffer.lookup_transform(
-                    "map", "base_link", rclpy.time.Time()
+                    # "map", "base_link", rclpy.time.Time()
+                    "map",
+                    "base_link",
+                    time=self.node.get_clock().now(),
+                    timeout=rclpy.duration.Duration(seconds=2.0),
                 )
+                self.node.get_logger().info(f"{str(self.node.get_clock().now())}")
+                self.node.get_logger().info(f"{str(transform)}")
 
                 if simple:
                     x = transform.transform.translation.x
@@ -255,13 +268,297 @@ class G1Navigation:
                     pose.pose.orientation = transform.transform.rotation
                     return pose
             except Exception as e:
-                self.node.get_logger().debug(f"TF Lookup failed: {str(e)}")
+                self.node.get_logger().warn(f"TF Lookup failed: {str(e)}")
                 continue
 
     def __get_pose_yaw(self, pose: PoseStamped) -> float:
         q = pose.pose.orientation
         (_, _, yaw) = euler_from_quaternion([q.x, q.y, q.z, q.w])
         return yaw
+
+    def __odom_callback(self, msg: Odometry):
+        position = msg.pose.pose.position
+        orientation = msg.pose.pose.orientation
+        (_, _, yaw) = euler_from_quaternion(
+            [orientation.x, orientation.y, orientation.z, orientation.w]
+        )
+        with self.__odom_lock:
+            self.__latest_odom_pose = (
+                float(position.x),
+                float(position.y),
+                float(yaw),
+            )
+
+    def __get_current_odom_pose(self):
+        with self.__odom_lock:
+            if self.__latest_odom_pose is None:
+                return None
+            return tuple(self.__latest_odom_pose)
+
+    def __wait_for_odom_pose(self, timeout: float = None):
+        timeout_sec = self.TIMEOUT_SEC if timeout is None else timeout
+        start_time = time.time()
+        while rclpy.ok():
+            current_pose = self.__get_current_odom_pose()
+            if current_pose is not None:
+                return current_pose
+
+            if timeout_sec is not None and timeout_sec > 0:
+                if time.time() - start_time > timeout_sec:
+                    return None
+
+            rclpy.spin_once(self.node, timeout_sec=0.05)
+
+        return None
+
+    def __normalize_angle(self, angle: float) -> float:
+        return math.atan2(math.sin(angle), math.cos(angle))
+
+    def __clamp(self, value: float, min_value: float, max_value: float) -> float:
+        return max(min_value, min(max_value, value))
+
+    def __publish_stop_cmd(self, repeat: int = 5):
+        stop_cmd = Twist()
+        for _ in range(max(1, int(repeat))):
+            self.__cmd_vel_pub.publish(stop_cmd)
+            rclpy.spin_once(self.node, timeout_sec=0.0)
+            time.sleep(0.02)
+
+    def __move_to_pose_odom_only(
+        self,
+        goal_pose: PoseStamped,
+        tolerance: float = 0.0,
+        wait: bool = True,
+        timeout: float = None,
+    ) -> bool:
+        if not wait:
+            self.node.get_logger().warn(
+                "use_odom_only=True does not support wait=False."
+            )
+            return False
+
+        if goal_pose.header.frame_id != "odom":
+            self.node.get_logger().warn(
+                "use_odom_only=True treats goal pose as odom frame, "
+                f"but received frame '{goal_pose.header.frame_id}'."
+            )
+
+        goal_x = float(goal_pose.pose.position.x)
+        goal_y = float(goal_pose.pose.position.y)
+        goal_yaw = self.__get_pose_yaw(goal_pose)
+
+        debug_goal = copy.deepcopy(goal_pose)
+        debug_goal.header.frame_id = "odom"
+        debug_goal.header.stamp = self.node.get_clock().now().to_msg()
+        self.__debug_goal_pub.publish(debug_goal)
+
+        return self.__move_to_odom_goal(
+            goal_x=goal_x,
+            goal_y=goal_y,
+            goal_yaw=goal_yaw,
+            tolerance=tolerance,
+            timeout=timeout,
+        )
+
+    def __move_to_odom_goal(
+        self,
+        goal_x: float,
+        goal_y: float,
+        goal_yaw: float,
+        tolerance: float = 0.0,
+        timeout: float = None,
+    ) -> bool:
+        timeout_sec = self.TIMEOUT_SEC if timeout is None else timeout
+        xy_tolerance = max(float(tolerance or 0.0), 0.05)
+        yaw_tolerance = 0.08
+        control_period = 1.0 / 20.0
+        max_linear = 0.25
+        max_angular = 0.6
+        k_linear = 0.8
+        k_angular = 1.5
+        heading_gate = 0.25
+
+        start_time = time.time()
+        if self.__wait_for_odom_pose(timeout=timeout_sec) is None:
+            self.node.get_logger().error("No /odom received for odom-only navigation.")
+            self.__publish_stop_cmd()
+            return False
+
+        self.node.get_logger().info(
+            "Starting odom-only navigation to "
+            f"({goal_x:.3f}, {goal_y:.3f}, {goal_yaw:.3f})"
+        )
+
+        try:
+            while rclpy.ok():
+                loop_start = time.time()
+                if timeout_sec is not None and timeout_sec > 0:
+                    if loop_start - start_time > timeout_sec:
+                        self.node.get_logger().error("TIMEOUT ODOM-ONLY NAVIGATION!")
+                        return False
+
+                current_pose = self.__get_current_odom_pose()
+                if current_pose is None:
+                    rclpy.spin_once(self.node, timeout_sec=0.01)
+                    continue
+
+                current_x, current_y, current_yaw = current_pose
+                dx = goal_x - current_x
+                dy = goal_y - current_y
+                distance = math.hypot(dx, dy)
+                cmd = Twist()
+
+                if distance > xy_tolerance:
+                    target_heading = math.atan2(dy, dx)
+                    heading_error = self.__normalize_angle(target_heading - current_yaw)
+                    cmd.angular.z = self.__clamp(
+                        k_angular * heading_error, -max_angular, max_angular
+                    )
+                    if abs(heading_error) <= heading_gate:
+                        cmd.linear.x = self.__clamp(
+                            k_linear * distance, 0.2, max_linear
+                        )
+                else:
+                    yaw_error = self.__normalize_angle(goal_yaw - current_yaw)
+                    if abs(yaw_error) <= yaw_tolerance:
+                        self.node.get_logger().info(
+                            "Odom-only navigation reached goal: "
+                            f"position_error={distance:.3f} m, "
+                            f"yaw_error={yaw_error:.3f} rad"
+                        )
+                        return True
+
+                    cmd.angular.z = self.__clamp(
+                        k_angular * yaw_error, -max_angular, max_angular
+                    )
+
+                self.__cmd_vel_pub.publish(cmd)
+                rclpy.spin_once(self.node, timeout_sec=0.0)
+
+                sleep_time = control_period - (time.time() - loop_start)
+                if sleep_time > 0.0:
+                    time.sleep(sleep_time)
+
+        except KeyboardInterrupt:
+            self.node.get_logger().warn(
+                "KeyboardInterrupt: Stopping odom-only navigation..."
+            )
+            return False
+        except Exception as e:
+            self.node.get_logger().error(f"Odom-only navigation error: {str(e)}")
+            return False
+        finally:
+            self.__publish_stop_cmd()
+
+        return False
+
+    def __move_rel_by_odom_displacement(
+        self,
+        x: float = 0.0,
+        y: float = 0.0,
+        yaw: float = 0.0,
+        tolerance: float = 0.0,
+        timeout: float = None,
+    ) -> bool:
+        timeout_sec = self.TIMEOUT_SEC if timeout is None else timeout
+        xy_tolerance = max(float(tolerance or 0.0), 0.05)
+        yaw_tolerance = 0.08
+        control_period = 1.0 / 20.0
+        max_linear = 0.25
+        max_angular = 0.6
+        k_linear = 0.8
+        k_angular = 1.5
+        target_x = float(x)
+        target_y = float(y)
+        target_yaw_delta = float(yaw)
+
+        start_pose = self.__wait_for_odom_pose(timeout=timeout_sec)
+        if start_pose is None:
+            self.node.get_logger().error(
+                "Could not get /odom pose for relative odom-only movement"
+            )
+            self.__publish_stop_cmd()
+            return False
+
+        start_x, start_y, start_yaw = start_pose
+        cos_start = math.cos(start_yaw)
+        sin_start = math.sin(start_yaw)
+        start_time = time.time()
+
+        self.node.get_logger().info(
+            "Starting odom-only relative movement by displacement "
+            f"(x={target_x:.3f}, y={target_y:.3f}, yaw={target_yaw_delta:.3f})"
+        )
+
+        try:
+            while rclpy.ok():
+                loop_start = time.time()
+                if timeout_sec is not None and timeout_sec > 0:
+                    if loop_start - start_time > timeout_sec:
+                        self.node.get_logger().error(
+                            "TIMEOUT ODOM-ONLY RELATIVE MOVEMENT!"
+                        )
+                        return False
+
+                current_pose = self.__get_current_odom_pose()
+                if current_pose is None:
+                    rclpy.spin_once(self.node, timeout_sec=0.01)
+                    continue
+
+                current_x, current_y, current_yaw = current_pose
+                odom_dx = current_x - start_x
+                odom_dy = current_y - start_y
+
+                moved_x = cos_start * odom_dx + sin_start * odom_dy
+                moved_y = -sin_start * odom_dx + cos_start * odom_dy
+                remaining_x = target_x - moved_x
+                remaining_y = target_y - moved_y
+                distance = math.hypot(remaining_x, remaining_y)
+                yaw_delta = self.__normalize_angle(current_yaw - start_yaw)
+                yaw_error = self.__normalize_angle(target_yaw_delta - yaw_delta)
+
+                cmd = Twist()
+                if distance > xy_tolerance:
+                    linear_speed = min(max_linear, k_linear * distance)
+                    cmd.linear.x = linear_speed * remaining_x / distance
+                    cmd.linear.x = self.__clamp(cmd.linear.x, 0.2, max_linear)
+                    cmd.linear.y = linear_speed * remaining_y / distance
+                    # cmd.linear.y = self.__clamp(cmd.linear.y, 0.2, max_linear)
+
+                elif (
+                    abs(target_yaw_delta) > yaw_tolerance
+                    and abs(yaw_error) > yaw_tolerance
+                ):
+                    cmd.angular.z = self.__clamp(
+                        k_angular * yaw_error, -max_angular, max_angular
+                    )
+                else:
+                    self.node.get_logger().info(
+                        "Odom-only relative movement reached target displacement: "
+                        f"moved=({moved_x:.3f}, {moved_y:.3f}), "
+                        f"position_error={distance:.3f} m, yaw_delta={yaw_delta:.3f} rad"
+                    )
+                    return True
+
+                self.__cmd_vel_pub.publish(cmd)
+                rclpy.spin_once(self.node, timeout_sec=0.0)
+
+                sleep_time = control_period - (time.time() - loop_start)
+                if sleep_time > 0.0:
+                    time.sleep(sleep_time)
+
+        except KeyboardInterrupt:
+            self.node.get_logger().warn(
+                "KeyboardInterrupt: Stopping odom-only relative movement..."
+            )
+            return False
+        except Exception as e:
+            self.node.get_logger().error(f"Odom-only relative movement error: {str(e)}")
+            return False
+        finally:
+            self.__publish_stop_cmd()
+
+        return False
 
     def __face_goal_pose(self, goal_pose: PoseStamped) -> bool:
         current_pose = self.get_current_pose(simple=True)
@@ -309,6 +606,7 @@ class G1Navigation:
         reference_frame: str = "map",
         wait: bool = True,
         timeout: float = None,
+        use_odom_only: bool = False,
     ) -> bool:
         """
         与えられた目標姿勢に基づいてロボットを自律移動させる．
@@ -327,6 +625,8 @@ class G1Navigation:
         timeout : float, optional
             ナビゲーションのタイムアウト時間(秒)。指定時間を超えた場合はキャンセルして False を返す。
             デフォルトは None (self.TIMEOUT_SEC を使用)。0 以下の場合はタイムアウトなし。
+        use_odom_only : bool, optional
+            True の場合、machida_navigation を使わず /odom と /cmd_vel による簡易移動を行う。
 
         Returns
         -------
@@ -344,6 +644,14 @@ class G1Navigation:
         else:
             self.node.get_logger().error("pose must be PoseStamped or Pose")
             return False
+
+        if use_odom_only:
+            return self.__move_to_pose_odom_only(
+                goal_pose,
+                tolerance=tolerance,
+                wait=wait,
+                timeout=timeout,
+            )
 
         # Transform to map frame if not already in map frame
         if goal_pose.header.frame_id != "map":
@@ -472,6 +780,7 @@ class G1Navigation:
         reference_frame: str = "map",
         wait: bool = True,
         timeout: float = None,
+        use_odom_only: bool = False,
     ) -> bool:
         """
         基準フレームでの絶対座標を指定してロボットを自律移動させる．
@@ -493,6 +802,8 @@ class G1Navigation:
             移動完了まで処理をブロックするかどうか。デフォルトは True。
         timeout : float, optional
             ナビゲーションのタイムアウト時間(秒)。デフォルトは None (タイムアウトなし)。
+        use_odom_only : bool, optional
+            True の場合、x, y, yaw を odom 座標系の絶対目標として扱い簡易移動する。
 
         Returns
         -------
@@ -500,7 +811,7 @@ class G1Navigation:
             ナビゲーションが成功した場合は True、失敗・キャンセルされた場合は False。
         """
         pose = PoseStamped()
-        pose.header.frame_id = reference_frame
+        pose.header.frame_id = "odom" if use_odom_only else reference_frame
         pose.header.stamp = self.node.get_clock().now().to_msg()
         pose.pose.position.x = float(x)
         pose.pose.position.y = float(y)
@@ -518,6 +829,7 @@ class G1Navigation:
             reference_frame=reference_frame,
             wait=wait,
             timeout=timeout,
+            use_odom_only=use_odom_only,
         )
 
     def move_rel(
@@ -528,6 +840,7 @@ class G1Navigation:
         tolerance: float = 0.0,
         wait: bool = True,
         timeout: float = None,
+        use_odom_only: bool = False,
     ) -> bool:
         """
         ロボットの現在の位置・姿勢からの相対座標で自律移動させる．
@@ -547,12 +860,29 @@ class G1Navigation:
             移動完了まで処理をブロックするかどうか。デフォルトは True。
         timeout : float, optional
             ナビゲーションのタイムアウト時間(秒)。デフォルトは None (タイムアウトなし)。
+        use_odom_only : bool, optional
+            True の場合、現在 odom 姿勢からのロボット座標系相対量として簡易移動する。
 
         Returns
         -------
         bool
             ナビゲーションが成功した場合は True、失敗・キャンセルされた場合は False。
         """
+        if use_odom_only:
+            if not wait:
+                self.node.get_logger().warn(
+                    "use_odom_only=True does not support wait=False."
+                )
+                return False
+
+            return self.__move_rel_by_odom_displacement(
+                x=x,
+                y=y,
+                yaw=yaw,
+                tolerance=tolerance,
+                timeout=timeout,
+            )
+
         current_pose = self.get_current_pose(simple=True)
         if current_pose is None:
             self.node.get_logger().error(
@@ -623,7 +953,7 @@ class G1Navigation:
             msg.pose.pose.position.y = float(pose[1])
             # TODO: 変数として受け取るような仕様のほうがいいかも？
             # 1.3 is unitree g1 lidar height from ground level
-            msg.pose.pose.position.z = 1.0
+            msg.pose.pose.position.z = 0.0
 
             q = quaternion_from_euler(0, 0, pose[2])
             msg.pose.pose.orientation.x = q[0]
@@ -689,7 +1019,7 @@ class G1Navigation:
             if distance_error <= tolerance:
                 self.node.get_logger().info(
                     "Initial pose verified: "
-                    f"position_error={distance_error:.3f} m <= {tolerance:.3f} m, "
+                    f"position_error={distance_error:.3f} m <= {tolerance:.3f} m, cx {current_x:.3f} cy {current_y:.3f}"
                     f"yaw_error={yaw_error:.3f} rad"
                 )
                 return True
@@ -697,7 +1027,8 @@ class G1Navigation:
             self.node.get_logger().warn(
                 "Initial pose is outside tolerance after publish: "
                 f"position_error={distance_error:.3f} m > {tolerance:.3f} m, "
-                f"yaw_error={yaw_error:.3f} rad"
+                f"yaw_error={yaw_error:.3f} rad "
+                f"cx {current_x:.3f} cy {current_y:.3f}"
             )
 
         self.node.get_logger().error(

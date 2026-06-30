@@ -17,6 +17,7 @@
   <depend>amazing_hand_interfaces</depend>
   <depend>g1_srvs</depend>
   <depend>g1_description</depend>
+  <depend>nav_msgs</depend>
   <depend>ament_index_python</depend>
   <depend>tf_transformations</depend>
   <exec_depend>g1_moveit</exec_depend>
