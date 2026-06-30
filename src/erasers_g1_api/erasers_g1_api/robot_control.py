@@ -7,6 +7,7 @@ except AttributeError:
 
 #!/usr/bin/env python3
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 import random
 import rclpy
 
@@ -199,6 +200,8 @@ class G1Navigation:
         self.__current_goal_handle = None
         self.__latest_odom_pose = None
         self.__odom_lock = threading.Lock()
+        self.__latest_localization_pose = None
+        self.__localization_lock = threading.Lock()
 
         # TF2 Setup
         self.tf_buffer = tf_buffer or Buffer()
@@ -223,8 +226,20 @@ class G1Navigation:
         self.__odom_sub = self.node.create_subscription(
             Odometry, "/odom", self.__odom_callback, 10
         )
+        localization_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self.__localization_pose_sub = self.node.create_subscription(
+            PoseWithCovarianceStamped,
+            "/localization/pose_with_covariance",
+            self.__localization_pose_callback,
+            localization_qos,
+        )
 
-    def get_current_pose(self, simple: bool = False):
+    def get_current_pose(self, simple: bool = False, use_topic: bool = True):
         """
         現在のロボットの位置姿勢を取得する．
 
@@ -233,6 +248,10 @@ class G1Navigation:
         simple : bool, optional
             True の場合、[x, y, yaw] の1次元リストとして現在位置を出力する。
             False の場合、PoseStamped 型で現在位置を出力する。デフォルトは False。
+        use_topic : bool, optional
+            True の場合、/localization/pose_with_covariance の最新値から現在位置を取得する。
+            False の場合、TF の map -> base_link 変換から現在位置を取得する。
+            デフォルトは True。
 
         Returns
         -------
@@ -240,41 +259,82 @@ class G1Navigation:
             simple=False の場合はマップ座標系基準の PoseStamped。
             simple=True の場合は [x, y, yaw] を格納したリスト。
         """
-        while rclpy.ok():
-            rclpy.spin_once(self.node, timeout_sec=0.1)
-            try:
-                transform = self.tf_buffer.lookup_transform(
-                    # "map", "base_link", rclpy.time.Time()
-                    "map",
-                    "base_link",
-                    time=self.node.get_clock().now(),
-                    timeout=rclpy.duration.Duration(seconds=2.0),
-                )
-                self.node.get_logger().info(f"{str(self.node.get_clock().now())}")
-                self.node.get_logger().info(f"{str(transform)}")
+        if use_topic:
+            last_warn_time = 0.0
+            while rclpy.ok():
+                rclpy.spin_once(self.node, timeout_sec=0.05)
+                pose = self.__get_current_localization_pose()
+                if pose is not None:
+                    return self.__format_current_pose(pose, simple)
 
-                if simple:
-                    x = transform.transform.translation.x
-                    y = transform.transform.translation.y
-                    q = transform.transform.rotation
-                    (_, _, yaw) = euler_from_quaternion([q.x, q.y, q.z, q.w])
-                    return [x, y, yaw]
-                else:
-                    pose = PoseStamped()
-                    pose.header = transform.header
-                    pose.pose.position.x = transform.transform.translation.x
-                    pose.pose.position.y = transform.transform.translation.y
-                    pose.pose.position.z = transform.transform.translation.z
-                    pose.pose.orientation = transform.transform.rotation
-                    return pose
+                now = time.time()
+                if now - last_warn_time >= 2.0:
+                    self.node.get_logger().warn(
+                        "Waiting for /localization/pose_with_covariance ..."
+                    )
+                    last_warn_time = now
+            return None
+
+        last_warn_time = 0.0
+        while rclpy.ok():
+            rclpy.spin_once(self.node, timeout_sec=0.01)
+            try:
+                if not self.tf_buffer.can_transform(
+                    "map", "base_link", rclpy.time.Time()
+                ):
+                    now = time.time()
+                    if now - last_warn_time >= 2.0:
+                        self.node.get_logger().warn(
+                            "Waiting for TF transform map -> base_link ..."
+                        )
+                        last_warn_time = now
+                    continue
+
+                transform = self.tf_buffer.lookup_transform(
+                    "map", "base_link", rclpy.time.Time()
+                )
+                pose = PoseStamped()
+                pose.header = transform.header
+                pose.pose.position.x = transform.transform.translation.x
+                pose.pose.position.y = transform.transform.translation.y
+                pose.pose.position.z = transform.transform.translation.z
+                pose.pose.orientation = transform.transform.rotation
+                return self.__format_current_pose(pose, simple)
             except Exception as e:
                 self.node.get_logger().warn(f"TF Lookup failed: {str(e)}")
                 continue
+
+        return None
+
+    def __format_current_pose(self, pose: PoseStamped, simple: bool = False):
+        if simple:
+            q = pose.pose.orientation
+            (_, _, yaw) = euler_from_quaternion([q.x, q.y, q.z, q.w])
+            return [
+                pose.pose.position.x,
+                pose.pose.position.y,
+                yaw,
+            ]
+
+        return copy.deepcopy(pose)
 
     def __get_pose_yaw(self, pose: PoseStamped) -> float:
         q = pose.pose.orientation
         (_, _, yaw) = euler_from_quaternion([q.x, q.y, q.z, q.w])
         return yaw
+
+    def __localization_pose_callback(self, msg: PoseWithCovarianceStamped):
+        pose = PoseStamped()
+        pose.header = copy.deepcopy(msg.header)
+        pose.pose = copy.deepcopy(msg.pose.pose)
+        with self.__localization_lock:
+            self.__latest_localization_pose = pose
+
+    def __get_current_localization_pose(self):
+        with self.__localization_lock:
+            if self.__latest_localization_pose is None:
+                return None
+            return copy.deepcopy(self.__latest_localization_pose)
 
     def __odom_callback(self, msg: Odometry):
         position = msg.pose.pose.position
@@ -949,10 +1009,12 @@ class G1Navigation:
 
             msg = PoseWithCovarianceStamped()
             msg.header.frame_id = reference_frame
+            msg.header.stamp = self.node.get_clock().now().to_msg()
             msg.pose.pose.position.x = float(pose[0])
             msg.pose.pose.position.y = float(pose[1])
             # TODO: 変数として受け取るような仕様のほうがいいかも？
             # 1.3 is unitree g1 lidar height from ground level
+            # msg.pose.pose.position.z = 0.75
             msg.pose.pose.position.z = 0.0
 
             q = quaternion_from_euler(0, 0, pose[2])

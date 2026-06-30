@@ -116,7 +116,7 @@ def main():
     sm = smach.StateMachine(outcomes=["success", "failure"])
 
     # userdatas
-    sm.userdata.initial_pose = [-0.53, -0.59, -2.81]
+    sm.userdata.initial_pose = [-0.73, -0.59, -2.81]
     sm.userdata.inspection_point = [-2.399, -2.338, 2.036]
     sm.userdata.exit_point = [0.936, -4.187, 0.435]
     sm.userdata.success_keywards = ["yes", "YES", "Yes"]
