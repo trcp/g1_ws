@@ -82,6 +82,7 @@ public:
     declare_parameter("move_servo_timeout_sec",  2.0);
     declare_parameter("navigation_start_tilt",   0.7);
     declare_parameter("navigation_finish_tilt",  0.0);
+    declare_parameter("use_head_camera",         true);
 
     map_frame_        = get_parameter("map_frame").as_string();
     robot_base_frame_ = get_parameter("robot_base_frame").as_string();
@@ -367,6 +368,13 @@ private:
   {
     if (!is_active_navigation(nav_id)) return;
 
+    if (!get_parameter("use_head_camera").as_bool()) {
+      RCLCPP_INFO(get_logger(),
+        "Head camera is disabled; starting navigation without head tilt-up");
+      request_plan(nav_id, goal);
+      return;
+    }
+
     if (!move_servo_client_->service_is_ready()) {
       RCLCPP_WARN(get_logger(),
         "Service %s not available; continuing navigation without head tilt-up",
@@ -526,6 +534,13 @@ private:
 
   void send_finish_servo(const std::string & reason)
   {
+    if (!get_parameter("use_head_camera").as_bool()) {
+      RCLCPP_INFO(get_logger(),
+        "Head camera is disabled; skipping head tilt restore after %s",
+        reason.c_str());
+      return;
+    }
+
     const double tilt = get_parameter("navigation_finish_tilt").as_double();
 
     if (!move_servo_client_->service_is_ready()) {
