@@ -7,8 +7,9 @@ services:
     network_mode: "host"
     volumes:
       - ./yolo_human_node.py:/app/yolo_human_node.py
-      - ./clothing_analyzer.py:/app/clothing_analyzer.py
+      - ./extract_person_features_off.py:/app/extract_person_features_off.py
       - ./extract_person_features.py:/app/extract_person_features.py
+      - ./yoloe-26x-seg.pt:/app/yoloe-26x-seg.pt
       - ~/.cache:/root/.cache
       - /home/roboworks/g1_ws/cyclonedds/cyclonedds.katana.xml:/tmp/cyclonedds.xml
     env_file:
@@ -20,6 +21,21 @@ services:
     restart: unless-stopped
 
     # GPU使用
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  local_vlm:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: local_vlm_server
+    network_mode: "host"
+    volumes:
+      - ~/.cache:/root/.cache
+    command: ["-hf", "LiquidAI/LFM2.5-VL-1.6B-Extract-GGUF:Q8_0", "--host", "0.0.0.0", "--port", "8000"]
     deploy:
       resources:
         reservations:

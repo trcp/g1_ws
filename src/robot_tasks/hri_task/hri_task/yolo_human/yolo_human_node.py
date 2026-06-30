@@ -32,13 +32,18 @@ import math
 import sys
 
 from ultralytics import YOLOE
-from clothing_analyzer import ClothingAnalyzer
 
 try:
     from extract_person_features import extract_person_features
-except ImportError as e:
+except Exception as e:
     extract_person_features = None
     print(f"Failed to import extract_person_features: {e}")
+
+try:
+    from extract_person_features_off import extract_person_features as extract_person_features_offline
+except Exception as e:
+    extract_person_features_offline = None
+    print(f"Failed to import extract_person_features_offline: {e}")
 
 class YoloHumanNode(Node):
     def __init__(self):
@@ -58,6 +63,15 @@ class YoloHumanNode(Node):
 
         self.get_logger().info(f"Loading YOLO model from {model_path}...")
         self.model = YOLOE(model_path)
+        
+        # Open-Vocabulary configuration (言語司令)
+        self.target_classes = ["person"]
+        try:
+            self.model.set_classes(self.target_classes)
+            self.get_logger().info(f"Initialized with classes: {self.target_classes}")
+        except AttributeError:
+            self.get_logger().info("Model does not support set_classes, continuing with standard classes.")
+
         self.get_logger().info("Model loaded successfully.")
 
         self.bridge = CvBridge()
@@ -72,20 +86,6 @@ class YoloHumanNode(Node):
         self.online_features_cache = None
         self.api_fetching = False
         self.api_disabled = False
-
-        try:
-            self.analyzer = ClothingAnalyzer(device="cuda")
-            self.get_logger().info("ClothingAnalyzer initialized.")
-        except Exception as e:
-            self.analyzer = None
-            self.get_logger().error(f"Failed to initialize ClothingAnalyzer: {e}")
-        try:
-            self.model.set_classes(self.target_classes)
-            self.get_logger().info("YOLO-World set_classes OK.")
-        except AttributeError:
-            self.get_logger().info("Standard YOLO model (set_classes not applicable).")
-        except Exception as e:
-            self.get_logger().warn(f"set_classes failed: {e}")
 
         if self.is_active:
             self.get_logger().info("START_ACTIVE=True: 起動直後から検出開始")
@@ -159,7 +159,7 @@ class YoloHumanNode(Node):
                 self.target_classes = cmd_data["classes"]
                 try:
                     self.model.set_classes(self.target_classes)
-                except:
+                except AttributeError:
                     pass
                 self.get_logger().info(f"Target classes updated: {self.target_classes}")
         except json.JSONDecodeError:
@@ -199,6 +199,12 @@ class YoloHumanNode(Node):
         results = self.model.track(cv_rgb, device=0, verbose=False,
                                    persist=True, tracker="bytetrack.yaml")
 
+        # Fallback: if tracker dropped all boxes, try predict directly
+        if len(results) > 0 and len(results[0].boxes) == 0:
+            pred_res = self.model.predict(cv_rgb, device=0, verbose=False)
+            if len(pred_res) > 0 and len(pred_res[0].boxes) > 0:
+                results = pred_res
+
         detections = []
         debug_img = cv_rgb.copy()
 
@@ -209,6 +215,8 @@ class YoloHumanNode(Node):
             for box in r.boxes:
                 cls_id = int(box.cls[0])
                 label = self.model.names[cls_id]
+                if label == "0" or cls_id == 0:
+                    label = "person"
                 conf = float(box.conf[0])
 
                 # Filter by target classes
@@ -270,37 +278,36 @@ class YoloHumanNode(Node):
             x1, y1, x2, y2 = det_info['bbox']
             features = None
 
-            if self.feature_mode == "online" and not self.api_disabled and extract_person_features is not None:
+            if self.feature_mode in ["online", "offline"]:
                 if self.online_features_cache is None and not self.api_fetching:
                     self.api_fetching = True
                     crop = cv_rgb[y1:y2, x1:x2].copy()
-                    
+
                     def fetch():
                         try:
-                            self.get_logger().info("Calling OpenAI API for the closest person (timeout 8.0s)...")
-                            res = extract_person_features(crop, timeout=8.0)
+                            if self.feature_mode == "online" and not self.api_disabled and extract_person_features:
+                                self.get_logger().info("Calling OpenAI API for the closest person (timeout 8.0s)...")
+                                res = extract_person_features(crop, timeout=8.0)
+                            elif extract_person_features_offline:
+                                self.get_logger().info("Calling Local VLM for the closest person (timeout 30.0s)...")
+                                res = extract_person_features_offline(crop, timeout=30.0)
+                            else:
+                                res = {"error": "NO_EXTRACTOR_AVAILABLE"}
+                            
                             self.online_features_cache = res
-                            self.get_logger().info("OpenAI API call succeeded. Caching results.")
+                            self.get_logger().info(f"{self.feature_mode.upper()} VLM call succeeded. Caching results.")
                         except Exception as e:
-                            self.get_logger().error(f"OpenAI API failed: {e}. Returning failure status.")
+                            self.get_logger().error(f"VLM extraction failed: {e}. Returning failure status.")
                             self.online_features_cache = {"error": "API_FAILED"}
                         finally:
                             self.api_fetching = False
-                            
+
                     import threading
                     threading.Thread(target=fetch).start()
-                
+
                 if self.online_features_cache is not None:
                     features = self.online_features_cache
 
-            # Fallback to offline ONLY if explicitly offline or API is permanently disabled
-            if features is None and self.analyzer:
-                if self.feature_mode == "offline" or self.api_disabled:
-                    try:
-                        features = self.analyzer.analyze_attributes(cv_rgb, (x1, y1, x2, y2), mask=None)
-                    except Exception as e:
-                        self.get_logger().error(f"Offline feature extraction failed: {e}")
-                        features = {}
 
             if features is not None:
                 detections[closest_det_idx]['features'] = features

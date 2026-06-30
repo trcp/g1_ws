@@ -1,0 +1,8 @@
+
+extract_person_features_off.py使用時
+タスク実行前に別ターミナルで以下を実行しておく:
+docker run --gpus all -p 8000:8000 \
+  -v ~/.cache:/root/.cache \
+  ghcr.io/ggml-org/llama.cpp:server-cuda \
+  -hf LiquidAI/LFM2.5-VL-1.6B-Extract-GGUF:Q8_0 \
+  --host 0.0.0.0 --port 8000

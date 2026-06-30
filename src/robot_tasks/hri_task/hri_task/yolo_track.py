@@ -29,6 +29,13 @@ CAMERA_OFFSET_Y = 0.0
 # 追跡
 TRACKING_GATE = 0.5    # 追跡ゲート距離 (m) (他人に乗り移らないように厳しく)
 MAX_LOST_FRAMES = 15   # 連続ロストフレーム上限
+MAHA_GATE = 5.99       # マハラノビス距離閾値 (χ²分布 自由度2, 95%点)
+TENTATIVE_ID_CONFIRM = 3  # 仮マッチIDの確定に必要な連続フレーム数
+
+# 到着判定
+REACHED_DISTANCE_TOLERANCE = 0.12  # 距離トレランス ±12cm (旧: ±20cm)
+REACHED_STABLE_SEC = 3.5           # 安定維持時間 (旧: 2.0s)
+REACHED_MIN_TRACKING_SEC = 5.0     # 追跡開始後この時間はREACHED判定を禁止
 
 # LiDAR 障害物回避 (クラスタリングは行わない)
 # ※G1はMid360が逆向き(丸い部分が下)についているため、Z軸は下向き正、Y軸は右向き正となる
@@ -43,7 +50,7 @@ OBS_COUNT_THRESHOLD = 20  # 障害物判定の点群数閾値
 AVOID_TURN = 0.6       # 回避旋回速度 (rad/s)
 
 # 速度制御
-FOLLOW_DISTANCE = 0.8  # 維持する距離 (m)
+FOLLOW_DISTANCE = 1.2  # 維持する距離 (m)
 LINEAR_GAIN = 0.25
 ANGULAR_GAIN = 1.2
 LINEAR_MAX = 0.4
@@ -109,7 +116,7 @@ class YoloHumanTracker(Node):
         # LiDAR (障害物回避専用)
         self.sub_pointcloud = self.create_subscription(
             PointCloud2,
-            '/yolo_human/pointcloud',
+            '/utlidar/cloud_livox_mid360',
             self.lidar_callback,
             10
         )
@@ -127,8 +134,19 @@ class YoloHumanTracker(Node):
         self.search_start_time = time.time()
         self.lost_time_start = None
         self.reached_start_time = None
+        self.tracking_start_time = None  # 追跡開始時刻（REACHED判定の最低時間用）
         self.latest_cmd = Twist()
         self.target_track_id = None
+        self.lost_frames = 0
+        self.latest_lidar_person_pos = None
+        self.latest_lidar_person_time = 0.0
+        
+        # 複数人対応: ID乗り移り防止
+        self._tentative_tid = None
+        self._tentative_tid_count = 0
+        
+        # 複数人対応: 外見一貫性チェック
+        self.target_bbox_width = 0.0
         
         # 空間の制限情報（LiDARから取得）
         self.min_left_y = 1.0
@@ -152,7 +170,7 @@ class YoloHumanTracker(Node):
         error = dist - FOLLOW_DISTANCE
 
         # --- 前進速度（距離に応じてなめらかに減速） ---
-        if abs(error) < 0.15:
+        if abs(error) < 0.08:  # デッドバンド縮小 (旧: 0.15)
             linear = 0.0
         elif error > 0:
             # 0.8m の誤差（距離1.6m）でMAXスピードになるようにキビキビ動かす
@@ -163,7 +181,12 @@ class YoloHumanTracker(Node):
             linear = -LINEAR_MAX * min(abs(error) * 0.5, 1.0)
 
         # --- 旋回速度 ---
-        angular = ANGULAR_GAIN * angle
+        # 距離が近いほど旋回ゲインを上げて素早く追従する（カメラ視野から外れないようにする）
+        if dist < 1.3:
+            dynamic_angular_gain = ANGULAR_GAIN * (1.3 / max(dist, 0.6))
+        else:
+            dynamic_angular_gain = ANGULAR_GAIN
+        angular = dynamic_angular_gain * angle
 
         linear = np.clip(linear, -LINEAR_MAX, LINEAR_MAX)
         angular = np.clip(angular, -ANGULAR_MAX, ANGULAR_MAX)
@@ -193,9 +216,11 @@ class YoloHumanTracker(Node):
         min_left_y = 1.0
         max_right_y = -1.0
         min_front_x = 1.5
+        self.front_points_count = 0
         
         px, py = self.ekf.x[:2]
         is_tracking = (self.state == 'TRACKING')
+        person_points = []
 
         for p in pc2.read_points(msg, skip_nans=True, field_names=("x", "y", "z")):
             x, y_raw, z_raw = p[0], p[1], p[2]
@@ -204,56 +229,63 @@ class YoloHumanTracker(Node):
             y = -y_raw
             z = z_raw
 
+            # 無効なゼロ値点群を無視
+            if x == 0.0 and y == 0.0 and z == 0.0:
+                continue
+
+            # 自己点群（ロボット自身の顔や体）の除外
+            # LiDARの中心から半径20cm以内の点群は完全に無視する
+            if np.hypot(x, y) < 0.20:
+                continue
+
             # ターゲットの除外判定（追跡中の人を障害物として認識しないようにする）
             if is_tracking:
-                # EKFの座標はカメラ基準なので、LiDAR基準の点群と比較するためにオフセットを足す
-                px_lidar = px + CAMERA_OFFSET_X
-                py_lidar = py + CAMERA_OFFSET_Y
-                dist_to_person = np.hypot(x - px_lidar, y - py_lidar)
-                # ターゲットの予測位置から半径60cm以内の点群は「ターゲット自身」とみなして障害物から除外
-                if dist_to_person < 0.6:
+                person_dist = np.hypot(px, py)
+                # 人までの距離より 0.3m 手前より遠い点群は、人自身か人の奥にある背景なので、完全に障害物から除外する
+                if x > person_dist - 0.3:
+                    if LIDAR_Z_MIN <= z <= LIDAR_Z_MAX:
+                        person_points.append((x, y))
                     continue
 
             # zは下向きが正。z=1.2mあたりが床面になるため、1.05m等でカットして床を障害物と誤認しないようにする
             if LIDAR_Z_MIN <= z <= LIDAR_Z_MAX:
-                if 0.1 < x < 1.0: # 1.0m前方までの障害物をチェック
-                    if 0.0 <= y <= 1.0:
-                        min_left_y = min(min_left_y, y)
-                    elif -1.0 <= y < 0.0:
-                        max_right_y = max(max_right_y, y)
-                    
-                    if abs(y) <= 0.35:
+                if 0.25 < x < 1.0: # 足元(0.25m未満)の自分の足や近すぎるノイズを無視
+                    # ゾーン（正面・左・右）を明確に分割して誤認を防ぐ
+                    if abs(y) <= 0.25:
+                        # 正面はロボットの幅(約0.5m)のみを見る。
+                        self.front_points_count += 1
                         min_front_x = min(min_front_x, x)
+                    elif 0.25 < y <= 1.0:
+                        min_left_y = min(min_left_y, y)
+                    elif -1.0 <= y < -0.25:
+                        max_right_y = max(max_right_y, y)
+
+        # ターゲット（人）のLiDAR点群重心を計算してキャッシュ
+        if is_tracking and len(person_points) >= 10:
+            xs = [pt[0] for pt in person_points]
+            ys = [pt[1] for pt in person_points]
+            mean_x_lidar = float(np.mean(xs))
+            mean_y_lidar = float(np.mean(ys))
+            mean_x_cam = mean_x_lidar - CAMERA_OFFSET_X
+            mean_y_cam = mean_y_lidar - CAMERA_OFFSET_Y
+            self.latest_lidar_person_pos = np.array([mean_x_cam, mean_y_cam])
+            self.latest_lidar_person_time = time.time()
+        else:
+            self.latest_lidar_person_pos = None
 
         # ----------------------------------------------------
-        # 回避ベクトルの計算（左右の空きスペースを均等に通るロジック）
-        # ロボット横幅53cmなので、隙間が0.6m以上あれば真ん中を通れる
+        # 大雑把な回避ベクトルの計算
         # ----------------------------------------------------
-        gap_width = min_left_y - max_right_y
-        gap_center = (min_left_y + max_right_y) / 2.0
-        
         self.emergency_brake = False
         self.avoid_lateral = 0.0
 
-        if min_front_x < 0.8:
-            # 正面に障害物がある場合
-            if gap_width < 0.6:
-                # 隙間が60cm未満なら通れないので強制ストップ
-                self.emergency_brake = True
-                self.get_logger().warn(f"隙間が狭すぎます！(幅:{gap_width:.2f}m) 強制ストップ")
+        # 正面に障害物があり、かつノイズ(1点など)ではない場合
+        if min_front_x < 0.8 and self.front_points_count > 10:
+            # 単純に左と右の空いているスペースを比較し、広い方へカニ歩きする
+            if min_left_y > abs(max_right_y):
+                self.avoid_lateral = 0.25  # 左へ避ける
             else:
-                # 通れる隙間があるなら、隙間の中心(gap_center)に向かってカニ歩き
-                if gap_center > 0.05:
-                    self.avoid_lateral = 0.25  # 左へ
-                elif gap_center < -0.05:
-                    self.avoid_lateral = -0.25 # 右へ
-        else:
-            # 正面にすぐぶつかる物はないが、横が近すぎる場合は少し真ん中に寄る
-            if min_left_y < 0.35 or max_right_y > -0.35:
-                if gap_center > 0.05:
-                    self.avoid_lateral = 0.15
-                elif gap_center < -0.05:
-                    self.avoid_lateral = -0.15
+                self.avoid_lateral = -0.25 # 右へ避ける
                     
         # 空間の状態を保存（追跡ロジックの3軸制御で使用）
         self.min_left_y = min_left_y
@@ -267,6 +299,7 @@ class YoloHumanTracker(Node):
         self.last_step_time = now
 
         clusters = []
+        detections = []
         try:
             detections = json.loads(msg.data)
             for det in detections:
@@ -299,19 +332,20 @@ class YoloHumanTracker(Node):
                 x = dz * np.cos(angle_ros)
                 y = dz * np.sin(angle_ros)
                 tid = det.get('track_id', -1)
-                clusters.append((np.array([x, y]), tid))
+                bwr = det.get('bbox_width_ratio', 0.0)
+                clusters.append((np.array([x, y]), tid, bwr))
         except json.JSONDecodeError:
             pass
 
         # 状態遷移
         if self.state == 'SEARCHING':
-            self._handle_searching(clusters)
+            self._handle_searching(clusters, detections=detections)
         elif self.state == 'TRACKING':
             self._handle_tracking(clusters)
         elif self.state == 'LOST':
             self._handle_lost(clusters)
 
-    def _handle_searching(self, clusters):
+    def _handle_searching(self, clusters, detections=None):
         elapsed = time.time() - self.search_start_time
         if elapsed < YOLO_SEARCH_SEC:
             return  # 蓄積待ち
@@ -326,7 +360,7 @@ class YoloHumanTracker(Node):
         best_tid = -1
         min_dist = float('inf')
 
-        for pos, tid in clusters:
+        for pos, tid, bwr in clusters:
             dist = np.linalg.norm(pos)
             if dist < min_dist:
                 min_dist = dist
@@ -339,19 +373,44 @@ class YoloHumanTracker(Node):
             self.ekf.x[2:] = 0.0
             self.ekf.P = np.diag([0.2, 0.2, 1.0, 1.0])
             self.state = 'TRACKING'
+            self.tracking_start_time = time.time()  # 追跡開始時刻を記録
             self.target_track_id = best_tid if best_tid >= 0 else None
-            self.get_logger().info(f"ターゲット決定! [{best_cluster[0]:.2f}, {best_cluster[1]:.2f}] track_id={best_tid}")
+            self._tentative_tid = None
+            self._tentative_tid_count = 0
+            # bbox_width_ratio を記録（外見一貫性チェック用）
+            # best_cluster に対応するdetectionから取得
+            for det in detections:
+                if det.get('label') != 'person':
+                    continue
+                tid = det.get('track_id', -1)
+                if tid == best_tid or (best_tid < 0):
+                    self.target_bbox_width = det.get('bbox_width_ratio', 0.0)
+                    break
+            self.get_logger().info(f"ターゲット決定! [{best_cluster[0]:.2f}, {best_cluster[1]:.2f}] track_id={best_tid} bwr={self.target_bbox_width:.3f}")
 
     def _handle_tracking(self, clusters):
         self.ekf.predict()
 
+        # LiDARによる観測補完用データの取得
+        lidar_pos = None
+        if hasattr(self, 'latest_lidar_person_pos') and self.latest_lidar_person_pos is not None:
+            if time.time() - self.latest_lidar_person_time < 0.5:
+                lidar_pos = self.latest_lidar_person_pos
+
         if len(clusters) == 0:
-            self.lost_frames += 1
-            self.get_logger().warn(f"YOLO検出0件 lost={self.lost_frames} (予測軌道で補完中)")
-            # 見失っていてもEKFの予測軌道に従って動かす
-            lin, ang = self.compute_twist(self.ekf.x[:2])
-            self._apply_cmd(lin, ang, matched=False)
-            self._check_lost()
+            if lidar_pos is not None:
+                self.ekf.update(lidar_pos)
+                self.lost_frames = 0
+                self.get_logger().info(f"YOLO検出0件ですが、LiDARで追従中: [{lidar_pos[0]:.2f}, {lidar_pos[1]:.2f}]")
+                lin, ang = self.compute_twist(self.ekf.x[:2])
+                self._apply_cmd(lin, ang, matched=True)
+            else:
+                self.lost_frames += 1
+                self.get_logger().warn(f"YOLO検出0件 lost={self.lost_frames} (予測軌道で補完中)")
+                # 見失っていてもEKFの予測軌道に従って動かす
+                lin, ang = self.compute_twist(self.ekf.x[:2])
+                self._apply_cmd(lin, ang, matched=False)
+                self._check_lost()
             return
 
         # --- track_id ベースのマッチング ---
@@ -360,33 +419,77 @@ class YoloHumanTracker(Node):
 
         # 優先度 1: track_id が一致する人を探す
         if self.target_track_id is not None:
-            for pos, tid in clusters:
+            for pos, tid, bwr in clusters:
                 if tid == self.target_track_id:
                     best_cluster = pos
                     matched_tid = tid
                     break
 
-        # 優先度 2: track_idが見つからない場合、EKF予測位置に最も近い人を使う
+        # 優先度 2: track_idが見つからない場合、マハラノビス距離＋外見スコアで最適な人を選ぶ
         if best_cluster is None:
             pred_pos = self.ekf.x[:2]
-            dists = [np.linalg.norm(pos - pred_pos) for pos, _ in clusters]
-            best_idx = int(np.argmin(dists))
-            best_dist = dists[best_idx]
+            best_idx = None
+            best_score = float('inf')
 
-            if best_dist > TRACKING_GATE:
-                self.lost_frames += 1
-                self.get_logger().warn(
-                    f"最近の人が遠い (d={best_dist:.2f}m > gate={TRACKING_GATE}m) lost={self.lost_frames}")
-                lin, ang = self.compute_twist(self.ekf.x[:2])
-                self._apply_cmd(lin, ang, matched=False)
-                self._check_lost()
-                return
+            for i, (pos, tid, bwr) in enumerate(clusters):
+                # マハラノビス距離（EKFの不確実性を考慮した統計的距離）
+                maha = self.ekf.mahalanobis(pos)
+                score = maha
+                
+                # 外見一貫性: bbox_width_ratio が大きくずれている場合はペナルティ
+                if self.target_bbox_width > 0.01:
+                    bwr_diff = abs(bwr - self.target_bbox_width)
+                    if bwr_diff > 0.15:
+                        score *= 3.0  # 体格が大幅に異なる → 別人の可能性
+                    elif bwr_diff > 0.08:
+                        score *= 1.5  # やや異なる
+                
+                if score < best_score:
+                    best_score = score
+                    best_idx = i
+
+            # マハラノビス距離の閾値チェック（χ²分布 自由度2, 95%点）
+            if best_idx is None or best_score > MAHA_GATE:
+                # ユークリッド距離でもフォールバック確認
+                euclid_dists = [np.linalg.norm(pos - pred_pos) for pos, _, _ in clusters]
+                euclid_best = int(np.argmin(euclid_dists))
+                if euclid_dists[euclid_best] > TRACKING_GATE:
+                    if lidar_pos is not None:
+                        self.ekf.update(lidar_pos)
+                        self.lost_frames = 0
+                        self.get_logger().info(f"YOLO近傍検出なしですが、LiDARで追従中: [{lidar_pos[0]:.2f}, {lidar_pos[1]:.2f}]")
+                        lin, ang = self.compute_twist(self.ekf.x[:2])
+                        self._apply_cmd(lin, ang, matched=True)
+                    else:
+                        self.lost_frames += 1
+                        self.get_logger().warn(
+                            f"マハラノビス/ユークリッド両方で近傍なし (maha={best_score:.2f}, euclid={euclid_dists[euclid_best]:.2f}) lost={self.lost_frames}")
+                        lin, ang = self.compute_twist(self.ekf.x[:2])
+                        self._apply_cmd(lin, ang, matched=False)
+                        self._check_lost()
+                    return
+                # ユークリッドでは通るがマハラノビスが高い → 注意付きで採用
+                best_idx = euclid_best
+                self.get_logger().info(f"マハラノビス距離が高い({best_score:.2f})がユークリッド({euclid_dists[euclid_best]:.2f}m)で採用")
 
             best_cluster = clusters[best_idx][0]
             matched_tid = clusters[best_idx][1]
-            # track_id を更新（リアサインされた場合）
+            # track_id の「乗り移り防止」: 仮マッチを連続フレーム確認してから確定
             if matched_tid >= 0:
-                self.target_track_id = matched_tid
+                if matched_tid == self._tentative_tid:
+                    self._tentative_tid_count += 1
+                else:
+                    self._tentative_tid = matched_tid
+                    self._tentative_tid_count = 1
+                
+                if self._tentative_tid_count >= TENTATIVE_ID_CONFIRM:
+                    if self.target_track_id != matched_tid:
+                        self.get_logger().info(f"Track ID更新: {self.target_track_id} → {matched_tid} (confirmed)")
+                    self.target_track_id = matched_tid
+            # bbox_width_ratio を移動平均的に更新
+            bwr_new = clusters[best_idx][2]
+            if bwr_new > 0.01:
+                self.target_bbox_width = 0.8 * self.target_bbox_width + 0.2 * bwr_new
 
         # 更新
         self.ekf.update(best_cluster)
@@ -402,71 +505,63 @@ class YoloHumanTracker(Node):
         is_close = dist < (FOLLOW_DISTANCE + 0.2)  # 約1.0m
         is_sharp_turn = abs(ang) > 0.8  # 約45度以上
 
+        # 空間の制限状態を判定
+        gap_width = self.min_left_y - self.max_right_y
+        is_corridor = (gap_width < 1.2)
+        clearance_violated = (self.min_left_y < 0.35) or (self.max_right_y > -0.35)
+
         # ====================================================
         # 独立3軸制御ロジック (Axis 1: 回転, Axis 2: 前進, Axis 3: 横移動)
         # ====================================================
 
         # --- Axis 1: 回転 (Rotation) ---
-        # 空間の制限を無視し、いかなる時も人の方を向く（Look At）
+        # 回転は常にフルに実行し、人を追い続ける
         final_ang = float(np.clip(ang, -ANGULAR_MAX, ANGULAR_MAX))
 
         # --- Axis 2: 前進 (Forward) ---
-        clearance_violated = (self.min_left_y < 0.3) or (self.max_right_y > -0.3)
-        
-        # 真正面に壁がある場合、または通路が狭すぎる場合は前進をゼロにする（後退は許可）
-        # ※クリアランス違反(左右30cm未満)で前進を止めると遠くても動けなくなるため、前進は止めずに横移動で補正する
-        if (self.min_front_x < 0.75 or self.emergency_brake) and lin > 0:
+        # 真正面に壁がある場合（0.5m未満）のみ前進をゼロにする
+        if self.min_front_x < 0.5 and lin > 0:
             final_lin = 0.0
-            if matched:
-                if self.emergency_brake:
-                    self.get_logger().warn("通路幅が60cm未満のため前進停止")
-                else:
-                    self.get_logger().warn("前方に障害物！前進停止")
         else:
-            if is_sharp_turn:
-                final_lin = 0.0 # 急旋回時は前進停止
-            else:
-                final_lin = float(lin)
+            final_lin = float(lin)
 
         # --- Axis 3: 横移動・カニ歩き (Lateral) ---
-        if is_sharp_turn or is_close:
-            track_lat = 0.0  # 近い時や急旋回時は人への横追従は殺す
-        else:
-            track_lat = np.clip(y * 0.6, -0.3, 0.3) # 人に合わせる横移動
-            
-        gap_width = self.min_left_y - self.max_right_y
-
-        # 空間の制限によるカニ歩きの役割切替
-        if self.min_front_x < 0.75 or gap_width < 1.2 or clearance_violated:
-            # 狭所・行き止まり・クリアランス不足：人への横移動を捨て、障害物回避（空間の中心）の横移動を最優先
-            # hri_task.zip の avoid_lateral は符号がそのまま使える（正=左、負=右）
+        # 真正面に障害物がある場合のみ、カニ歩きで避ける
+        if self.min_front_x < 0.8:
             final_lat_y = float(self.avoid_lateral)
         else:
-            # 広い場所：人に合わせる横移動を使用
-            final_lat_y = float(track_lat)
-
-        # 【絶対条件】横歩きの際の最終障害物確認（いかなる時もぶつからない）
-        if final_lat_y > 0.0 and self.min_left_y < 0.25:
-            final_lat_y = 0.0 # 左が壁なので左移動ブロック
-        if final_lat_y < 0.0 and self.max_right_y > -0.25:
-            final_lat_y = 0.0 # 右が壁なので右移動ブロック
+            final_lat_y = 0.0
 
         # ====================================================
         # 到着判定 (REACHED) ロジック
         # ====================================================
         dist = np.hypot(x, y)
-        # 目標距離(0.8m)付近で、前進と横移動がほぼゼロ（安定）になっているか
-        if abs(dist - FOLLOW_DISTANCE) < 0.2 and abs(final_lin) < 0.05 and abs(final_lat_y) < 0.05:
+        tracking_elapsed = (time.time() - self.tracking_start_time) if self.tracking_start_time else 0.0
+        
+        # 条件:
+        # 1. matched=True（実際にターゲットを観測できている）
+        # 2. 追跡開始から最低REACHED_MIN_TRACKING_SEC秒経過
+        # 3. 距離が目標付近（±REACHED_DISTANCE_TOLERANCE）
+        # 4. 前進・横移動・旋回がほぼゼロ（安定状態）
+        if (matched
+            and tracking_elapsed > REACHED_MIN_TRACKING_SEC
+            and abs(dist - FOLLOW_DISTANCE) < REACHED_DISTANCE_TOLERANCE
+            and abs(final_lin) < 0.03
+            and abs(final_lat_y) < 0.03
+            and abs(final_ang) < 0.15):
             if self.reached_start_time is None:
                 self.reached_start_time = time.time()
-            elif time.time() - self.reached_start_time > 2.0:
-                # 2秒安定したら到着完了とする
+                self.get_logger().info(f"到着判定カウント開始 (dist={dist:.2f}m, elapsed={tracking_elapsed:.1f}s)")
+            elif time.time() - self.reached_start_time > REACHED_STABLE_SEC:
+                # REACHED_STABLE_SEC秒安定したら到着完了とする
                 self.state = 'REACHED'
-                self.get_logger().info("【追跡完了】目標地点に到達し安定しました。")
+                self.get_logger().info(f"【追跡完了】目標地点に到達し安定しました。(安定{REACHED_STABLE_SEC}s, 追跡{tracking_elapsed:.1f}s)")
                 self.latest_cmd = Twist()
                 self.pub.publish(self.latest_cmd)
                 return
         else:
+            if self.reached_start_time is not None:
+                self.get_logger().info(f"到着判定カウントリセット (matched={matched}, dist={dist:.2f}, lin={final_lin:.2f}, ang={final_ang:.2f})")
             self.reached_start_time = None
 
         # コマンドのパブリッシュ
@@ -503,27 +598,38 @@ class YoloHumanTracker(Node):
         if len(clusters) == 0:
             return
             
-        for pos, tid in clusters:
+        for pos, tid, bwr in clusters:
             if self.target_track_id is not None and tid == self.target_track_id:
                 self.ekf.x[:2] = pos
                 self.ekf.x[2:] = 0.0
                 self.ekf.P = np.diag([0.2, 0.2, 1.0, 1.0])
                 self.state = 'TRACKING'
                 self.lost_frames = 0
+                self._tentative_tid = None
+                self._tentative_tid_count = 0
                 self.get_logger().info(f"ロストから復帰しました！ (ID一致)")
                 return
                 
-        # 見つからなかった場合は予測位置に近い人を採用
-        for pos, tid in clusters:
-            if np.linalg.norm(pos - self.last_known_pos) < TRACKING_GATE:
+        # 見つからなかった場合は予測位置に近い人を採用（閾値を厳しく: 0.7倍）
+        LOST_RECOVERY_GATE = TRACKING_GATE * 0.7
+        for pos, tid, bwr in clusters:
+            euclidean = np.linalg.norm(pos - self.last_known_pos)
+            if euclidean < LOST_RECOVERY_GATE:
+                # 外見一貫性もチェック
+                if self.target_bbox_width > 0.01 and bwr > 0.01:
+                    if abs(bwr - self.target_bbox_width) > 0.2:
+                        self.get_logger().info(f"ロスト復帰候補(d={euclidean:.2f}m)だが体格不一致(bwr={bwr:.3f} vs {self.target_bbox_width:.3f})。スキップ")
+                        continue
                 self.ekf.x[:2] = pos
                 self.ekf.x[2:] = 0.0
                 self.ekf.P = np.diag([0.2, 0.2, 1.0, 1.0])
                 self.state = 'TRACKING'
                 self.lost_frames = 0
+                self._tentative_tid = None
+                self._tentative_tid_count = 0
                 if tid >= 0:
                     self.target_track_id = tid
-                self.get_logger().info(f"ロストから復帰しました！ (予測位置一致)")
+                self.get_logger().info(f"ロストから復帰しました！ (予測位置一致 d={euclidean:.2f}m)")
                 return
 
 def main(args=None):

@@ -109,7 +109,7 @@ SKIP_BAG_GRASP = False
 SKIP_FOLLOW_HOST = False
 
 # 特徴抽出のモード ("online" または "offline")
-FEATURE_EXTRACTION_MODE = "online"
+FEATURE_EXTRACTION_MODE = "offline"
 
 
 # ゲストの名前・飲み物の辞書
