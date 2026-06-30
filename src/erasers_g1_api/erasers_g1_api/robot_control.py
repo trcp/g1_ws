@@ -28,7 +28,7 @@ from moveit_msgs.msg import (
     PlanningScene,
     CollisionObject,
     AttachedCollisionObject,
-    PlanningSceneComponents
+    PlanningSceneComponents,
 )
 from moveit_msgs.srv import GetPositionIK, GetPlanningScene
 from std_msgs.msg import Int16MultiArray
@@ -109,7 +109,6 @@ class G1Control:
         rclpy.spin_until_future_complete(self.node, future)
         response: MoveServo.Response = future.result()
         return response.success
-
 
     def __send_pose_req(self, req: PosePolicy.Request):
         """
@@ -208,7 +207,7 @@ class G1Navigation:
         )
         if not self.__action_client.wait_for_server(timeout_sec=wait_time):
             self.node.get_logger().fatal("Nav2 action server not available...")
-            #raise RuntimeError("Nav2 action server not available")
+            # raise RuntimeError("Nav2 action server not available")
 
         # Initial pose publisher
         self.__initial_pose_pub = self.node.create_publisher(
@@ -276,9 +275,7 @@ class G1Navigation:
         dy = goal_y - current_pose[1]
         distance = math.hypot(dx, dy)
         target_yaw = (
-            math.atan2(dy, dx)
-            if distance > 1e-3
-            else self.__get_pose_yaw(goal_pose)
+            math.atan2(dy, dx) if distance > 1e-3 else self.__get_pose_yaw(goal_pose)
         )
 
         face_pose = PoseStamped()
@@ -360,7 +357,9 @@ class G1Navigation:
 
                 import tf2_geometry_msgs
 
-                goal_pose = tf2_geometry_msgs.do_transform_pose_stamped(goal_pose, transform)
+                goal_pose = tf2_geometry_msgs.do_transform_pose_stamped(
+                    goal_pose, transform
+                )
             except Exception as e:
                 self.node.get_logger().error(
                     f"Failed to transform pose to map frame: {str(e)}"
@@ -514,7 +513,11 @@ class G1Navigation:
         pose.pose.orientation.w = q[3]
 
         return self.move_to_pose(
-            pose, tolerance=tolerance, reference_frame=reference_frame, wait=wait, timeout=timeout
+            pose,
+            tolerance=tolerance,
+            reference_frame=reference_frame,
+            wait=wait,
+            timeout=timeout,
         )
 
     def move_rel(
@@ -573,7 +576,15 @@ class G1Navigation:
             timeout=timeout,
         )
 
-    def set_initialpose(self, pose, reference_frame: str = "map", xyy: bool = True):
+    def set_initialpose(
+        self,
+        pose,
+        reference_frame: str = "map",
+        xyy: bool = True,
+        tolerance: float = 0.3,
+        max_attempts: int = 1,
+        settle_time: float = 1.5,
+    ) -> bool:
         """
         ロボットの初期位置（Initial Pose）を設定する．
         AMCL等のローカライゼーションノードに対して /initialpose トピックをパブリッシュする。
@@ -587,20 +598,26 @@ class G1Navigation:
             基準となる座標フレーム。デフォルトは 'map'。
         xyy : bool, optional
             True の場合、pose を [x, y, yaw] として扱う。False の場合、pose を PoseWithCovarianceStamped として扱う。
+        tolerance : float, optional
+            初期位置反映後の現在位置と指定位置の許容距離[m]。デフォルトは 0.3。
+        max_attempts : int, optional
+            初期位置 publish と確認を繰り返す最大回数。デフォルトは 1。
+        settle_time : float, optional
+            publish 後に localization の反映を待つ時間[秒]。デフォルトは 1.5。
 
         Returns
         -------
-        None
+        bool
+            初期位置が tolerance 内に反映された場合は True、失敗した場合は False。
         """
         if xyy:
             if not (isinstance(pose, list) and len(pose) == 3):
                 self.node.get_logger().error(
                     "Invalid pose format for set_initialpose. Use [x, y, yaw] when xyy=True."
                 )
-                return
+                return False
 
             msg = PoseWithCovarianceStamped()
-            msg.header.stamp = self.node.get_clock().now().to_msg()
             msg.header.frame_id = reference_frame
             msg.pose.pose.position.x = float(pose[0])
             msg.pose.pose.position.y = float(pose[1])
@@ -618,19 +635,77 @@ class G1Navigation:
             msg.pose.covariance[0] = 0.25
             msg.pose.covariance[7] = 0.25
             msg.pose.covariance[35] = 0.06853891945200942
+
+            target_x = float(pose[0])
+            target_y = float(pose[1])
+            target_yaw = float(pose[2])
         else:
             if not isinstance(pose, PoseWithCovarianceStamped):
                 self.node.get_logger().error(
                     "Invalid pose format for set_initialpose. Use PoseWithCovarianceStamped when xyy=False."
                 )
-                return
+                return False
 
-            msg = pose
+            msg = copy.deepcopy(pose)
+            target_x = float(msg.pose.pose.position.x)
+            target_y = float(msg.pose.pose.position.y)
+            q = msg.pose.pose.orientation
+            (_, _, target_yaw) = euler_from_quaternion([q.x, q.y, q.z, q.w])
 
-        self.__initial_pose_pub.publish(msg)
-        self.node.get_logger().info(
-            f"Published initial pose to /initialpose in frame: {msg.header.frame_id}"
+        if msg.header.frame_id != "map":
+            self.node.get_logger().warn(
+                "set_initialpose verification compares against get_current_pose() in map frame, "
+                f"but initial pose frame is '{msg.header.frame_id}'."
+            )
+
+        attempts = max(1, int(max_attempts))
+        tolerance = max(0.0, float(tolerance))
+        settle_time = max(0.0, float(settle_time))
+
+        for attempt in range(1, attempts + 1):
+            msg.header.stamp = self.node.get_clock().now().to_msg()
+            self.__initial_pose_pub.publish(msg)
+            self.node.get_logger().info(
+                "Published initial pose to /initialpose "
+                f"(attempt {attempt}/{attempts}, frame={msg.header.frame_id})"
+            )
+
+            time.sleep(settle_time)
+
+            current_pose = self.get_current_pose(simple=True)
+            if current_pose is None:
+                self.node.get_logger().warn(
+                    f"Initial pose verification failed on attempt {attempt}: current pose unavailable."
+                )
+                continue
+
+            current_x, current_y, current_yaw = current_pose
+            distance_error = math.hypot(current_x - target_x, current_y - target_y)
+            yaw_error = math.atan2(
+                math.sin(current_yaw - target_yaw),
+                math.cos(current_yaw - target_yaw),
+            )
+
+            if distance_error <= tolerance:
+                self.node.get_logger().info(
+                    "Initial pose verified: "
+                    f"position_error={distance_error:.3f} m <= {tolerance:.3f} m, "
+                    f"yaw_error={yaw_error:.3f} rad"
+                )
+                return True
+
+            self.node.get_logger().warn(
+                "Initial pose is outside tolerance after publish: "
+                f"position_error={distance_error:.3f} m > {tolerance:.3f} m, "
+                f"yaw_error={yaw_error:.3f} rad"
+            )
+
+        self.node.get_logger().error(
+            "Failed to verify initial pose after "
+            f"{attempts} attempts: target=({target_x:.3f}, {target_y:.3f}, {target_yaw:.3f}), "
+            f"tolerance={tolerance:.3f} m"
         )
+        return False
 
 
 class Collision:
@@ -744,7 +819,16 @@ class Collision:
         radius=0.05,
     ):
         co = self._create_collision_object(
-            name, ref, x, y, z, roll, pitch, yaw, SolidPrimitive.CYLINDER, [height, radius]
+            name,
+            ref,
+            x,
+            y,
+            z,
+            roll,
+            pitch,
+            yaw,
+            SolidPrimitive.CYLINDER,
+            [height, radius],
         )
         self._publish_scene(co)
 
@@ -753,24 +837,29 @@ class Collision:
         if not self.__get_scene_cli.wait_for_service(timeout_sec=1.0):
             return
         req = GetPlanningScene.Request()
-        req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY | PlanningSceneComponents.WORLD_OBJECT_NAMES
+        req.components.components = (
+            PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+            | PlanningSceneComponents.WORLD_OBJECT_NAMES
+        )
         future = self.__get_scene_cli.call_async(req)
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
         if not future.done():
             return
-        
+
         res = future.result()
         removed_count = 0
         for co in res.scene.world.collision_objects:
             # global_pose check
             gp = co.pose.position
-            dist = math.sqrt((x - gp.x)**2 + (y - gp.y)**2 + (z - gp.z)**2)
+            dist = math.sqrt((x - gp.x) ** 2 + (y - gp.y) ** 2 + (z - gp.z) ** 2)
             if dist < radius:
                 self.remove_collision(co.id)
                 removed_count += 1
-        
+
         if removed_count > 0:
-            self.node.get_logger().info(f"Removed {removed_count} near objects (ghosts) around ({x:.3f}, {y:.3f}, {z:.3f})")
+            self.node.get_logger().info(
+                f"Removed {removed_count} near objects (ghosts) around ({x:.3f}, {y:.3f}, {z:.3f})"
+            )
 
     def remove_collision(self, name: str):
         co = CollisionObject()
@@ -794,7 +883,10 @@ class Collision:
         if not self.__get_scene_cli.wait_for_service(timeout_sec=1.0):
             return None
         req = GetPlanningScene.Request()
-        req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY | PlanningSceneComponents.WORLD_OBJECT_NAMES
+        req.components.components = (
+            PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+            | PlanningSceneComponents.WORLD_OBJECT_NAMES
+        )
         future = self.__get_scene_cli.call_async(req)
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
         if not future.done():
@@ -809,7 +901,14 @@ class Collision:
                     fx = global_pose.position.x + p.position.x
                     fy = global_pose.position.y + p.position.y
                     fz = global_pose.position.z + p.position.z
-                    r, pt, y = euler_from_quaternion([global_pose.orientation.x, global_pose.orientation.y, global_pose.orientation.z, global_pose.orientation.w])
+                    r, pt, y = euler_from_quaternion(
+                        [
+                            global_pose.orientation.x,
+                            global_pose.orientation.y,
+                            global_pose.orientation.z,
+                            global_pose.orientation.w,
+                        ]
+                    )
                     return (fx, fy, fz, r, pt, y)
         return None
 
@@ -817,7 +916,10 @@ class Collision:
         if not self.__get_scene_cli.wait_for_service(timeout_sec=1.0):
             return None
         req = GetPlanningScene.Request()
-        req.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY | PlanningSceneComponents.WORLD_OBJECT_NAMES
+        req.components.components = (
+            PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+            | PlanningSceneComponents.WORLD_OBJECT_NAMES
+        )
         future = self.__get_scene_cli.call_async(req)
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
         if not future.done():
@@ -828,7 +930,13 @@ class Collision:
                 return co
         return None
 
-    def attach_collision(self, name: str, link_name: str, touch_links: list = None, collision_object: CollisionObject = None):
+    def attach_collision(
+        self,
+        name: str,
+        link_name: str,
+        touch_links: list = None,
+        collision_object: CollisionObject = None,
+    ):
         co = CollisionObject()
         co.id = name
         co.operation = CollisionObject.REMOVE
@@ -864,9 +972,10 @@ class Collision:
         if not future.done():
             return
         acm = future.result().scene.allowed_collision_matrix
-        
+
         # Add if missing, and set enabled=False (allow collision)
         from moveit_msgs.msg import AllowedCollisionEntry
+
         def ensure_entry(name):
             if name not in acm.entry_names:
                 acm.entry_names.append(name)
@@ -907,26 +1016,29 @@ class Collision:
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
         if not future.done():
             return
-            
+
         scene = future.result().scene
         msg = PlanningScene()
         msg.is_diff = True
-        
+
         for obj in scene.world.collision_objects:
             co = CollisionObject()
             co.id = obj.id
             co.header.frame_id = obj.header.frame_id
             co.operation = CollisionObject.REMOVE
             msg.world.collision_objects.append(co)
-            
+
         self.__scene_pub.publish(msg)
-        self.node.get_logger().info(f"Cleared {len(scene.world.collision_objects)} objects from planning scene.")
+        self.node.get_logger().info(
+            f"Cleared {len(scene.world.collision_objects)} objects from planning scene."
+        )
 
 
 class Grasp:
     """
     把持動作シーケンスを管理するクラス。
     """
+
     def __init__(self, arm, collision: Collision):
         self.arm = arm
         self.collision = collision
@@ -938,11 +1050,15 @@ class Grasp:
         # 1. オブジェクト情報を取得
         pose = self.collision.get_object_pose(target_name)
         if not pose:
-            self.arm.node.get_logger().error(f"Object {target_name} not found in planning scene")
+            self.arm.node.get_logger().error(
+                f"Object {target_name} not found in planning scene"
+            )
             return False
 
         ox, oy, oz, _, _, _ = pose
-        self.arm.node.get_logger().info(f"Grasp target: {target_name} at {ox:.3f}, {oy:.3f}, {oz:.3f}")
+        self.arm.node.get_logger().info(
+            f"Grasp target: {target_name} at {ox:.3f}, {oy:.3f}, {oz:.3f}"
+        )
 
         # 2. 腕の選択
         if not arm:
@@ -952,19 +1068,19 @@ class Grasp:
 
         # 3. アプローチ方向の計算 (Robot-to-Object)
         dist_xy = math.sqrt(ox**2 + oy**2)
-        nx, ny = (ox/dist_xy, oy/dist_xy) if dist_xy > 1e-6 else (1.0, 0.0)
+        nx, ny = (ox / dist_xy, oy / dist_xy) if dist_xy > 1e-6 else (1.0, 0.0)
         base_yaw = math.atan2(ny, nx)
 
         # 試行する姿勢リスト (ピッチ角: 0.0=水平, 0.8=斜め, 1.57=真上)
         # G1のリーチ制約（腰ピッチなし）のため、水平に近いほうが届きやすい
         pitches = [1.0, 0.5, 0.0, 1.57]
-        
+
         self.arm.hand_control(command="open", hand=hand_side)
         time.sleep(0.5)
 
         for pitch in pitches:
             self.arm.node.get_logger().info(f"Trying grasp with pitch={pitch:.2f}")
-            
+
             # 手をオブジェクトにぶつけないためのプリポーズ (15cm手前)
             pre_offset = 0.15
             px = ox - nx * pre_offset
@@ -994,17 +1110,31 @@ class Grasp:
             tz = oz + grasp_offset * math.cos(pitch) if pitch > 0.1 else oz
 
             # C. Final Grasp
-            self.arm.node.get_logger().info(f"Step C: Final grasp move to {tx:.3f}, {ty:.3f}, {tz:.3f}")
-            if not self.arm.move_abs(tx, ty, tz, roll, pitch, yaw, planning_group=arm, tip_link=tip_link, orientation_tolerance=0.5):
+            self.arm.node.get_logger().info(
+                f"Step C: Final grasp move to {tx:.3f}, {ty:.3f}, {tz:.3f}"
+            )
+            if not self.arm.move_abs(
+                tx,
+                ty,
+                tz,
+                roll,
+                pitch,
+                yaw,
+                planning_group=arm,
+                tip_link=tip_link,
+                orientation_tolerance=0.5,
+            ):
                 # 失敗したらコリジョンを戻して次へ
-                self.arm.node.get_logger().warn(f"Final grasp failed at pitch {pitch:.2f}, trying next...")
+                self.arm.node.get_logger().warn(
+                    f"Final grasp failed at pitch {pitch:.2f}, trying next..."
+                )
                 continue
 
             # D. Close & Attach
             self.arm.hand_control(command="close", hand=hand_side)
             time.sleep(1.0)
             self.collision.attach_collision(target_name, link_name=tip_link)
-            
+
             # E. Lift
             self.arm.move_rel(z=0.1, planning_group="upper_body")
             self.arm.node.get_logger().info(f"Grasp success at pitch {pitch:.2f}!")
@@ -1064,13 +1194,15 @@ class ArmControl:
         # upper body control
         self.__ubc_cli = self.node.create_client(SetBool, "/enable_upper_body_control")
         while not self.__ubc_cli.wait_for_service(timeout_sec=5.0):
-            self.node.get_logger().error("eR@sers G1 Service Servers are not running ...")
+            self.node.get_logger().error(
+                "eR@sers G1 Service Servers are not running ..."
+            )
             break
 
         # New Infrastructure
         self.collision = Collision(self.node)
         self.grasp_manager = Grasp(self, self.collision)
-    
+
     def __send_ubc_req(self, req: SetBool.Request):
         future = self.__ubc_cli.call_async(req)
         rclpy.spin_until_future_complete(self.node, future)
@@ -1150,12 +1282,11 @@ class ArmControl:
             return None
 
         return joints
-    
-    def enable_upper_body_control(self, enable:bool=True):
+
+    def enable_upper_body_control(self, enable: bool = True):
         req = SetBool.Request()
         req.data = enable
         return self.__send_ubc_req(req)
-
 
     def get_current_joints_pose(self, planning_group: str = "upper_body"):
         """
@@ -1198,8 +1329,7 @@ class ArmControl:
 
         start_time = self.node.get_clock().now()
         while (
-            rclpy.ok()
-            and (self.node.get_clock().now() - start_time).nanoseconds < 2e9
+            rclpy.ok() and (self.node.get_clock().now() - start_time).nanoseconds < 2e9
         ):  # 2s timeout
             rclpy.spin_once(self.node, timeout_sec=0.1)
             try:
@@ -1231,7 +1361,12 @@ class ArmControl:
         return None
 
     def move_to_pose(
-        self, pose, planning_group: str = "upper_body", wait: bool = True, tip_link: str = None, **kwargs
+        self,
+        pose,
+        planning_group: str = "upper_body",
+        wait: bool = True,
+        tip_link: str = None,
+        **kwargs,
     ) -> bool:
         """
         与えられた目標姿勢に向けてエンドエフェクタを自律移動させる．
@@ -1239,7 +1374,9 @@ class ArmControl:
         # Determine tip link (assuming standard names for G1)
         if tip_link is None:
             tip_link = (
-                "left_amazing_hand" if "left" in planning_group else "right_amazing_hand"
+                "left_amazing_hand"
+                if "left" in planning_group
+                else "right_amazing_hand"
             )
 
         # Formulate goal constraints
@@ -1259,7 +1396,7 @@ class ArmControl:
                 planning_attempts=kwargs.get("planning_attempts", 10),
                 planning_time=kwargs.get("planning_time", 5.0),
             )
-        
+
         # Fallback to Task-space planning if IK solver fails
         # Try position + orientation first
         goal_msg = MoveGroup.Goal()
@@ -1273,45 +1410,60 @@ class ArmControl:
         )
         if self._send_move_group_goal(goal_msg, wait):
             return True
-            
+
         # Last resort: Position-only planning (for 1.5x larger gripper)
-        self.node.get_logger().warn(f"Trying position-only planning for {planning_group}")
+        self.node.get_logger().warn(
+            f"Trying position-only planning for {planning_group}"
+        )
         goal_msg.request.goal_constraints[0].orientation_constraints = []
         return self._send_move_group_goal(goal_msg, wait)
 
-    def place(self, x: float, y: float, z: float, planning_group: str = "arm_right", wait: bool = True) -> bool:
+    def place(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        planning_group: str = "arm_right",
+        wait: bool = True,
+    ) -> bool:
         """
         指定された位置に物体を配置する（Position Constraintのみを使用）。
         """
         self.node.get_logger().info(f"Placing object at {x:.3f}, {y:.3f}, {z:.3f}")
-        
-        tip_link = "left_amazing_hand" if "left" in planning_group else "right_amazing_hand"
-        
+
+        tip_link = (
+            "left_amazing_hand" if "left" in planning_group else "right_amazing_hand"
+        )
+
         goal_msg = MoveGroup.Goal()
         goal_msg.request.group_name = planning_group
         goal_msg.request.num_planning_attempts = 15
         goal_msg.request.allowed_planning_time = 5.0
-        
+
         constraints = Constraints()
         pc = PositionConstraint()
         pc.header.frame_id = "base_link"
         pc.link_name = tip_link
-        
+
         target_pose = Pose()
         target_pose.position.x = x
         target_pose.position.y = y
         target_pose.position.z = z
         pc.constraint_region.primitive_poses.append(target_pose)
-        
+
         box = SolidPrimitive()
         box.type = SolidPrimitive.BOX
-        box.dimensions = [0.05, 0.05, 0.05] # 5cm tolerance (Relaxed for G1 reliability)
+        box.dimensions = [
+            0.05,
+            0.05,
+            0.05,
+        ]  # 5cm tolerance (Relaxed for G1 reliability)
         pc.constraint_region.primitives.append(box)
         pc.weight = 1.0
-        
+
         constraints.position_constraints.append(pc)
         goal_msg.request.goal_constraints.append(constraints)
-        
+
         return self._send_move_group_goal(goal_msg, wait)
 
     def _create_pose_constraints(self, target_pose: PoseStamped, tip_link: str):
@@ -1343,7 +1495,9 @@ class ArmControl:
 
         return pc, oc
 
-    def _solve_ik(self, pose_stamped: PoseStamped, group_name: str, tip_link: str = None) -> dict:
+    def _solve_ik(
+        self, pose_stamped: PoseStamped, group_name: str, tip_link: str = None
+    ) -> dict:
         """
         MoveIt の /compute_ik サービスを使用して特定のグループの逆運動学を解く。
         """
@@ -1373,8 +1527,10 @@ class ArmControl:
                 req.ik_request.ik_link_name = tip_link
             req.ik_request.pose_stamped = pose_stamped
             req.ik_request.timeout.sec = 1
-            req.ik_request.timeout.nanosec = 0 
-            req.ik_request.avoid_collisions = False # RELAXED: Handle collisions in planning
+            req.ik_request.timeout.nanosec = 0
+            req.ik_request.avoid_collisions = (
+                False  # RELAXED: Handle collisions in planning
+            )
 
             # Populate joint states (including missing legs to avoid MoveIt warnings/errors)
             all_joint_names = list(self.__joint_states.keys())
@@ -1416,10 +1572,10 @@ class ArmControl:
         if tip_link:
             req.ik_request.ik_link_name = tip_link
         req.ik_request.pose_stamped = pose_stamped
-        req.ik_request.timeout.sec = 2 # Increase to 2s
-        req.ik_request.timeout.nanosec = 0 
+        req.ik_request.timeout.sec = 2  # Increase to 2s
+        req.ik_request.timeout.nanosec = 0
         req.ik_request.avoid_collisions = True
-        
+
         # Populate joint states
         all_joint_names = list(self.__joint_states.keys())
         all_joint_positions = list(self.__joint_states.values())
@@ -1444,9 +1600,7 @@ class ArmControl:
                 f"IK failed for {group_name} with error: {res.error_code.val}"
             )
         else:
-            self.node.get_logger().error(
-                f"IK service call timed out for {group_name}"
-            )
+            self.node.get_logger().error(f"IK service call timed out for {group_name}")
         return None
 
         if res:
@@ -1454,9 +1608,7 @@ class ArmControl:
                 f"IK failed for {group_name} with error: {res.error_code.val}"
             )
         else:
-            self.node.get_logger().error(
-                f"IK service call timed out for {group_name}"
-            )
+            self.node.get_logger().error(f"IK service call timed out for {group_name}")
         return None
 
     def move_abs(
@@ -1864,7 +2016,7 @@ class ArmControl:
                 f"MoveGroup failed with error code: {result.result.error_code.val}"
             )
             return False
-    
+
     def __send_hand_req(self, req: HandCommand.Request):
         """
         ハンド操作リクエストを送信する内部メソッド
@@ -1904,7 +2056,6 @@ class ArmControl:
         req.command = command
         req.hand = hand
         return self.__send_hand_req(req)
-
 
 
 class G1Mic:
@@ -1954,9 +2105,7 @@ class G1Mic:
         コンテキストマネージャの開始。音声配信を有効化します。
         """
         if not self.__mic_rec_cli.wait_for_service(timeout_sec=5.0):
-            self.node.get_logger().error(
-                "mic_server (mic_rec service) is not running."
-            )
+            self.node.get_logger().error("mic_server (mic_rec service) is not running.")
             raise RuntimeError("mic_server is not running.")
 
         # 録音開始のリクエスト

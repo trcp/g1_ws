@@ -52,7 +52,10 @@ def move_to_pose_cb(
                     userdata.initial_pose[0],
                     userdata.initial_pose[1],
                     userdata.initial_pose[2],
-                ]
+                ],
+                max_attempts=100,
+                tolerance=0.3,
+                settle_time=2.5,
             )
         time.sleep(2)
         navigation.move_abs(
