@@ -117,7 +117,7 @@ def main():
 
     # userdatas
     sm.userdata.initial_pose = [-0.73, -0.59, -2.81]
-    sm.userdata.inspection_point = [-2.399, -2.338, 2.036]
+    sm.userdata.inspection_point = [-5.67, -1.85, -2.81]
     sm.userdata.exit_point = [0.936, -4.187, 0.435]
     sm.userdata.success_keywards = ["yes", "YES", "Yes"]
     sm.userdata.num_challenge = 0
