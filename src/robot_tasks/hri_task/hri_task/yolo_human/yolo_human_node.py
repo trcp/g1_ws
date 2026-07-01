@@ -177,6 +177,41 @@ class YoloHumanNode(Node):
             self.depth_received = True
             self.get_logger().info("First Depth image received!")
 
+    def _depth_to_meters(self, depth_values):
+        depth = np.asarray(depth_values, dtype=np.float32)
+        depth = np.where(depth > 100.0, depth / 1000.0, depth)
+        return depth
+
+    def _estimate_depth(self, cv_depth, x1, y1, x2, y2, u_center, v_center):
+        h, w = cv_depth.shape[:2]
+        u_center = max(0, min(u_center, w - 1))
+        v_center = max(0, min(v_center, h - 1))
+
+        center_z = float(self._depth_to_meters(cv_depth[v_center, u_center]))
+        if np.isfinite(center_z) and 0.1 < center_z < 10.0:
+            return center_z, True
+
+        # RealSense の中心画素だけ 0 になる場合があるため、bbox 中央付近の中央値で補完する。
+        bx1 = max(0, min(int(x1), w - 1))
+        bx2 = max(0, min(int(x2), w))
+        by1 = max(0, min(int(y1), h - 1))
+        by2 = max(0, min(int(y2), h))
+        if bx2 <= bx1 or by2 <= by1:
+            return 999.0, False
+
+        margin_x = max(1, int((bx2 - bx1) * 0.25))
+        margin_y = max(1, int((by2 - by1) * 0.25))
+        roi = cv_depth[by1 + margin_y:by2 - margin_y, bx1 + margin_x:bx2 - margin_x]
+        if roi.size == 0:
+            roi = cv_depth[by1:by2, bx1:bx2]
+
+        roi_m = self._depth_to_meters(roi).reshape(-1)
+        valid = roi_m[np.isfinite(roi_m) & (roi_m > 0.1) & (roi_m < 10.0)]
+        if valid.size == 0:
+            return 999.0, False
+
+        return float(np.median(valid)), True
+
     def process_frame(self):
         if not self.is_active:
             return
@@ -228,18 +263,16 @@ class YoloHumanNode(Node):
                 u_center = int((x1 + x2) / 2)
                 v_center = int((y1 + y2) / 2)
 
-                # Get depth at center
                 h, w = cv_depth.shape[:2]
                 u_center = max(0, min(u_center, w - 1))
                 v_center = max(0, min(v_center, h - 1))
 
-                z = float(cv_depth[v_center, u_center])
-                if z > 100:  # RealSense depth is usually mm (16UC1)
-                    z = z / 1000.0
+                z, valid_depth = self._estimate_depth(
+                    cv_depth, x1, y1, x2, y2, u_center, v_center)
 
                 # FOV-based angle calculation (~69deg = 1.2rad)
                 angle_rad = ((u_center - (w / 2.0)) / float(w)) * 1.2
-                x_offset = z * math.tan(angle_rad)
+                x_offset = z * math.tan(angle_rad) if valid_depth else 0.0
                 bbox_width_ratio = (x2 - x1) / float(w)
 
                 # トラッキングIDを取得
@@ -253,6 +286,7 @@ class YoloHumanNode(Node):
                     'bbox': [x1, y1, x2, y2],
                     'bbox_width_ratio': bbox_width_ratio,
                     'distance_z': z,
+                    'valid_depth': valid_depth,
                     'angle_rad': angle_rad,
                     'offset_x': x_offset,
                     'track_id': track_id
@@ -261,7 +295,7 @@ class YoloHumanNode(Node):
                 detections.append(det_info)
                 
                 # Track the closest person
-                if label == "person" and z < min_z:
+                if label == "person" and valid_depth and z < min_z:
                     min_z = z
                     closest_det_idx = len(detections) - 1
 

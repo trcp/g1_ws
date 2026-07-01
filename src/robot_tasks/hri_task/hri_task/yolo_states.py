@@ -117,16 +117,75 @@ class YoloTrackingState(BaseYoloState):
     - max_loops: 追従ループ回数（デフォルト3）
     """
 
-    def __init__(self, node, target_classes=None, timeout=20.0,
-                 direct_arm=None, use_waist=True, distance_threshold=1.3, consecutive_frames=3, max_loops=3):
+    def __init__(self, node, target_classes=None, timeout=30.0,
+                 direct_arm=None, use_waist=True, distance_threshold=1.3,
+                 ideal_distance=1.0, center_threshold=0.45,
+                 stationary_angle_threshold=0.08, stationary_depth_threshold=0.18,
+                 consecutive_frames=3, max_loops=3):
         if target_classes is None:
             target_classes = ["person"]
         super().__init__(node, target_classes, timeout=timeout)
         self.direct_arm = direct_arm
         self.use_waist = use_waist
         self.distance_threshold = distance_threshold
+        self.ideal_distance = ideal_distance
+        self.center_threshold = center_threshold
+        self.stationary_angle_threshold = stationary_angle_threshold
+        self.stationary_depth_threshold = stationary_depth_threshold
         self.consecutive_frames = consecutive_frames
         self.max_loops = max_loops
+
+    def _person_candidates(self, detections):
+        candidates = []
+        for det in detections:
+            if det.get('label') != 'person':
+                continue
+
+            z = float(det.get('distance_z', 999.0))
+            if not (0.1 < z < 10.0):
+                continue
+
+            angle_rad = -float(det.get('angle_rad', 0.0))
+            w_ratio = float(det.get('bbox_width_ratio', 0.0))
+            score = (
+                abs(z - self.ideal_distance) * 1.2
+                + abs(angle_rad) * 1.5
+                + max(0.0, z - self.distance_threshold) * 2.0
+            )
+            candidates.append({
+                'det': det,
+                'z': z,
+                'angle_rad': angle_rad,
+                'w_ratio': w_ratio,
+                'score': score,
+            })
+
+        return sorted(candidates, key=lambda c: c['score'])
+
+    def _is_good_guest_candidate(self, candidate):
+        return (
+            0.1 < candidate['z'] < self.distance_threshold
+            and abs(candidate['angle_rad']) < self.center_threshold
+        )
+
+    def _is_stationary_candidate(self, candidate, previous):
+        if previous is None:
+            return False
+        return (
+            abs(candidate['angle_rad'] - previous['angle_rad']) <= self.stationary_angle_threshold
+            and abs(candidate['z'] - previous['z']) <= self.stationary_depth_threshold
+        )
+
+    def _turn_waist_to_candidate(self, candidate):
+        if not (self.use_waist and self.direct_arm):
+            return
+        angle_rad = candidate['angle_rad']
+        w_ratio = candidate['w_ratio']
+        if w_ratio < 0.6 and abs(angle_rad) > 0.2:
+            try:
+                self.direct_arm.turn_waist_towards(angle_rad, hold_sec=0)
+            except Exception as e:
+                self.node.get_logger().warn(f"  -> Waist move failed: {e}")
 
     def execute(self, userdata):
         self.node.get_logger().info("[YOLO TRACKING] Starting...")
@@ -134,42 +193,58 @@ class YoloTrackingState(BaseYoloState):
         
         start_time = time.time()
         close_frames = 0
+        previous_candidate = None
+        best_seen = None
         
         while rclpy.ok():
             if time.time() - start_time > self.timeout:
-                self.node.get_logger().info("  -> Tracking timeout. Forcing success.")
+                if best_seen:
+                    self.node.get_logger().info(
+                        "  -> Tracking timeout. Using best guest candidate "
+                        f"z={best_seen['z']:.2f}, angle={best_seen['angle_rad']:.2f}, "
+                        f"score={best_seen['score']:.2f}."
+                    )
+                    self._turn_waist_to_candidate(best_seen)
+                else:
+                    self.node.get_logger().info("  -> Tracking timeout with no person candidate. Forcing success.")
                 break
 
             msg = self.wait_for_result(timeout=1.0)
             if msg:
-                target, z, angle_rad, w_ratio = self.parse_yolo_target(msg)
-                if target:
-                    # 人が1.3m以内に来た場合のみ処理を行う (z=0.0は深度取得エラーの可能性があるため弾く)
-                    if 0.1 < z < self.distance_threshold:
-                        # インタラクション開始条件：画面中央付近を向いているか（しきい値を緩く 0.35 rad = 約20度）
-                        if abs(angle_rad) < 0.35:
+                try:
+                    detections = json.loads(msg)
+                except json.JSONDecodeError:
+                    self.node.get_logger().warn("  -> Invalid YOLO JSON while tracking.")
+                    detections = []
+
+                candidates = self._person_candidates(detections)
+                if candidates:
+                    candidate = candidates[0]
+                    if best_seen is None or candidate['score'] < best_seen['score']:
+                        best_seen = candidate
+
+                    if self._is_good_guest_candidate(candidate):
+                        if self._is_stationary_candidate(candidate, previous_candidate):
                             close_frames += 1
                         else:
-                            close_frames = 0
+                            close_frames = 1
 
-                        # 腰を回して対象をカメラの中央に捉える（追跡）
-                        if self.use_waist and self.direct_arm and w_ratio < 0.6:
-                            # 真ん中の判定を緩くし、中央から 0.2 rad 以上ずれたら腰を回す
-                            if abs(angle_rad) > 0.2:
-                                try:
-                                    self.direct_arm.turn_waist_towards(angle_rad, hold_sec=0)
-                                except Exception as e:
-                                    self.node.get_logger().warn(f"  -> Waist move failed: {e}")
+                        self._turn_waist_to_candidate(candidate)
 
-                        # 中央を向いた状態が一定フレーム続けばインタラクションへ
                         if close_frames >= self.consecutive_frames:
-                            self.node.get_logger().info("  -> Target is close and centered. Ending tracking.")
+                            self.node.get_logger().info(
+                                "  -> Guest candidate is close, centered, and stable. "
+                                f"z={candidate['z']:.2f}, angle={candidate['angle_rad']:.2f}. Ending tracking."
+                            )
                             break
                     else:
-                        # 1.3mより遠い場合は無視し、カウントもリセット
                         close_frames = 0
+                        self._turn_waist_to_candidate(candidate)
+
+                    previous_candidate = candidate
                 else:
                     close_frames = 0
+                    previous_candidate = None
             else:
                 self.node.get_logger().info("  -> No YOLO result (timeout)")
             
@@ -188,21 +263,358 @@ class YoloTrackingState(BaseYoloState):
 
 
 # ============================================================
-# 空席検出: person と chair の重なりから空いている椅子を見つける
+# 空席検出: person と seating object の位置関係から空いている席を見つける
 # ============================================================
 class YoloEmptyChairState(BaseYoloState):
     """
-    YOLO で person と chair を同時に検出し、人と重なっていない椅子を
-    「空席」として判定する。見つかった椅子の方向に腰を向ける。
+    YOLO で person と chair/sofa を同時に検出し、検出物体を座席候補へ
+    正規化してから空席を判定する。ソファーが1つのbboxになるケースでは、
+    必要に応じてbboxを左右方向に分割して仮想的な席として扱う。
     """
 
-    def __init__(self, node, direct_arm=None, guest_index=1, timeout=5.0):
-        super().__init__(node, target_classes=["person", "chair"], timeout=timeout, output_keys=['empty_seat_index'])
+    SEATING_LABELS = {"chair", "sofa", "couch", "bench"}
+    SPLIT_LABELS = {"sofa", "couch", "bench"}
+
+    def __init__(self, node, direct_arm=None, guest_index=1, timeout=5.0,
+                 expected_seat_count=3, image_width=640):
+        super().__init__(
+            node,
+            target_classes=["person", "chair", "sofa", "couch", "bench"],
+            timeout=timeout,
+            output_keys=['empty_seat_index'])
         self.direct_arm = direct_arm
         self.guest_index = guest_index
+        self.expected_seat_count = expected_seat_count
+        self.image_width = image_width
+
+    def _det_conf(self, det):
+        return float(det.get('confidence', det.get('score', 1.0)))
+
+    def _bbox(self, item):
+        bbox = item.get('bbox', [0, 0, 0, 0])
+        if len(bbox) != 4:
+            return [0, 0, 0, 0]
+        return [float(v) for v in bbox]
+
+    def _bbox_center_x(self, item):
+        x1, _, x2, _ = self._bbox(item)
+        return (x1 + x2) / 2.0
+
+    def _bbox_width(self, item):
+        x1, _, x2, _ = self._bbox(item)
+        return max(1.0, x2 - x1)
+
+    def _bbox_height(self, item):
+        _, y1, _, y2 = self._bbox(item)
+        return max(1.0, y2 - y1)
+
+    def _bbox_center_y(self, item):
+        _, y1, _, y2 = self._bbox(item)
+        return (y1 + y2) / 2.0
+
+    def _bbox_overlap_ratio(self, a_box, b_box):
+        ax1, ay1, ax2, ay2 = a_box
+        bx1, by1, bx2, by2 = b_box
+        x_left = max(ax1, bx1)
+        y_top = max(ay1, by1)
+        x_right = min(ax2, bx2)
+        y_bottom = min(ay2, by2)
+        if x_right <= x_left or y_bottom <= y_top:
+            return 0.0
+        inter = (x_right - x_left) * (y_bottom - y_top)
+        area = max(1.0, (ax2 - ax1) * (ay2 - ay1))
+        return inter / area
+
+    def _is_splittable_seating_object(self, obj, frame_width):
+        label = obj.get('label', '')
+        width = self._bbox_width(obj)
+        if label in self.SPLIT_LABELS:
+            return True
+        # デバッグ環境ではソファーが chair と出ることがあるため、横幅で救済する。
+        return width >= frame_width * 0.35
+
+    def _part_name(self, part_index, part_count):
+        if part_count == 2:
+            return ["left side", "right side"][part_index]
+        if part_count == 3:
+            return ["left side", "middle", "right side"][part_index]
+        if part_index == 0:
+            return "left side"
+        if part_index == part_count - 1:
+            return "right side"
+        return f"part {part_index + 1}"
+
+    def _source_name(self, obj):
+        label = obj.get('label', 'seat')
+        if label == "couch":
+            return "sofa"
+        if label == "bench":
+            return "bench"
+        if label == "sofa":
+            return "sofa"
+        if self._is_splittable_seating_object(obj, self.image_width):
+            return "large chair"
+        return "chair"
+
+    def _seat_from_bbox(self, bbox, source_label='inferred_seat',
+                        source_bbox=None, split_count=1, split_part=1,
+                        description=None, inferred=False):
+        x1, y1, x2, y2 = bbox
+        if source_bbox is None:
+            source_bbox = [x1, y1, x2, y2]
+        return {
+            'bbox': [x1, y1, x2, y2],
+            'center_x': (x1 + x2) / 2.0,
+            'source_label': source_label,
+            'source_bbox': source_bbox,
+            'split_count': split_count,
+            'split_part': split_part,
+            'description': description,
+            'occupied': False,
+            'occupant': None,
+            'inferred': inferred,
+        }
+
+    def _split_object_into_seats(self, obj, split_count):
+        x1, y1, x2, y2 = self._bbox(obj)
+        width = max(1.0, x2 - x1)
+        source_name = self._source_name(obj)
+        seats = []
+        for i in range(split_count):
+            sx1 = x1 + width * i / split_count
+            sx2 = x1 + width * (i + 1) / split_count
+            part = self._part_name(i, split_count)
+            seats.append(self._seat_from_bbox(
+                [sx1, y1, sx2, y2],
+                source_label=obj.get('label', 'seat'),
+                source_bbox=[x1, y1, x2, y2],
+                split_count=split_count,
+                split_part=i + 1,
+                description=f"the {part} of the {source_name}",
+            ))
+        return seats
+
+    def _median(self, values, default):
+        values = sorted(values)
+        if not values:
+            return default
+        mid = len(values) // 2
+        if len(values) % 2:
+            return values[mid]
+        return (values[mid - 1] + values[mid]) / 2.0
+
+    def _person_depth(self, person):
+        z = float(person.get('distance_z', 999.0))
+        return z if 0.1 < z < 20.0 else None
+
+    def _filter_foreground_people(self, people):
+        if not people:
+            return [], []
+
+        with_geometry = [p for p in people if self._bbox_width(p) > 5 and self._bbox_height(p) > 10]
+        if not with_geometry:
+            return [], people
+
+        depths = [self._person_depth(p) for p in with_geometry]
+        valid_depths = [z for z in depths if z is not None]
+        max_bottom = max(self._bbox(p)[3] for p in with_geometry)
+        max_height = max(self._bbox_height(p) for p in with_geometry)
+
+        kept = []
+        rejected = []
+        nearest_z = min(valid_depths) if valid_depths else None
+        for person in with_geometry:
+            z = self._person_depth(person)
+            _, _, _, y2 = self._bbox(person)
+            height = self._bbox_height(person)
+
+            near_by_depth = nearest_z is None or z is None or z <= nearest_z + 1.2
+            low_enough = y2 >= max_bottom - 130.0
+            large_enough = height >= max_height * 0.55
+
+            if near_by_depth and (low_enough or large_enough):
+                kept.append(person)
+            else:
+                rejected.append(person)
+
+        return kept, rejected
+
+    def _row_bounds_from_detections(self, seating_objects, people, frame_width):
+        boxes = [self._bbox(o) for o in seating_objects]
+        person_boxes = [self._bbox(p) for p in people]
+
+        if not boxes and not person_boxes:
+            return None
+
+        all_boxes = boxes if boxes else person_boxes
+        x1 = min(b[0] for b in all_boxes)
+        x2 = max(b[2] for b in all_boxes)
+        y1 = min(b[1] for b in all_boxes)
+        y2 = max(b[3] for b in all_boxes)
+
+        for p_box in person_boxes:
+            x1 = min(x1, p_box[0])
+            x2 = max(x2, p_box[2])
+            y2 = max(y2, p_box[3])
+
+        object_widths = [self._bbox_width(o) for o in seating_objects]
+        person_widths = [self._bbox_width(p) for p in people]
+        slot_width = self._median(object_widths, frame_width * 0.18)
+        if object_widths and len(seating_objects) < self.expected_seat_count:
+            slot_width = max(slot_width, self._median(person_widths, slot_width) * 0.85)
+        elif person_widths:
+            slot_width = max(slot_width, self._median(person_widths, slot_width) * 0.9)
+
+        min_row_width = slot_width * self.expected_seat_count
+        current_width = max(1.0, x2 - x1)
+        if current_width < min_row_width:
+            center = (x1 + x2) / 2.0
+            x1 = center - min_row_width / 2.0
+            x2 = center + min_row_width / 2.0
+
+        x1 = max(0.0, x1)
+        x2 = min(float(frame_width), x2)
+        if x2 - x1 < min_row_width * 0.7:
+            center = (x1 + x2) / 2.0
+            x1 = max(0.0, center - min_row_width / 2.0)
+            x2 = min(float(frame_width), center + min_row_width / 2.0)
+
+        return [x1, y1, x2, y2]
+
+    def _build_uniform_seat_slots(self, row_bbox, source_label, inferred):
+        x1, y1, x2, y2 = row_bbox
+        width = max(1.0, x2 - x1)
+        seats = []
+        for i in range(self.expected_seat_count):
+            sx1 = x1 + width * i / self.expected_seat_count
+            sx2 = x1 + width * (i + 1) / self.expected_seat_count
+            seats.append(self._seat_from_bbox(
+                [sx1, y1, sx2, y2],
+                source_label=source_label,
+                source_bbox=row_bbox,
+                split_count=self.expected_seat_count,
+                split_part=i + 1,
+                description=f"the {self._part_name(i, self.expected_seat_count)} of the seating row",
+                inferred=inferred,
+            ))
+        return seats
+
+    def _build_seat_candidates(self, seating_objects, frame_width, people=None):
+        people = people or []
+        objects = sorted(seating_objects, key=self._bbox_center_x)
+        if not objects and not people:
+            return []
+
+        if len(objects) < self.expected_seat_count:
+            row_bbox = self._row_bounds_from_detections(objects, people, frame_width)
+            if row_bbox:
+                source_label = 'inferred_row' if not objects else objects[0].get('label', 'seat')
+                return self._finalize_seat_indices(
+                    self._build_uniform_seat_slots(
+                        row_bbox,
+                        source_label=source_label,
+                        inferred=True,
+                    )
+                )
+
+        split_target = None
+        split_count = 1
+        if len(objects) < self.expected_seat_count:
+            shortage = self.expected_seat_count - len(objects)
+            splittable = [o for o in objects if self._is_splittable_seating_object(o, frame_width)]
+            if splittable:
+                split_target = max(splittable, key=self._bbox_width)
+                split_count = shortage + 1
+
+        seats = []
+        for obj in objects:
+            if obj is split_target:
+                seats.extend(self._split_object_into_seats(obj, split_count))
+            else:
+                x1, y1, x2, y2 = self._bbox(obj)
+                seats.append(self._seat_from_bbox(
+                    [x1, y1, x2, y2],
+                    source_label=obj.get('label', 'seat'),
+                    source_bbox=[x1, y1, x2, y2],
+                ))
+
+        return self._finalize_seat_indices(seats)
+
+    def _finalize_seat_indices(self, seats):
+        seats.sort(key=lambda s: s['center_x'])
+        for i, seat in enumerate(seats):
+            if not seat['description']:
+                seat['description'] = f"the {self._ordinal(i + 1)} seat from the left"
+            seat['index'] = i + 1
+        return seats
+
+    def _ordinal(self, n):
+        return {1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth"}.get(n, f"{n}th")
+
+    def _assign_people_to_seats(self, people, seats):
+        assignments = []
+        for p_idx, person in enumerate(people):
+            p_box = self._bbox(person)
+            px = (p_box[0] + p_box[2]) / 2.0
+            py = (p_box[1] + p_box[3]) / 2.0
+            candidates = []
+            for seat in seats:
+                s_box = seat['bbox']
+                source_overlap = self._bbox_overlap_ratio(p_box, seat['source_bbox'])
+                vertical_overlap = not (p_box[3] < s_box[1] or p_box[1] > s_box[3])
+                slot_margin = max(25.0, (s_box[2] - s_box[0]) * 0.25)
+                contains_x = (s_box[0] - slot_margin) <= px <= (s_box[2] + slot_margin)
+                distance = abs(px - seat['center_x'])
+                max_distance = max(45.0, (s_box[2] - s_box[0]) * 0.75)
+                if contains_x and distance <= max_distance and (vertical_overlap or source_overlap > 0.02 or seat.get('inferred')):
+                    candidates.append((distance, seat, source_overlap))
+
+            if not candidates:
+                continue
+
+            _, seat, overlap = min(candidates, key=lambda x: x[0])
+            z = self._person_depth(person)
+            priority = (
+                z if z is not None else 999.0,
+                -p_box[3],
+                abs(px - seat['center_x']),
+            )
+            assignments.append((seat, priority, p_idx, px, py, overlap, person))
+
+        best_by_seat = {}
+        for seat, priority, p_idx, px, py, overlap, person in assignments:
+            seat_index = seat['index']
+            if seat_index not in best_by_seat or priority < best_by_seat[seat_index][0]:
+                best_by_seat[seat_index] = (priority, p_idx, px, py, overlap, person)
+
+        for seat in seats:
+            selected = best_by_seat.get(seat['index'])
+            if not selected:
+                continue
+            _, p_idx, px, py, overlap, person = selected
+            seat['occupied'] = True
+            seat['occupant'] = {
+                'person_index': p_idx + 1,
+                'person_x': px,
+                'person_y': py,
+                'overlap': overlap,
+                'distance_z': person.get('distance_z', 999.0),
+            }
+
+    def _select_empty_seat(self, empty_seats):
+        if not empty_seats:
+            return None
+        center_index = (self.expected_seat_count + 1) / 2.0
+        return min(empty_seats, key=lambda s: (abs(s['index'] - center_index), s['index']))
+
+    def _waist_yaw_for_x(self, x_center, current_waist):
+        angle_rad = (self.image_width / 2.0 - x_center) * (87.0 / self.image_width) * math.pi / 180.0
+        target_turn = angle_rad * 1.5
+        target_waist = current_waist + (target_turn * 0.8)
+        return max(-1.2, min(1.2, target_waist)), target_turn
 
     def execute(self, userdata):
-        self.node.get_logger().info("[YOLO CHAIR] Searching for empty chair...")
+        self.node.get_logger().info("[YOLO SEAT] Searching for empty seat...")
         self.start_yolo()
 
         for _ in range(5):
@@ -210,119 +622,117 @@ class YoloEmptyChairState(BaseYoloState):
             if msg:
                 try:
                     detections = json.loads(msg)
-                    # 信頼度(score)がある場合は 0.5 以上のものだけを抽出する（YOLO側のデフォルトに依存）
-                    people = [d for d in detections if d.get('label') == 'person' and d.get('score', 1.0) >= 0.7]
-                    chairs = [d for d in detections if d.get('label') == 'chair' and d.get('score', 1.0) >= 0.7]
+                    people = [
+                        d for d in detections
+                        if d.get('label') == 'person' and self._det_conf(d) >= 0.7
+                    ]
+                    foreground_people, background_people = self._filter_foreground_people(people)
+                    seating_objects = [
+                        d for d in detections
+                        if d.get('label') in self.SEATING_LABELS and self._det_conf(d) >= 0.55
+                    ]
 
-                    # bboxから正確な中心X座標を計算する関数
-                    def get_x_center(item):
-                        bbox = item.get('bbox', [0, 0, 0, 0])
-                        if len(bbox) == 4:
-                            return (bbox[0] + bbox[2]) / 2.0
-                        return 0.0
+                    max_x = max([self.image_width] + [self._bbox(d)[2] for d in detections if d.get('bbox')])
+                    frame_width = max(self.image_width, max_x)
+                    seats = self._build_seat_candidates(seating_objects, frame_width, foreground_people)
+                    self._assign_people_to_seats(foreground_people, seats)
 
-                    # 椅子を左から右（x座標の昇順）にソート
-                    chairs.sort(key=get_x_center)
-                    
-                    # --- 動的キャリブレーション（1回目の椅子の位置を保存） ---
+                    if not seats:
+                        self.node.get_logger().warn(
+                            f"[YOLO SEAT] No seating objects. detections={len(detections)}, people={len(people)}"
+                        )
+                        continue
+
                     if self.guest_index == 1 and self.direct_arm:
-                        # 1回目は部屋がクリーンなので、すべての椅子のX座標を記憶しておく
-                        self.direct_arm.saved_chair_x_centers = [get_x_center(c) for c in chairs]
-                        self.node.get_logger().info(f"Saved initial chair centers: {self.direct_arm.saved_chair_x_centers}")
+                        self.direct_arm.saved_chair_x_centers = [s['center_x'] for s in seats]
+                        self.node.get_logger().info(
+                            f"[YOLO SEAT] Saved initial seat centers: {self.direct_arm.saved_chair_x_centers}"
+                        )
 
-                    empty_chairs = []
-                    occupied_chairs = []
-                    occupied_info = []
+                    empty_seats = [s for s in seats if not s['occupied']]
+                    occupied_seats = [s for s in seats if s['occupied']]
+                    raw_log = [
+                        f"{d.get('label')} conf={self._det_conf(d):.2f} bbox={[int(v) for v in self._bbox(d)]}"
+                        for d in detections
+                        if d.get('label') in self.SEATING_LABELS or d.get('label') == 'person'
+                    ]
                     seat_status_log = []
+                    for s in seats:
+                        occupant = s.get('occupant')
+                        status = "Occupied" if s['occupied'] else "Empty"
+                        detail = ""
+                        if occupant:
+                            detail = (
+                                f", person={occupant['person_index']}, "
+                                f"px={occupant['person_x']:.1f}, "
+                                f"z={occupant['distance_z']:.2f}, overlap={occupant['overlap']:.2f}"
+                            )
+                        seat_status_log.append(
+                            f"{s['index']}:{status} center={s['center_x']:.1f} "
+                            f"src={s['source_label']} split={s['split_part']}/{s['split_count']} "
+                            f"inferred={s.get('inferred', False)} desc='{s['description']}'{detail}"
+                        )
 
-                    for i, c in enumerate(chairs):
-                        c_box = c.get('bbox', [0, 0, 0, 0])
-                        c_area = max(1.0, (c_box[2] - c_box[0]) * (c_box[3] - c_box[1]))
-                        
-                        is_empty = True
-                        for p in people:
-                            p_box = p.get('bbox', [0, 0, 0, 0])
-                            
-                            # 共通部分（Intersection）の計算
-                            x_left = max(c_box[0], p_box[0])
-                            y_top = max(c_box[1], p_box[1])
-                            x_right = min(c_box[2], p_box[2])
-                            y_bottom = min(c_box[3], p_box[3])
-                            
-                            if x_right > x_left and y_bottom > y_top:
-                                overlap_area = (x_right - x_left) * (y_bottom - y_top)
-                                overlap_ratio = overlap_area / c_area
-                                
-                                # 人の中心Xと椅子の中心Xの距離も考慮する
-                                c_cx = (c_box[0] + c_box[2]) / 2.0
-                                p_cx = (p_box[0] + p_box[2]) / 2.0
-                                c_width = max(1.0, c_box[2] - c_box[0])
-                                
-                                # 重なりが10%以上あるか、X座標の中心同士が近い（椅子の幅の半分以下）場合は「座っている」と判定
-                                if overlap_ratio > 0.1 or abs(c_cx - p_cx) < c_width * 0.6:
-                                    is_empty = False
-                                    occupied_chairs.append(c)
-                                    occupied_info.append(f"左から{i+1}番目(重なり{int(overlap_ratio*100)}%)")
-                                    seat_status_log.append(f"Chair {i+1}: Occupied")
-                                    break
-                                    
-                        if is_empty:
-                            seat_status_log.append(f"Chair {i+1}: Empty")
-                            empty_chairs.append(c)
-
-                    # 情報のログ出力
                     self.node.get_logger().info(
-                        f"検出結果 -> 椅子合計: {len(chairs)}個, 人: {len(people)}人, 空き椅子: {len(empty_chairs)}個"
+                        f"[YOLO SEAT] Raw detections -> {', '.join(raw_log) if raw_log else 'none'}"
                     )
-                    self.node.get_logger().info(f"Seat status (left to right): [{', '.join(seat_status_log)}]")
-                    
-                    if occupied_info:
-                        self.node.get_logger().info(f"人が座っている椅子: {', '.join(occupied_info)}")
+                    self.node.get_logger().info(
+                        f"[YOLO SEAT] Summary -> seating_objects={len(seating_objects)}, "
+                        f"people={len(people)}, foreground_people={len(foreground_people)}, "
+                        f"background_people={len(background_people)}, seats={len(seats)}, empty={len(empty_seats)}"
+                    )
+                    if background_people:
+                        bg_log = [
+                            f"bbox={[int(v) for v in self._bbox(p)]} z={p.get('distance_z', 999.0):.2f}"
+                            for p in background_people[:6]
+                        ]
+                        self.node.get_logger().info(
+                            f"[YOLO SEAT] Ignored background people -> {', '.join(bg_log)}"
+                        )
+                    self.node.get_logger().info(
+                        f"[YOLO SEAT] Seat status left-to-right -> {' | '.join(seat_status_log)}"
+                    )
 
-                    if empty_chairs:
-                        # 常に一番左の本当に空いている椅子をターゲットにする
-                        empty_chair = empty_chairs[0]
-                        c_x = get_x_center(empty_chair)
-                        
-                        empty_idx = 1
-                        # 記憶したX座標リストの中で、もっとも距離が近いもののインデックス（1-indexed）を採用
-                        if self.direct_arm and hasattr(self.direct_arm, 'saved_chair_x_centers') and self.direct_arm.saved_chair_x_centers:
-                            distances = [abs(c_x - saved_x) for saved_x in self.direct_arm.saved_chair_x_centers]
-                            closest_idx = distances.index(min(distances))
-                            empty_idx = closest_idx + 1
-                            self.node.get_logger().info(f"-> Mapped empty chair to saved index: {empty_idx} (c_x={c_x:.1f})")
-                        else:
-                            # 万が一データがない場合は、画面の左半分か右半分かで判定
-                            empty_idx = 1 if c_x < 320 else 2
-                            self.node.get_logger().info(f"-> Mapped empty chair by screen half: {empty_idx} (c_x={c_x:.1f})")
-
+                    if empty_seats:
+                        empty_seat = self._select_empty_seat(empty_seats)
+                        empty_idx = empty_seat['index']
                         userdata.empty_seat_index = empty_idx
-                        if self.direct_arm:
-                            self.direct_arm.empty_seat_index = empty_idx
-                        self.node.get_logger().info(f"-> Selected empty chair index: {empty_idx} (from left)")
-                        
-                        if self.direct_arm:
-                            # 万が一のために、人が座っている椅子の角度も計算して保存しておく
-                            if occupied_chairs:
-                                h_x = get_x_center(occupied_chairs[0])
-                                # c_x < 320 (左) ならプラスの角度になるように計算（左旋回＝プラス）
-                                h_angle_rad = (320 - h_x) * (87.0 / 640.0) * math.pi / 180.0
-                                current_waist = self.direct_arm.current_joints.get('waist_yaw_joint', 0.0)
-                                self.direct_arm.host_waist_yaw = current_waist + (h_angle_rad * 1.5 * 0.8)
-                                self.node.get_logger().info(f"Host chair position saved as waist_yaw: {self.direct_arm.host_waist_yaw}")
 
-                            # x_centerから回転角を再計算
-                            c_x = get_x_center(empty_chair)
-                            angle_rad = (320 - c_x) * (87.0 / 640.0) * math.pi / 180.0
-                            target_turn = angle_rad * 1.5
-                            
-                            # 紹介フェーズのために、この「空き椅子の方向（＝ゲスト2）」も保存しておく
-                            self.direct_arm.guest2_waist_yaw = current_waist + (target_turn * 0.8)
-                            self.node.get_logger().info(f"Guest 2 chair position saved as waist_yaw: {self.direct_arm.guest2_waist_yaw}")
-                            
+                        if self.direct_arm:
+                            current_waist = self.direct_arm.current_joints.get('waist_yaw_joint', 0.0)
+                            seat_waist_yaws = {}
+                            seat_turns = {}
+                            for seat in seats:
+                                waist_yaw, turn = self._waist_yaw_for_x(seat['center_x'], current_waist)
+                                seat_waist_yaws[seat['index']] = waist_yaw
+                                seat_turns[seat['index']] = turn
+
+                            self.direct_arm.empty_seat_index = empty_idx
+                            self.direct_arm.selected_seat_description = empty_seat['description']
+                            self.direct_arm.seat_waist_yaws = seat_waist_yaws
+                            self.direct_arm.seat_candidates_debug = seats
+
+                            if occupied_seats:
+                                host_seat = occupied_seats[0]
+                                self.direct_arm.host_waist_yaw = seat_waist_yaws[host_seat['index']]
+                                self.node.get_logger().info(
+                                    f"[YOLO SEAT] Host seat saved -> index={host_seat['index']}, "
+                                    f"desc='{host_seat['description']}', waist={self.direct_arm.host_waist_yaw:.3f}"
+                                )
+
+                            self.direct_arm.guest2_waist_yaw = seat_waist_yaws[empty_idx]
+                            target_turn = seat_turns[empty_idx]
+                            self.node.get_logger().info(
+                                f"[YOLO SEAT] Selected empty seat -> index={empty_idx}, "
+                                f"desc='{empty_seat['description']}', center={empty_seat['center_x']:.1f}, "
+                                f"turn={target_turn:.3f}, waist={self.direct_arm.guest2_waist_yaw:.3f}"
+                            )
                             self.direct_arm.turn_waist_towards(target_turn, hold_sec=0.0)
+
                         self.stop_yolo()
                         return 'success'
+
+                    self.node.get_logger().warn("[YOLO SEAT] No empty seat found in current frame.")
 
                 except Exception as e:
                     self.node.get_logger().warn(f"  -> Parse error: {e}")
@@ -335,6 +745,7 @@ class YoloEmptyChairState(BaseYoloState):
             fallback_idx = 1 if self.guest_index == 1 else 2
             userdata.empty_seat_index = fallback_idx
             self.direct_arm.empty_seat_index = fallback_idx
+            self.direct_arm.selected_seat_description = None
             
             # フォールバック時も hold_sec=0.0 で即座に次の腕の動作に移行させる
             fallback_turn = 0.5 if fallback_idx == 1 else -0.5

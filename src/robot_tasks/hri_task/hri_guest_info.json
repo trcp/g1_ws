@@ -1,0 +1,44 @@
+{
+  "Guest_1": {
+    "name": "",
+    "drink": "",
+    "features": {
+      "features": [
+        "",
+        "",
+        "",
+        ""
+      ],
+      "raw": {
+        "upper_clothing_color": "",
+        "upper_clothing_type": "",
+        "lower_clothing_color": "",
+        "lower_clothing_type": "",
+        "accessories": "",
+        "hair": "",
+        "obvious_pattern": ""
+      }
+    }
+  },
+  "Guest_2": {
+    "name": "",
+    "drink": "",
+    "features": {
+      "features": [
+        "",
+        "",
+        ""
+      ],
+      "raw": {
+        "upper_clothing_color": "",
+        "upper_clothing_type": "",
+        "lower_clothing_color": "",
+        "lower_clothing_type": "",
+        "accessories": "",
+        "hair": "",
+        "obvious_pattern": ""
+      }
+    }
+  },
+  "last_updated": ""
+}

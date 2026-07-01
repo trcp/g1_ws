@@ -76,3 +76,4 @@ src/erasers_g1_api/config/faster-whisper-small
 .DS_Store
 Thumbs.db
 .env
+*.ts

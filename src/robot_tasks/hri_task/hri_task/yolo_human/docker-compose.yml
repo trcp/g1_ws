@@ -10,6 +10,7 @@ services:
       - ./extract_person_features_off.py:/app/extract_person_features_off.py
       - ./extract_person_features.py:/app/extract_person_features.py
       - ./yoloe-26x-seg.pt:/app/yoloe-26x-seg.pt
+      - ./mobileclip2_b.ts:/app/mobileclip2_b.ts
       - ~/.cache:/root/.cache
       - /home/roboworks/g1_ws/cyclonedds/cyclonedds.katana.xml:/tmp/cyclonedds.xml
     env_file:

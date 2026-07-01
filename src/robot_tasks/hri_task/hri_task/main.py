@@ -36,8 +36,11 @@ import threading
 # ============================================================
 
 def save_current_guest_info(node, guest_idx, name=None, drink=None, features=None):
-    # 保存先はホームディレクトリ
-    file_path = os.path.expanduser("~/hri_guest_info.json")
+    # コンテナ内実行でもホスト側ワークスペースに残るよう、パッケージ直下へ保存する。
+    file_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "hri_guest_info.json"
+    )
     data = {}
     if os.path.exists(file_path):
         try:
@@ -61,6 +64,7 @@ def save_current_guest_info(node, guest_idx, name=None, drink=None, features=Non
     data["last_updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
         
     try:
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
         if node:
@@ -95,8 +99,8 @@ from direct_joint_control import (
 
 # 座標リスト [x, y, yaw(rad)]
 LOCATIONS = {
-    'entrance': [-3.1, 0.82, 3.16],
-    'chair_front': [-2.0, 2.12, -1.70],
+    'entrance': [-0.97, -0.64, 0.3],
+    'chair_front': [-2.3, -0.95, 1.87],
 }
 
 # ドアベルをスキップするかどうか（一旦skip）Trueがスキップfalseが実行
@@ -120,7 +124,8 @@ TARGET_DICT = {
         "barbara", "susan", "jessica", "sarah", "karen", 
         "nancy", "lisa", "betty", "margaret", "sandra", 
         "ashley", "kimberly", "emily", "donna", "michelle", 
-        "carol", "amanda", "dorothy", "melissa", "deborah",
+        "carol", "amanda", "dorothy", "melissa", "deborah","adel","angel","axel","charlie","jane",
+        "jules","morgan","paris","robin","simone",
         # 男性の名前 (25個)
         "james", "john", "robert", "michael", "william", 
         "david", "richard", "joseph", "thomas", "charles", 
@@ -210,13 +215,17 @@ def arm_action_cb(userdata, node: Node, tts_say, direct_arm: DirectJointControll
             if direct_arm:
                 direct_arm.point_right(hold_sec=2.0)
                 
-            # 何番目の椅子が空いているかを計算して喋る
+            # 空席検出で保存した説明文を優先する。ソファー分割時は
+            # "the left side of the sofa" のように案内する。
             seat_idx = getattr(direct_arm, 'empty_seat_index', 1)
-            ordinals = {1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth"}
-            ordinal_str = ordinals.get(seat_idx, f"{seat_idx}th")
+            seat_description = getattr(direct_arm, 'selected_seat_description', None)
+            if not seat_description:
+                ordinals = {1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth"}
+                ordinal_str = ordinals.get(seat_idx, f"{seat_idx}th")
+                seat_description = f"the {ordinal_str} seat from the left"
             
             # 姿勢が固定されたまま喋る
-            tts_say(f"The {ordinal_str} seat from the left is empty. Please sit there.")
+            tts_say(f"{seat_description.capitalize()} is empty. Please sit there.")
             
             # 喋り終わった後、次のフェーズに進むときにホームポジションへ移行する
             if direct_arm:
@@ -472,24 +481,21 @@ def describe_guest_1_cb(userdata, node: Node, tts_say):
     """ゲスト2にゲスト1（ホスト）の特徴を伝える"""
     features = userdata.g1_features if hasattr(userdata, 'g1_features') else {}
     spoken = 0
-    
-    if isinstance(features, list) and len(features) >= 4:
-        tts_say("Let me tell you four features about the first guest.")
+
+    feature_list = []
+    if isinstance(features, list):
+        feature_list = features
+    elif isinstance(features, dict) and isinstance(features.get('features'), list):
+        feature_list = features.get('features')
+
+    feature_list = [str(feature).strip() for feature in feature_list if str(feature).strip()]
+    if feature_list:
+        prefixes = ["First", "Second", "Third", "And lastly"]
+        tts_say("Let me describe the first guest.")
         time.sleep(1.0)
-        tts_say(f"First, {features[0]}.")
-        time.sleep(0.5)
-        tts_say(f"Second, {features[1]}.")
-        time.sleep(0.5)
-        tts_say(f"Third, {features[2]}.")
-        time.sleep(0.5)
-        tts_say(f"And lastly, {features[3]}.")
-        time.sleep(0.5)
-        return 'success'
-    elif isinstance(features, list):
-        tts_say("Let me tell you some features about the first guest.")
-        time.sleep(1.0)
-        for i, feature in enumerate(features):
-            tts_say(f"Feature {i+1}: {feature}.")
+        for i, feature in enumerate(feature_list[:4]):
+            prefix = prefixes[i] if i < len(feature_list[:4]) - 1 else ("And lastly" if i > 0 else "First")
+            tts_say(f"{prefix}, {feature}.")
             time.sleep(0.5)
         return 'success'
 
@@ -554,7 +560,9 @@ class YoloSpeechToTextState(smach.State):
             closest_features = None
             for det in data:
                 if det.get('label') == 'person' and det.get('features'):
-                    z = det.get('distance_z', 999.0)
+                    z = float(det.get('distance_z', 999.0))
+                    if not (0.1 < z < 10.0):
+                        continue
                     if z < min_z:
                         min_z = z
                         closest_features = det['features']
@@ -704,7 +712,7 @@ def main():
 
         smach.StateMachine.add(
             'TRACK_PERSON_1',
-            YoloTrackingState(node=node, direct_arm=ARM, use_waist=True),
+            YoloTrackingState(node=node, direct_arm=ARM, use_waist=True, timeout=30.0),
             transitions={'success': 'GREET_GUEST_1',
                          'failure': 'GREET_GUEST_1',
                          'timeout': 'GREET_GUEST_1'})
@@ -766,7 +774,7 @@ def main():
 
         smach.StateMachine.add(
             'TRACK_PERSON_2',
-            YoloTrackingState(node=node, direct_arm=ARM, use_waist=True),
+            YoloTrackingState(node=node, direct_arm=ARM, use_waist=True, timeout=30.0),
             transitions={'success': 'GREET_GUEST_2',
                          'failure': 'GREET_GUEST_2',
                          'timeout': 'GREET_GUEST_2'})
