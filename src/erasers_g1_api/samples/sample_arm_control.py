@@ -35,13 +35,12 @@ def main():
     arm.move_groupstate(group_state="walk")
 
     say("Joint Control")
-    arm.joint_control(left_shoulder_pitch_joint=-0.735,
-                      left_wrist_roll_joint=-1.57,
-                      right_shoulder_pitch_joint=-0.735,
-                      right_wrist_roll_joint=1.57,)
+    arm.joint_control(right_shoulder_pitch_joint=-0.735,
+                      right_wrist_roll_joint=1.57,
+                      planning_group="upper_body")
 
-    say("Disarmed upper body control.")
-    arm.enable_upper_body_control(False)
+    # say("Disarmed upper body control.")
+    # arm.enable_upper_body_control(False)
 
 if __name__ == '__main__':
     main()
