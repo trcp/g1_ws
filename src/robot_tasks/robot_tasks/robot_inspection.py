@@ -51,7 +51,8 @@ def initial_pose_cb(
                 userdata.initial_pose[1],
                 userdata.initial_pose[2],
             ],
-            max_attempts=100,
+            # max_attempts=100,
+            max_attempts=10,
             tolerance=0.65,
             settle_time=3.0,
         )
@@ -119,7 +120,16 @@ def main():
     sm.userdata.initial_pose = [-0.73, -0.59, -2.81]
     sm.userdata.inspection_point = [-5.67, -1.85, -2.81]
     sm.userdata.exit_point = [0.936, -4.187, 0.435]
-    sm.userdata.success_keywards = ["yes", "YES", "Yes"]
+    sm.userdata.success_keywards = [
+        "byebye",
+        "ByeBye",
+        "BYEBYE",
+        "bye bye",
+        "Bye Bye",
+        "BYE BYE",
+        "Bye-Bye",
+        "bye-bye",
+    ]
     sm.userdata.num_challenge = 0
 
     SAY("robot inspection task start!")
@@ -178,12 +188,13 @@ def main():
             SpeechToText(
                 node=node,
                 tts=tts,
-                start_msg="My name is erasers_g1, Did you finish my inspection?? If so, please say YES or NO after the chime sounds.",
+                start_msg="My name is erasers_g1, Did you finish my inspection?? If so, please say ByeBye or NO after the chime sounds.",
                 success_msg="Thank you! I will go to exit.",
                 timeout_msg="OK. I will stay.",
             ),
             transitions={
                 "success": "MOVE_EXIT_POINT",
+                # "success": "success",
                 "timeout": "HUMAN_INTARACTION",
                 "failure": "failure",
             },
