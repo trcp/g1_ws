@@ -66,6 +66,22 @@ class TTS:
     
     
     def audio(self, audio_path:str, logger:str="info", wait:bool=True) -> bool:
+        """WAV 音声ファイルを再生する。
+
+        Parameters
+        ----------
+        audio_path : str
+            再生する WAV ファイルのパス。
+        logger : str, optional
+            ログ出力レベル。'info'、'warn'、'error'、'debug' を指定可能。
+        wait : bool, optional
+            再生完了を待つかどうか、デフォルトは True。
+
+        Returns
+        -------
+        bool
+            再生リクエストが成功した場合は True。
+        """
         # 外部PC（katana）のパスをロボット（Unitree G1）内部のパスに変換する
         # /home/roboworks/ -> /home/unitree/
         abs_path = os.path.abspath(audio_path)

@@ -290,6 +290,18 @@ class LOR(smach.State):
         self.__person_pose_array_pub.publish(pose_array)
 
     def execute(self, userdata):
+        """SMACH state を実行し、人物検出結果を userdata に格納する。
+
+        Parameters
+        ----------
+        userdata : smach.UserData
+            person_poses と person_poses_header に検出結果を格納する。
+
+        Returns
+        -------
+        str
+            SMACH outcome。'success'、'timeout'、'failure' のいずれか。
+        """
         try:
             # declare msg
             self.__node.get_logger().info("""
@@ -534,6 +546,18 @@ class SpeechToText(smach.State):
                 self.__node.get_logger().info("Silence detected, finishing recording")
 
     def execute(self, userdata):
+        """SMACH state を実行し、音声認識結果を userdata に格納する。
+
+        Parameters
+        ----------
+        userdata : smach.UserData
+            num_challenge を入力および更新値として使用し、stt_text に認識結果を格納する。
+
+        Returns
+        -------
+        str
+            SMACH outcome。'success'、'timeout'、'failure' のいずれか。
+        """
         try:
             num_challenge = userdata.num_challenge
             if num_challenge > 0:

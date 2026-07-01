@@ -159,7 +159,11 @@ class G1Control:
         Parameters
         ----------
         pose : str
-            適用するポーズポリシーの識別子。
+            適用するポーズポリシーの識別子。PosePolicy.srv で定義されている
+            対応姿勢は 'damp'、'start'、'squat'、'sit'、'stand_up'、
+            'zero_torque'、'stop_move'、'high_stand'、'low_stand'、
+            'balance_stand'、'shake_hand'、'wave_hand'、
+            'wave_hand_with_turn'、'running'。
 
         Returns
         -------
@@ -977,7 +981,7 @@ class G1Navigation:
     ) -> bool:
         """
         ロボットの初期位置（Initial Pose）を設定する．
-        AMCL等のローカライゼーションノードに対して /initialpose トピックをパブリッシュする。
+        ローカライゼーションノードに対して /initialpose トピックをパブリッシュする。
 
         Parameters
         ----------
@@ -1179,6 +1183,29 @@ class Collision:
         yaw=0.0,
         size=(0.1, 0.1, 0.1),
     ):
+        """箱形状の CollisionObject をプランニングシーンに追加する。
+
+        Parameters
+        ----------
+        name : str
+            追加する CollisionObject の名前。
+        ref : str, optional
+            オブジェクト姿勢の基準フレーム。
+        x : float, optional
+            オブジェクト中心の x 座標(m)。
+        y : float, optional
+            オブジェクト中心の y 座標(m)。
+        z : float, optional
+            オブジェクト中心の z 座標(m)。
+        roll : float, optional
+            オブジェクト姿勢の roll 角(rad)。
+        pitch : float, optional
+            オブジェクト姿勢の pitch 角(rad)。
+        yaw : float, optional
+            オブジェクト姿勢の yaw 角(rad)。
+        size : tuple, optional
+            箱の寸法。x、y、z 方向の長さ(m)。
+        """
         co = self._create_collision_object(
             name, ref, x, y, z, roll, pitch, yaw, SolidPrimitive.BOX, list(size)
         )
@@ -1193,6 +1220,23 @@ class Collision:
         z=0.0,
         radius=0.05,
     ):
+        """球形状の CollisionObject をプランニングシーンに追加する。
+
+        Parameters
+        ----------
+        name : str
+            追加する CollisionObject の名前。
+        ref : str, optional
+            オブジェクト姿勢の基準フレーム。
+        x : float, optional
+            球中心の x 座標(m)。
+        y : float, optional
+            球中心の y 座標(m)。
+        z : float, optional
+            球中心の z 座標(m)。
+        radius : float, optional
+            球の半径(m)。
+        """
         co = self._create_collision_object(
             name, ref, x, y, z, 0, 0, 0, SolidPrimitive.SPHERE, [radius]
         )
@@ -1211,6 +1255,31 @@ class Collision:
         height=0.1,
         radius=0.05,
     ):
+        """円柱形状の CollisionObject をプランニングシーンに追加する。
+
+        Parameters
+        ----------
+        name : str
+            追加する CollisionObject の名前。
+        ref : str, optional
+            オブジェクト姿勢の基準フレーム。
+        x : float, optional
+            円柱中心の x 座標(m)。
+        y : float, optional
+            円柱中心の y 座標(m)。
+        z : float, optional
+            円柱中心の z 座標(m)。
+        roll : float, optional
+            オブジェクト姿勢の roll 角(rad)。
+        pitch : float, optional
+            オブジェクト姿勢の pitch 角(rad)。
+        yaw : float, optional
+            オブジェクト姿勢の yaw 角(rad)。
+        height : float, optional
+            円柱の高さ(m)。
+        radius : float, optional
+            円柱の半径(m)。
+        """
         co = self._create_collision_object(
             name,
             ref,
@@ -1255,6 +1324,13 @@ class Collision:
             )
 
     def remove_collision(self, name: str):
+        """指定した CollisionObject をプランニングシーンから削除する。
+
+        Parameters
+        ----------
+        name : str
+            削除する CollisionObject の名前。
+        """
         co = CollisionObject()
         co.id = name
         co.operation = CollisionObject.REMOVE
@@ -1273,6 +1349,19 @@ class Collision:
         self.__scene_pub.publish(scene_msg)
 
     def get_object_pose(self, name: str):
+        """指定した CollisionObject の姿勢を取得する。
+
+        Parameters
+        ----------
+        name : str
+            姿勢を取得する CollisionObject の名前。
+
+        Returns
+        -------
+        tuple or None
+            オブジェクト姿勢を (x, y, z, roll, pitch, yaw) で返す。
+            見つからない場合、または planning scene を取得できない場合は None。
+        """
         if not self.__get_scene_cli.wait_for_service(timeout_sec=1.0):
             return None
         req = GetPlanningScene.Request()
@@ -1306,6 +1395,19 @@ class Collision:
         return None
 
     def get_object(self, name: str):
+        """指定した CollisionObject を取得する。
+
+        Parameters
+        ----------
+        name : str
+            取得する CollisionObject の名前。
+
+        Returns
+        -------
+        CollisionObject or None
+            見つかった CollisionObject。見つからない場合、または planning scene を
+            取得できない場合は None。
+        """
         if not self.__get_scene_cli.wait_for_service(timeout_sec=1.0):
             return None
         req = GetPlanningScene.Request()
@@ -1330,6 +1432,20 @@ class Collision:
         touch_links: list = None,
         collision_object: CollisionObject = None,
     ):
+        """CollisionObject をロボットリンクに attach する。
+
+        Parameters
+        ----------
+        name : str
+            attach する CollisionObject の名前。
+        link_name : str
+            CollisionObject を attach するリンク名。
+        touch_links : list, optional
+            接触を許可するリンク名のリスト。None の場合は link_name のみを使用する。
+        collision_object : CollisionObject, optional
+            attach に使用する CollisionObject。None の場合は name のみを持つ
+            CollisionObject を attach する。
+        """
         co = CollisionObject()
         co.id = name
         co.operation = CollisionObject.REMOVE
@@ -1677,6 +1793,18 @@ class ArmControl:
         return joints
 
     def enable_upper_body_control(self, enable: bool = True):
+        """上半身制御の有効/無効を切り替える。
+
+        Parameters
+        ----------
+        enable : bool, optional
+            True の場合は上半身制御を有効化し、False の場合は無効化する。
+
+        Returns
+        -------
+        bool
+            サービス呼び出しが成功した場合は True。
+        """
         req = SetBool.Request()
         req.data = enable
         return self.__send_ubc_req(req)

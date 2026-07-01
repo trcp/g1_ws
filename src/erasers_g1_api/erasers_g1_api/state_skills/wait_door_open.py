@@ -29,6 +29,47 @@ class WaitDoorOpen(smach.State):
                  threshold:float=1.0,
                  front_angle:float=0.0,
                  front_width:float=math.radians(20.0),):
+        """ドアが開くまで待機する。
+
+        Parameters
+        ----------
+        node : Node
+            サブスクライバ、ログ出力に使用する ROS ノードインスタンス。
+        tts_say : TTS.say
+            音声応答に使うテキスト読み上げ関数。
+        start_msg : str, optional
+            ドア開放待機開始時に読み上げるメッセージ。
+        success_msg : str, optional
+            ドア開放検出成功時に読み上げるメッセージ。
+        timeout_msg : str, optional
+            タイムアウト時に読み上げるメッセージ。
+        failure_msg : str, optional
+            待機処理中にエラーが発生した場合に読み上げるメッセージ。
+        timeout_sec : int, optional
+            ドア開放検出を待機する最大時間（秒）。
+        threshold : float, optional
+            ドアが開いたと判定する正面 LaserScan 最小距離のしきい値(m)。
+        front_angle : float, optional
+            ドア方向として扱う LaserScan の中心角度(rad)。
+        front_width : float, optional
+            ドア判定に使用する正面角度範囲の幅(rad)。
+
+        userdata
+        --------
+        Input Keys:
+            なし。
+        Output Keys:
+            なし。
+
+        Outcomes
+        ----------
+        success:
+            ドアが開いたと判定された場合。
+        timeout:
+            timeout_sec 内にドア開放が検出されなかった場合。
+        failure:
+            待機処理中にエラーが発生した場合。
+        """
         
         # init smach
         smach.State.__init__(self,
@@ -77,9 +118,21 @@ class WaitDoorOpen(smach.State):
             
         except Exception as e:
             self.__node.get_logger().warn(f"LaserScan callback error: {e}")
-    
+
 
     def execute(self, userdata):
+        """SMACH state を実行し、LaserScan からドア開放を待機する。
+
+        Parameters
+        ----------
+        userdata : smach.UserData
+            この state では参照しない。
+
+        Returns
+        -------
+        str
+            SMACH outcome。'success'、'timeout'、'failure' のいずれか。
+        """
         try:
             laser_scan_qos_profile = qos.QoSProfile(
                 reliability=qos.ReliabilityPolicy.BEST_EFFORT,

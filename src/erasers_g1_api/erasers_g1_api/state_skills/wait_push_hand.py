@@ -27,7 +27,7 @@ class WaitPushHand(smach.State):
         node: Node,
         tts_say: TTS.say,
         arm_control: Optional[ArmControl] = None,
-        start_msg: str = "Please Push my arm here.",
+        start_msg: str = "I will up right arm. Please push my arm after up the arm.",
         success_msg: str = "Thank you.",
         timeout_msg: str = "Time is out.",
         failure_msg: str = "Failure. error is ocurred in wait push hand.",
@@ -35,6 +35,49 @@ class WaitPushHand(smach.State):
         timeout_sec: int = 10,
         threthold: float = 1.5,
     ):
+        """手を押されるまで待機する。
+
+        Parameters
+        ----------
+        node : Node
+            サブスクライバ、publisher、ログ出力に使用する ROS ノードインスタンス。
+        tts_say : TTS.say
+            音声応答に使うテキスト読み上げ関数。
+        arm_control : Optional[ArmControl], optional
+            右手を待機姿勢へ移動する ArmControl インスタンス。None の場合は
+            /upper_joints_control に JointState を publish して待機姿勢を維持する。
+        start_msg : str, optional
+            手押し待機開始時に読み上げるメッセージ。
+        success_msg : str, optional
+            手押し検出成功時に読み上げるメッセージ。
+        timeout_msg : str, optional
+            タイムアウト時に読み上げるメッセージ。
+        failure_msg : str, optional
+            待機処理中にエラーが発生した場合に読み上げるメッセージ。
+        hand : str, optional
+            fallback publisher で動かす手の左右。'right' または 'left' を想定する。
+        timeout_sec : int, optional
+            手押し検出を待機する最大時間（秒）。
+        threthold : float, optional
+            手押しと判定する right_elbow_joint effort 差分のしきい値。
+
+        userdata
+        --------
+        Input Keys:
+            なし。
+        Output Keys:
+            なし。
+
+        Outcomes
+        ----------
+        success:
+            手押しが検出された場合。
+        timeout:
+            timeout_sec 内に手押しが検出されなかった場合。
+        failure:
+            待機処理中にエラーが発生した場合。
+        """
+
         # init smach
         smach.State.__init__(self, outcomes=["success", "timeout", "failure"])
 
@@ -123,18 +166,31 @@ class WaitPushHand(smach.State):
                 self.__init_effort = effort
             else:
                 if not np.isnan(self.__init_effort) and not np.isnan(effort):
-                    print(f"effort: {self.__init_effort - effort}")
+                    #print(f"effort: {self.__init_effort - effort}")
                     if self.__init_effort - effort >= self.__threthold:
                         self.__push_hend = True
         except Exception as e:
             self.__node.get_logger().warn(f"JointState callback error: {e}")
 
     def execute(self, userdata):
+        """SMACH state を実行し、手押し入力を待機する。
+
+        Parameters
+        ----------
+        userdata : smach.UserData
+            この state では参照しない。
+
+        Returns
+        -------
+        str
+            SMACH outcome。'success'、'timeout'、'failure' のいずれか。
+        """
         try:
             self.__push_hend = False
             self.__init_effort = None
 
             # enable move hand
+            self.__say(self.__start_msg)
             self.__move_hand_to_wait_pose()
 
             joint_state_qos_profile = qos.QoSProfile(
@@ -154,7 +210,6 @@ class WaitPushHand(smach.State):
                 self.__node.get_logger().info("""
                     WAIT PUSH MY HAND ....
                 """)
-                self.__say(self.__start_msg)
                 init_time = time.time()
                 while (
                     time.time() - init_time < self.__timeout_sec

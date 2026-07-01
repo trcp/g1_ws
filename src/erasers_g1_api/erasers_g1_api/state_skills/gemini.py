@@ -56,6 +56,18 @@ class GeminiVLMState(smach.State):
     
 
     def execute(self, userdata):
+        """SMACH state を実行し、カメラ画像と prompt を Gemini に問い合わせる。
+
+        Parameters
+        ----------
+        userdata : smach.UserData
+            prompt_message と ud_prompt を入力として参照し、result に応答文字列を格納する。
+
+        Returns
+        -------
+        str
+            SMACH outcome。'success' または 'failure'。
+        """
         try:
             self.__image = None
             with TemporarySubscriber(self.__node,
@@ -99,5 +111,4 @@ class GeminiVLMState(smach.State):
         except:
             self.__node.get_logger().error('Error is occured in RoboticsERState\n%s'%traceback.format_exc())
             return 'failure'
-
 
