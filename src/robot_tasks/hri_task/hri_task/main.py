@@ -84,6 +84,7 @@ from erasers_g1_api.state_skills.recongnition import SpeechToText
 
 # ====== ローカルモジュール ======
 from word_sprit import search_keywords
+from llm_guest_info import extract_guest_info
 from yolo_states import (
     YoloTrackingState, YoloEmptyChairState,
     YoloFindBagState, YoloFollowHostState,
@@ -94,6 +95,7 @@ from direct_joint_control import (
     ARM_POSE_EXTEND_LEFT,
     ARM_POSE_EXTEND_RIGHT
 )
+from wait_push_hand_state import WaitPushHandState
 
 # ====== 設定 ======
 
@@ -268,12 +270,11 @@ def arm_action_cb(userdata, node: Node, tts_say, direct_arm: DirectJointControll
                     input_keys=['stt_text', 'guest_name', 'guest_drink', 'num_challenge', 'success_keywards'],
                     output_keys=['guest_name', 'guest_drink', 'num_challenge'])
 def parse_guest_info_cb(userdata, node: Node, direct_arm=None, guest_index=1):
-    """word_sprit を使って STT テキストから名前と飲み物を抽出する。"""
+    """STT テキストから名前と飲み物を抽出する。"""
     text = userdata.stt_text
-    found = search_keywords(text, TARGET_DICT)
-
-    name = found['name'][0].capitalize() if found['name'] else ""
-    drink = found['drink'][0].capitalize() if found['drink'] else ""
+    info = extract_guest_info(text, fallback_dict=TARGET_DICT, node=node)
+    name = info.get("name", "")
+    drink = info.get("drink", "")
 
     if name:
         userdata.guest_name = name
@@ -372,15 +373,14 @@ def parse_guest_info_cb(userdata, node: Node, direct_arm=None, guest_index=1):
 def introduce_guests_cb(userdata, node: Node, tts_say, control: G1Control, direct_arm=None):
     """ゲストをお互いに紹介する。"""
     try:
-        # ゲスト2の方を向いて、ホスト（ゲスト1）を紹介する。
-        # 直前の POINT_SEAT_2 の後にホームポジションに戻っているため、保存しておいたゲスト2の角度へ腰を回す。
-        node.get_logger().info("Introducing Guest 1 (Host) to Guest 2...")
+        # ゲスト2の方を向いて、ゲスト1を紹介する。Hostは紹介対象ではない。
+        node.get_logger().info("Introducing Guest 1 to Guest 2...")
         if direct_arm:
-            if hasattr(direct_arm, 'guest2_waist_yaw') and hasattr(direct_arm, 'host_waist_yaw'):
+            if hasattr(direct_arm, 'guest2_waist_yaw') and hasattr(direct_arm, 'guest1_waist_yaw'):
                 target_waist_2 = max(-1.2, min(1.2, direct_arm.guest2_waist_yaw))
                 node.get_logger().info(f"Turning waist to Guest 2 ({target_waist_2}) and pointing to Guest 1...")
                 # 腰と腕を同時に動かす
-                direct_arm.point_at_guest(target_waist_2, direct_arm.host_waist_yaw, hold_sec=2.0)
+                direct_arm.point_at_guest(target_waist_2, direct_arm.guest1_waist_yaw, hold_sec=2.0)
                 
         g2_greeting = f"Hello {userdata.g2_name}" if userdata.g2_name else "Hello"
         g1_intro = ""
@@ -400,11 +400,10 @@ def introduce_guests_cb(userdata, node: Node, tts_say, control: G1Control, direc
         if direct_arm:
             direct_arm.go_home(hold_sec=1.0)
 
-        # 次に、ホスト（ゲスト1）の方を向いて、ゲスト2を紹介する。
+        # 次に、ゲスト1の方を向いて、ゲスト2を紹介する。
         if direct_arm:
-            if hasattr(direct_arm, 'host_waist_yaw'):
-                # YoloEmptyChairStateで正確に計算されたホストの角度を使用
-                target_waist = direct_arm.host_waist_yaw
+            if hasattr(direct_arm, 'guest1_waist_yaw'):
+                target_waist = direct_arm.guest1_waist_yaw
                
             else:
                 # 万が一計算されていなかった場合の推測フォールバック
@@ -423,7 +422,7 @@ def introduce_guests_cb(userdata, node: Node, tts_say, control: G1Control, direc
                 node.get_logger().info(f"Turning waist to Guest 1: {target_waist}")
                 direct_arm.send_joints({'waist_yaw_joint': target_waist}, hold_sec=2.0)
 
-        node.get_logger().info("Introducing Guest 2 to Guest 1 (Host)...")
+        node.get_logger().info("Introducing Guest 2 to Guest 1...")
         
         g1_greeting = f"Hello {userdata.g1_name}" if userdata.g1_name else "Hello"
         g2_intro = ""
@@ -451,6 +450,13 @@ def introduce_guests_cb(userdata, node: Node, tts_say, control: G1Control, direc
         except:
             pass
         return 'failure'
+
+
+@smach.cb_interface(outcomes=['success', 'failure'], input_keys=[])
+def start_announce_cb(userdata, node: Node, tts_say):
+    node.get_logger().info("[START] HRI task start announcement")
+    tts_say("hri task start!")
+    return 'success'
 
 
 @smach.cb_interface(outcomes=['success', 'failure'], input_keys=[])
@@ -482,11 +488,41 @@ def describe_guest_1_cb(userdata, node: Node, tts_say):
     features = userdata.g1_features if hasattr(userdata, 'g1_features') else {}
     spoken = 0
 
+    def usable(value):
+        if value is None:
+            return False
+        text = str(value).strip().lower()
+        return text not in ("", "none", "unknown", "not visible", "n/a")
+
+    def build_features_from_raw(raw_features):
+        built = []
+        priority = [
+            ("upper_clothing_color", lambda v: f"wearing {v} upper-body clothing"),
+            ("upper_clothing_type", lambda v: f"wearing a {v}"),
+            ("glasses", lambda v: f"wearing {v}" if "glass" in str(v).lower() else f"wearing {v} glasses"),
+            ("hat", lambda v: f"wearing {v}"),
+            ("mask", lambda v: f"wearing {v}"),
+            ("bag", lambda v: f"carrying {v}"),
+            ("hair_color", lambda v: f"has {v} hair"),
+            ("hair_style", lambda v: f"has {v} hair"),
+            ("lower_clothing_color", lambda v: f"wearing {v} lower-body clothing"),
+        ]
+        for key, formatter in priority:
+            value = raw_features.get(key)
+            if usable(value):
+                built.append(formatter(str(value).strip()))
+            if len(built) >= 4:
+                break
+        return built
+
     feature_list = []
     if isinstance(features, list):
         feature_list = features
     elif isinstance(features, dict) and isinstance(features.get('features'), list):
         feature_list = features.get('features')
+    elif isinstance(features, dict):
+        raw_features = features.get('raw') if isinstance(features.get('raw'), dict) else features
+        feature_list = build_features_from_raw(raw_features)
 
     feature_list = [str(feature).strip() for feature in feature_list if str(feature).strip()]
     if feature_list:
@@ -535,7 +571,8 @@ class YoloSpeechToTextState(smach.State):
     一番近い人を追従する。
     """
 
-    def __init__(self, node, tts, start_msg, direct_arm, control, guest_index=1):
+    def __init__(self, node, tts, start_msg, direct_arm, control=None,
+                 guest_index=1, extract_features=True):
         self.speech_to_text = SpeechToText(node=node, tts=tts, start_msg=start_msg)
         super().__init__(
             outcomes=['success', 'timeout', 'failure'],
@@ -546,6 +583,7 @@ class YoloSpeechToTextState(smach.State):
         self.direct_arm = direct_arm
         self.control = control
         self.guest_index = guest_index
+        self.extract_features = extract_features
         self.yolo = YoloTrackingState(
             node=node, target_classes=["person"], timeout=1.0)
             
@@ -573,7 +611,9 @@ class YoloSpeechToTextState(smach.State):
             pass
 
     def execute(self, userdata):
-        self.node.get_logger().info(f"[INTERACTION] Starting STT (YOLO tracking & feature extraction running in background, Mode: {FEATURE_EXTRACTION_MODE})")
+        self.node.get_logger().info(
+            f"[INTERACTION] Starting STT (extract_features={self.extract_features}, Mode: {FEATURE_EXTRACTION_MODE})"
+        )
         
         self.latest_features = {} # リセット
 
@@ -581,7 +621,7 @@ class YoloSpeechToTextState(smach.State):
         cmd_msg.data = json.dumps({
             "command": "start", 
             "classes": ["person"], 
-            "extract_features": True,
+            "extract_features": self.extract_features,
             "feature_mode": FEATURE_EXTRACTION_MODE
         })
         self.cmd_pub.publish(cmd_msg)
@@ -593,22 +633,25 @@ class YoloSpeechToTextState(smach.State):
         # STT を実行
         outcome = self.speech_to_text.execute(userdata)
 
-        # STT終了後、特徴抽出の結果が返ってくるまで最大15秒待機
-        self.node.get_logger().info("[INTERACTION] Waiting up to 15 seconds for feature extraction result...")
-        start_wait = time.time()
-        while rclpy.ok() and (time.time() - start_wait < 15.0):
+        if self.extract_features:
+            # STT終了後、特徴抽出の結果が返ってくるまで最大15秒待機
+            self.node.get_logger().info("[INTERACTION] Waiting up to 15 seconds for feature extraction result...")
+            start_wait = time.time()
+            while rclpy.ok() and (time.time() - start_wait < 15.0):
+                if self.latest_features:
+                    self.node.get_logger().info(f"[INTERACTION] Received features: {self.latest_features}")
+                    break
+                time.sleep(0.5)
+
+            if not self.latest_features:
+                self.node.get_logger().warn("[INTERACTION] Feature extraction timed out or failed.")
+
+            userdata.guest_features = self.latest_features
+            # 特徴量が取れたら保存
             if self.latest_features:
-                self.node.get_logger().info(f"[INTERACTION] Received features: {self.latest_features}")
-                break
-            time.sleep(0.5)
-
-        if not self.latest_features:
-            self.node.get_logger().warn("[INTERACTION] Feature extraction timed out or failed.")
-
-        userdata.guest_features = self.latest_features
-        # 特徴量が取れたら保存
-        if self.latest_features:
-            save_current_guest_info(self.node, self.guest_index, features=self.latest_features)
+                save_current_guest_info(self.node, self.guest_index, features=self.latest_features)
+        else:
+            userdata.guest_features = {}
 
         # ステート終了時にYOLOと追従を停止し、姿勢を正面に戻す
         reset_msg = String()
@@ -623,7 +666,8 @@ class YoloSpeechToTextState(smach.State):
 
 # ====== サブステートマシン ======
 
-def create_greeting_sm(node, tts_say, tts_obj, direct_arm, control, guest_index=1):
+def create_greeting_sm(node, tts_say, tts_obj, direct_arm, control,
+                       guest_index=1, extract_features=True):
     """挨拶＋名前と飲み物の聞き取りを行うサブステートマシン。"""
     sm = smach.StateMachine(
         outcomes=['success', 'failure'],
@@ -643,7 +687,8 @@ def create_greeting_sm(node, tts_say, tts_obj, direct_arm, control, guest_index=
                           "What is your name and favorite drink please talk tell me after pin sound",
                 direct_arm=direct_arm,
                 control=control,
-                guest_index=guest_index),
+                guest_index=guest_index,
+                extract_features=extract_features),
             transitions={
                 'success': 'PARSE_INFO',
                 'timeout': 'ASK_INFO',
@@ -688,10 +733,28 @@ def main():
     sm.userdata.guest2_drink = ""
     sm.userdata.guest2_features = {}
 
-    SAY("hri task start!")
-
     with sm:
         # ====== 1周目: ゲスト1 ======
+        smach.StateMachine.add(
+            'WAIT_PUSH_HAND',
+            WaitPushHandState(
+                node=node,
+                tts_say=SAY,
+                direct_arm=ARM,
+                hand="right",
+                timeout_sec=30.0,
+                threshold=1.5),
+            transitions={'success': 'START_ANNOUNCE',
+                         'timeout': 'START_ANNOUNCE',
+                         'failure': 'START_ANNOUNCE'})
+
+        smach.StateMachine.add(
+            'START_ANNOUNCE',
+            smach.CBState(cb=start_announce_cb,
+                          cb_kwargs={'node': node, 'tts_say': SAY}),
+            transitions={'success': 'WAIT_DOOR',
+                         'failure': 'WAIT_DOOR'})
+
         smach.StateMachine.add(
             'WAIT_DOOR',
             smach.CBState(cb=skip_doorbell_cb,
@@ -719,7 +782,7 @@ def main():
 
         smach.StateMachine.add(
             'GREET_GUEST_1',
-            create_greeting_sm(node, SAY, tts, ARM, CONTROL, guest_index=1),
+            create_greeting_sm(node, SAY, tts, ARM, CONTROL, guest_index=1, extract_features=True),
             transitions={'success': 'MOVE_TO_LIVING_1',
                          'failure': 'task_failed'},
             remapping={'guest_name': 'guest1_name',
@@ -781,7 +844,7 @@ def main():
 
         smach.StateMachine.add(
             'GREET_GUEST_2',
-            create_greeting_sm(node, SAY, tts, ARM, CONTROL, guest_index=2),
+            create_greeting_sm(node, SAY, tts, ARM, CONTROL, guest_index=2, extract_features=False),
             transitions={'success': 'DESCRIBE_GUEST_1',
                          'failure': 'task_failed'},
             remapping={'guest_name': 'guest2_name',
@@ -791,23 +854,9 @@ def main():
         smach.StateMachine.add(
             'DESCRIBE_GUEST_1',
             smach.CBState(cb=describe_guest_1_cb, cb_kwargs={'node': node, 'tts_say': SAY}),
-            transitions={'success': 'CHECK_BAG_GRASP',
-                         'failure': 'CHECK_BAG_GRASP'},
-            remapping={'g1_name': 'guest1_name', 'g1_features': 'guest1_features'})
-
-        smach.StateMachine.add(
-            'CHECK_BAG_GRASP',
-            smach.CBState(cb=check_skip_bag_grasp_cb, cb_kwargs={'node': node}),
-            transitions={'skip': 'MOVE_TO_LIVING_2',
-                         'run': 'BAG_GRASP_INTERACTION'})
-
-        smach.StateMachine.add(
-            'BAG_GRASP_INTERACTION',
-            YoloBagGraspInteractionState(node=node, tts_say=SAY, direct_arm=ARM, control=CONTROL, timeout=8.0),
             transitions={'success': 'MOVE_TO_LIVING_2',
-                         'failure': 'MOVE_TO_LIVING_2',
-                         'timeout': 'MOVE_TO_LIVING_2'})
-
+                         'failure': 'MOVE_TO_LIVING_2'},
+            remapping={'g1_name': 'guest1_name', 'g1_features': 'guest1_features'})
 
         smach.StateMachine.add(
             'MOVE_TO_LIVING_2',
@@ -840,10 +889,23 @@ def main():
             'INTRODUCE_GUESTS',
             smach.CBState(cb=introduce_guests_cb, cb_kwargs={
                 'node': node, 'tts_say': SAY, 'control': CONTROL, 'direct_arm': ARM}),
-            transitions={'success': 'CHECK_SKIP_FOLLOW',
-                         'failure': 'CHECK_SKIP_FOLLOW'},
+            transitions={'success': 'CHECK_BAG_GRASP',
+                         'failure': 'CHECK_BAG_GRASP'},
             remapping={'g1_name': 'guest1_name', 'g1_drink': 'guest1_drink',
                        'g2_name': 'guest2_name', 'g2_drink': 'guest2_drink'})
+
+        smach.StateMachine.add(
+            'CHECK_BAG_GRASP',
+            smach.CBState(cb=check_skip_bag_grasp_cb, cb_kwargs={'node': node}),
+            transitions={'skip': 'CHECK_SKIP_FOLLOW',
+                         'run': 'BAG_GRASP_INTERACTION'})
+
+        smach.StateMachine.add(
+            'BAG_GRASP_INTERACTION',
+            YoloBagGraspInteractionState(node=node, tts_say=SAY, direct_arm=ARM, control=CONTROL, timeout=8.0),
+            transitions={'success': 'CHECK_SKIP_FOLLOW',
+                         'failure': 'CHECK_SKIP_FOLLOW',
+                         'timeout': 'CHECK_SKIP_FOLLOW'})
 
         # ====== ホスト追従 (止まったら終了) ======
         smach.StateMachine.add(

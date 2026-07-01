@@ -39,6 +39,17 @@ local task = {
         },
       },
     },
+    ollama = {
+      display_name = "Ollama",
+      description = "Run local Ollama server for offline LLM extraction",
+      commands = {
+        default = {
+          template = "/home/roboworks/.local/bin/ollama serve",
+          kill = "pkill -f '/home/roboworks/.local/bin/ollama serve'",
+          variables = {},
+        },
+      },
+    },
     yolo_human = {
       display_name = "YoloHuman",
       description = "Run YOLO human detection",
@@ -67,6 +78,7 @@ local task = {
         panes = {
            { program = "navigation" },
            { program = "yolo_human" },
+           { program = "ollama" },
         },
       },
     },

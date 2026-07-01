@@ -161,7 +161,9 @@ class YoloHumanNode(Node):
                     self.model.set_classes(self.target_classes)
                 except AttributeError:
                     pass
-                self.get_logger().info(f"Target classes updated: {self.target_classes}")
+                self.get_logger().info(
+                    f"Target classes updated: {self.target_classes}, model.names={self.model.names}"
+                )
         except json.JSONDecodeError:
             self.get_logger().error("Invalid command format. Expected JSON.")
 
@@ -245,21 +247,23 @@ class YoloHumanNode(Node):
 
         closest_det_idx = -1
         min_z = float('inf')
+        raw_detections_debug = []
 
         for r in results:
             for box in r.boxes:
                 cls_id = int(box.cls[0])
                 label = self.model.names[cls_id]
-                if label == "0" or cls_id == 0:
-                    label = "person"
                 conf = float(box.conf[0])
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                raw_detections_debug.append(
+                    f"id={cls_id} label={label} conf={conf:.2f} bbox={[x1, y1, x2, y2]}"
+                )
 
                 # Filter by target classes
                 if label not in self.target_classes:
                     continue
 
                 # BBox coordinates
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
                 u_center = int((x1 + x2) / 2)
                 v_center = int((y1 + y2) / 2)
 
@@ -305,6 +309,13 @@ class YoloHumanNode(Node):
                 cv2.putText(debug_img, text, (x1, max(y1 - 10, 0)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                 cv2.circle(debug_img, (u_center, v_center), 5, (0, 0, 255), -1)
+
+        if raw_detections_debug and not detections:
+            self.get_logger().info(
+                "YOLO raw detections filtered out: "
+                f"targets={self.target_classes}, names={self.model.names}, "
+                f"raw={'; '.join(raw_detections_debug[:8])}",
+                throttle_duration_sec=2.0)
 
         # Handle Feature Extraction ONLY for the closest person
         if self.extract_features and closest_det_idx >= 0:

@@ -49,6 +49,20 @@ LIDAR_SIDE_Y_MAX = 1.0 # 左右エリア外側 (m)
 OBS_COUNT_THRESHOLD = 20  # 障害物判定の点群数閾値
 AVOID_TURN = 0.6       # 回避旋回速度 (rad/s)
 
+# Follow-me safety gates. Obstacles are considered only near the robot and in
+# the tube between the robot and the followed person.
+PATH_TUBE_HALF_WIDTH = 0.65
+PATH_FRONT_HALF_WIDTH = 0.32
+PATH_MAX_LOOKAHEAD = 1.5
+NEAR_FRONT_HALF_WIDTH = 0.32
+FRONT_SLOW_DISTANCE = 0.70
+FRONT_STOP_DISTANCE = 0.45
+DOORWAY_WIDTH_THRESHOLD = 0.90
+WIDE_SPACE_WIDTH_THRESHOLD = 1.10
+TARGET_POINT_EXCLUSION_RADIUS = 0.60
+LOST_SHORT_SEC = 0.5
+LOST_STOP_SEC = 1.5
+
 # 速度制御
 FOLLOW_DISTANCE = 1.2  # 維持する距離 (m)
 LINEAR_GAIN = 0.25
@@ -138,6 +152,8 @@ class YoloHumanTracker(Node):
         self.latest_cmd = Twist()
         self.target_track_id = None
         self.lost_frames = 0
+        self.yolo_lost_start_time = None
+        self.tracking_match_source = 'none'
         self.latest_lidar_person_pos = None
         self.latest_lidar_person_time = 0.0
         
@@ -152,6 +168,13 @@ class YoloHumanTracker(Node):
         self.min_left_y = 1.0
         self.max_right_y = -1.0
         self.min_front_x = 1.5
+        self.near_front_distance = float('inf')
+        self.path_front_distance = float('inf')
+        self.corridor_width = float('inf')
+        self.corridor_center_error = 0.0
+        self.has_left_wall = False
+        self.has_right_wall = False
+        self.path_obstacle_side = 0.0
         self.last_step_time = time.time()
 
         self.get_logger().info("5秒間待機し、一番近い人を探索します (YOLOメイン)")
@@ -181,12 +204,20 @@ class YoloHumanTracker(Node):
             linear = -LINEAR_MAX * min(abs(error) * 0.5, 1.0)
 
         # --- 旋回速度 ---
-        # 距離が近いほど旋回ゲインを上げて素早く追従する（カメラ視野から外れないようにする）
-        if dist < 1.3:
-            dynamic_angular_gain = ANGULAR_GAIN * (1.3 / max(dist, 0.6))
+        # 距離が近いほど旋回ゲインを上げ、視野から人が外れる前に体を向ける。
+        if dist < 0.9:
+            dynamic_angular_gain = ANGULAR_GAIN * 1.8
+        elif dist < 1.3:
+            dynamic_angular_gain = ANGULAR_GAIN * 1.4
         else:
             dynamic_angular_gain = ANGULAR_GAIN
         angular = dynamic_angular_gain * angle
+
+        # 人が横に大きくずれている時は、前進より旋回を優先する。
+        if abs(angle) > 0.7:
+            linear = 0.0
+        elif abs(angle) > 0.4:
+            linear *= 0.4
 
         linear = np.clip(linear, -LINEAR_MAX, LINEAR_MAX)
         angular = np.clip(angular, -ANGULAR_MAX, ANGULAR_MAX)
@@ -213,52 +244,59 @@ class YoloHumanTracker(Node):
 
     # ------- LiDAR コールバック (純粋な障害物回避のみ) -------
     def lidar_callback(self, msg):
-        min_left_y = 1.0
-        max_right_y = -1.0
-        min_front_x = 1.5
-        self.front_points_count = 0
-        
+        near_front = []
+        path_front = []
+        left_sides = []
+        right_sides = []
+        obstacle_sides = []
+
         px, py = self.ekf.x[:2]
         is_tracking = (self.state == 'TRACKING')
         person_points = []
+        target_dist = float(np.hypot(px, py))
+        if target_dist > 0.05:
+            target_dir = np.array([px, py]) / target_dist
+        else:
+            target_dir = np.array([1.0, 0.0])
+        lookahead = min(max(target_dist, 0.5), PATH_MAX_LOOKAHEAD)
 
         for p in pc2.read_points(msg, skip_nans=True, field_names=("x", "y", "z")):
             x, y_raw, z_raw = p[0], p[1], p[2]
 
-            # 逆向きマウント補正（X=前、Y=右、Z=下 となるため、Yを反転させてROSの左=正に合わせる）
+            # Mid360は丸い面が下向き。X=前、Y_raw=右、Z=下なので、YだけROSの左=正へ反転する。
             y = -y_raw
             z = z_raw
 
-            # 無効なゼロ値点群を無視
             if x == 0.0 and y == 0.0 and z == 0.0:
                 continue
-
-            # 自己点群（ロボット自身の顔や体）の除外
-            # LiDARの中心から半径20cm以内の点群は完全に無視する
             if np.hypot(x, y) < 0.20:
+                continue
+            if not (LIDAR_Z_MIN <= z <= LIDAR_Z_MAX):
                 continue
 
             # ターゲットの除外判定（追跡中の人を障害物として認識しないようにする）
             if is_tracking:
-                person_dist = np.hypot(px, py)
-                # 人までの距離より 0.3m 手前より遠い点群は、人自身か人の奥にある背景なので、完全に障害物から除外する
-                if x > person_dist - 0.3:
-                    if LIDAR_Z_MIN <= z <= LIDAR_Z_MAX:
-                        person_points.append((x, y))
+                target_lidar_x = px + CAMERA_OFFSET_X
+                target_lidar_y = py + CAMERA_OFFSET_Y
+                if np.hypot(x - target_lidar_x, y - target_lidar_y) < TARGET_POINT_EXCLUSION_RADIUS:
+                    person_points.append((x, y))
                     continue
 
-            # zは下向きが正。z=1.2mあたりが床面になるため、1.05m等でカットして床を障害物と誤認しないようにする
-            if LIDAR_Z_MIN <= z <= LIDAR_Z_MAX:
-                if 0.25 < x < 1.0: # 足元(0.25m未満)の自分の足や近すぎるノイズを無視
-                    # ゾーン（正面・左・右）を明確に分割して誤認を防ぐ
-                    if abs(y) <= 0.25:
-                        # 正面はロボットの幅(約0.5m)のみを見る。
-                        self.front_points_count += 1
-                        min_front_x = min(min_front_x, x)
-                    elif 0.25 < y <= 1.0:
-                        min_left_y = min(min_left_y, y)
-                    elif -1.0 <= y < -0.25:
-                        max_right_y = max(max_right_y, y)
+            if 0.20 < x < FRONT_SLOW_DISTANCE and abs(y) < NEAR_FRONT_HALF_WIDTH:
+                near_front.append(x)
+
+            point = np.array([x, y])
+            forward = float(np.dot(point, target_dir))
+            side = float(-x * target_dir[1] + y * target_dir[0])
+
+            if 0.20 < forward < lookahead and abs(side) < PATH_TUBE_HALF_WIDTH:
+                if abs(side) < PATH_FRONT_HALF_WIDTH:
+                    path_front.append(forward)
+                    obstacle_sides.append(side)
+                elif side > 0.0:
+                    left_sides.append(side)
+                else:
+                    right_sides.append(side)
 
         # ターゲット（人）のLiDAR点群重心を計算してキャッシュ
         if is_tracking and len(person_points) >= 10:
@@ -273,24 +311,38 @@ class YoloHumanTracker(Node):
         else:
             self.latest_lidar_person_pos = None
 
-        # ----------------------------------------------------
-        # 大雑把な回避ベクトルの計算
-        # ----------------------------------------------------
-        self.emergency_brake = False
-        self.avoid_lateral = 0.0
+        def percentile(values, pct, default):
+            if not values:
+                return default
+            return float(np.percentile(np.asarray(values), pct))
 
-        # 正面に障害物があり、かつノイズ(1点など)ではない場合
-        if min_front_x < 0.8 and self.front_points_count > 10:
-            # 単純に左と右の空いているスペースを比較し、広い方へカニ歩きする
-            if min_left_y > abs(max_right_y):
-                self.avoid_lateral = 0.25  # 左へ避ける
-            else:
-                self.avoid_lateral = -0.25 # 右へ避ける
-                    
-        # 空間の状態を保存（追跡ロジックの3軸制御で使用）
-        self.min_left_y = min_left_y
-        self.max_right_y = max_right_y
-        self.min_front_x = min_front_x
+        near_front_distance = percentile(near_front, 10, float('inf'))
+        path_front_distance = percentile(path_front, 10, float('inf'))
+        left_clearance = percentile(left_sides, 10, float('inf'))
+        right_clearance = percentile(right_sides, 90, float('-inf'))
+
+        has_left_wall = len(left_sides) >= 8
+        has_right_wall = len(right_sides) >= 8
+        if has_left_wall and has_right_wall:
+            corridor_width = left_clearance - right_clearance
+            corridor_center_error = (left_clearance + right_clearance) / 2.0
+        else:
+            corridor_width = float('inf')
+            corridor_center_error = 0.0
+
+        self.near_front_distance = near_front_distance
+        self.path_front_distance = path_front_distance
+        self.min_front_x = min(near_front_distance, path_front_distance)
+        self.has_left_wall = has_left_wall
+        self.has_right_wall = has_right_wall
+        self.corridor_width = corridor_width
+        self.corridor_center_error = corridor_center_error
+        self.path_obstacle_side = float(np.median(obstacle_sides)) if obstacle_sides else 0.0
+        self.min_left_y = left_clearance if has_left_wall else 1.0
+        self.max_right_y = right_clearance if has_right_wall else -1.0
+
+        self.emergency_brake = self.min_front_x < FRONT_STOP_DISTANCE
+        self.avoid_lateral = 0.0
 
     # ------- YOLO コールバック (メイン追跡) -------
     def yolo_callback(self, msg):
@@ -398,20 +450,25 @@ class YoloHumanTracker(Node):
                 lidar_pos = self.latest_lidar_person_pos
 
         if len(clusters) == 0:
+            if self.yolo_lost_start_time is None:
+                self.yolo_lost_start_time = time.time()
+            lost_elapsed = time.time() - self.yolo_lost_start_time
             if lidar_pos is not None:
                 self.ekf.update(lidar_pos)
                 self.lost_frames = 0
                 self.get_logger().info(f"YOLO検出0件ですが、LiDARで追従中: [{lidar_pos[0]:.2f}, {lidar_pos[1]:.2f}]")
                 lin, ang = self.compute_twist(self.ekf.x[:2])
-                self._apply_cmd(lin, ang, matched=True)
+                self._apply_cmd(lin, ang, matched=True, source='lidar', lost_elapsed=lost_elapsed)
             else:
                 self.lost_frames += 1
                 self.get_logger().warn(f"YOLO検出0件 lost={self.lost_frames} (予測軌道で補完中)")
                 # 見失っていてもEKFの予測軌道に従って動かす
                 lin, ang = self.compute_twist(self.ekf.x[:2])
-                self._apply_cmd(lin, ang, matched=False)
+                self._apply_cmd(lin, ang, matched=False, source='prediction', lost_elapsed=lost_elapsed)
                 self._check_lost()
             return
+        else:
+            self.yolo_lost_start_time = None
 
         # --- track_id ベースのマッチング ---
         best_cluster = None
@@ -459,13 +516,13 @@ class YoloHumanTracker(Node):
                         self.lost_frames = 0
                         self.get_logger().info(f"YOLO近傍検出なしですが、LiDARで追従中: [{lidar_pos[0]:.2f}, {lidar_pos[1]:.2f}]")
                         lin, ang = self.compute_twist(self.ekf.x[:2])
-                        self._apply_cmd(lin, ang, matched=True)
+                        self._apply_cmd(lin, ang, matched=True, source='lidar')
                     else:
                         self.lost_frames += 1
                         self.get_logger().warn(
                             f"マハラノビス/ユークリッド両方で近傍なし (maha={best_score:.2f}, euclid={euclid_dists[euclid_best]:.2f}) lost={self.lost_frames}")
                         lin, ang = self.compute_twist(self.ekf.x[:2])
-                        self._apply_cmd(lin, ang, matched=False)
+                        self._apply_cmd(lin, ang, matched=False, source='prediction')
                         self._check_lost()
                     return
                 # ユークリッドでは通るがマハラノビスが高い → 注意付きで採用
@@ -497,39 +554,91 @@ class YoloHumanTracker(Node):
 
         # 速度指令
         lin, ang = self.compute_twist(self.ekf.x[:2])
-        self._apply_cmd(lin, ang, matched=True)
+        self._apply_cmd(lin, ang, matched=True, source='yolo')
 
-    def _apply_cmd(self, lin, ang, matched=True):
+    def _apply_cmd(self, lin, ang, matched=True, source='yolo', lost_elapsed=0.0):
         x, y = self.ekf.x[:2]
         dist = np.hypot(x, y)
-        is_close = dist < (FOLLOW_DISTANCE + 0.2)  # 約1.0m
-        is_sharp_turn = abs(ang) > 0.8  # 約45度以上
-
-        # 空間の制限状態を判定
-        gap_width = self.min_left_y - self.max_right_y
-        is_corridor = (gap_width < 1.2)
-        clearance_violated = (self.min_left_y < 0.35) or (self.max_right_y > -0.35)
+        is_sharp_turn = abs(ang) > 0.8
+        front_distance = min(self.near_front_distance, self.path_front_distance)
+        is_near_stop = front_distance < FRONT_STOP_DISTANCE
+        is_doorway = (
+            self.has_left_wall
+            and self.has_right_wall
+            and self.corridor_width < DOORWAY_WIDTH_THRESHOLD
+        )
+        is_path_obstacle = (
+            self.path_front_distance < FRONT_SLOW_DISTANCE
+            and not is_doorway
+        )
 
         # ====================================================
         # 独立3軸制御ロジック (Axis 1: 回転, Axis 2: 前進, Axis 3: 横移動)
         # ====================================================
-
-        # --- Axis 1: 回転 (Rotation) ---
-        # 回転は常にフルに実行し、人を追い続ける
+        mode = 'FOLLOW_PERSON'
         final_ang = float(np.clip(ang, -ANGULAR_MAX, ANGULAR_MAX))
+        final_lin = float(lin)
+        final_lat_y = 0.0
 
-        # --- Axis 2: 前進 (Forward) ---
-        # 真正面に壁がある場合（0.5m未満）のみ前進をゼロにする
-        if self.min_front_x < 0.5 and lin > 0:
+        if source != 'yolo':
+            mode = 'LOST_SEARCH'
+            if lost_elapsed < LOST_SHORT_SEC and source == 'lidar':
+                final_lin *= 0.35
+            else:
+                final_lin = 0.0
+            if lost_elapsed > LOST_STOP_SEC:
+                final_lin = 0.0
+                final_ang = 0.0
+
+        elif is_near_stop:
+            mode = 'NEAR_STOP'
             final_lin = 0.0
-        else:
-            final_lin = float(lin)
+            final_lat_y = 0.0
 
-        # --- Axis 3: 横移動・カニ歩き (Lateral) ---
-        # 真正面に障害物がある場合のみ、カニ歩きで避ける
-        if self.min_front_x < 0.8:
-            final_lat_y = float(self.avoid_lateral)
+        elif is_doorway:
+            mode = 'DOORWAY_CENTERING'
+            # 狭所では横移動せず、低速前進と軽い旋回で中央を通る。
+            center_gain = 0.8
+            final_ang = float(np.clip((ang * 0.45) + (self.corridor_center_error * center_gain), -0.45, 0.45))
+            if final_lin > 0.0:
+                final_lin = min(final_lin, 0.15)
+            final_lat_y = 0.0
+
+        elif is_path_obstacle:
+            mode = 'PATH_OBSTACLE_AVOID'
+            if final_lin > 0.0:
+                final_lin *= 0.45
+
+            # 広い場所だけ弱く横移動を使う。障害物が左なら右へ、右なら左へ。
+            can_lateral = (
+                self.corridor_width > WIDE_SPACE_WIDTH_THRESHOLD
+                and front_distance > FRONT_STOP_DISTANCE
+                and abs(final_ang) < 0.6
+                and matched
+            )
+            if can_lateral:
+                if self.path_obstacle_side > 0.05:
+                    final_lat_y = -0.15
+                elif self.path_obstacle_side < -0.05:
+                    final_lat_y = 0.15
+                else:
+                    left_open = self.min_left_y > abs(self.max_right_y)
+                    final_lat_y = 0.15 if left_open else -0.15
+
+            # 正面障害物に対しては少しだけ空いている方向へ向ける。
+            if self.path_obstacle_side > 0.05:
+                final_ang -= 0.25
+            elif self.path_obstacle_side < -0.05:
+                final_ang += 0.25
+            final_ang = float(np.clip(final_ang, -ANGULAR_MAX, ANGULAR_MAX))
+
         else:
+            mode = 'FOLLOW_PERSON'
+            if front_distance < FRONT_SLOW_DISTANCE and final_lin > 0.0:
+                final_lin *= 0.4
+
+        if is_sharp_turn and final_lin > 0.0:
+            final_lin *= 0.4
             final_lat_y = 0.0
 
         # ====================================================
@@ -572,7 +681,9 @@ class YoloHumanTracker(Node):
 
         if matched:
             self.get_logger().info(
-                f"Track: lin={final_lin:.2f}, ang={final_ang:.2f}, lat_y={final_lat_y:.2f} | avoid={self.avoid_lateral:.2f}"
+                f"Track[{mode}/{source}]: lin={final_lin:.2f}, ang={final_ang:.2f}, "
+                f"lat_y={final_lat_y:.2f}, front={front_distance:.2f}, "
+                f"width={self.corridor_width:.2f}, center={self.corridor_center_error:.2f}"
             )
 
     def _check_lost(self):

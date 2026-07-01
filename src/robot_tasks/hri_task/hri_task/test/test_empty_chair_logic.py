@@ -28,7 +28,13 @@ def make_state():
     state = YoloEmptyChairState.__new__(YoloEmptyChairState)
     state.expected_seat_count = 3
     state.image_width = 640
+    state.direct_arm = None
+    state.guest_index = 1
     return state
+
+
+class DummyArm:
+    pass
 
 
 class EmptyChairLogicTest(unittest.TestCase):
@@ -95,6 +101,64 @@ class EmptyChairLogicTest(unittest.TestCase):
         self.assertEqual(len(seats), 3)
         self.assertEqual(len(set(centers)), 3)
         self.assertEqual([s['index'] for s in seats], [1, 2, 3])
+
+    def test_extra_chair_is_kept_next_to_split_sofa(self):
+        state = make_state()
+        sofa = {'label': 'sofa', 'confidence': 0.9, 'bbox': [80, 220, 430, 420]}
+        chair = {'label': 'chair', 'confidence': 0.8, 'bbox': [470, 245, 590, 430]}
+
+        seats = state._build_seat_candidates([sofa, chair], 640, [])
+
+        self.assertEqual(len(seats), 4)
+        self.assertEqual([s['index'] for s in seats], [1, 2, 3, 4])
+
+    def test_person_behind_chair_does_not_occupy_seat(self):
+        state = make_state()
+        chair = {'label': 'chair', 'confidence': 0.9, 'bbox': [250, 250, 390, 430]}
+        person_behind = {
+            'label': 'person',
+            'confidence': 0.95,
+            'bbox': [260, 90, 380, 245],
+            'distance_z': 3.8,
+        }
+
+        seats = state._build_seat_candidates([chair], 640, [])
+        state._assign_people_to_seats([person_behind], seats)
+
+        self.assertFalse(seats[0]['occupied'])
+
+    def test_people_can_infer_hidden_seats_when_chairs_are_occluded(self):
+        state = make_state()
+        people = [
+            {'label': 'person', 'confidence': 0.95, 'bbox': [90, 120, 220, 455], 'distance_z': 2.2},
+            {'label': 'person', 'confidence': 0.95, 'bbox': [420, 125, 550, 455], 'distance_z': 2.2},
+        ]
+
+        foreground, _ = state._filter_foreground_people(people)
+        seats = state._build_seat_candidates([], 640, foreground)
+        state._assign_people_to_seats(foreground, seats)
+
+        self.assertEqual(len(seats), 3)
+        self.assertTrue(seats[0]['occupied'])
+        self.assertFalse(seats[1]['occupied'])
+        self.assertTrue(seats[2]['occupied'])
+
+    def test_saved_host_and_guest1_seats_are_not_recommended_again(self):
+        state = make_state()
+        state.guest_index = 2
+        arm = DummyArm()
+        arm.host_seat_center_x = 160.0
+        arm.guest1_seat_center_x = 320.0
+        state.direct_arm = arm
+        sofa = {'label': 'sofa', 'confidence': 0.9, 'bbox': [80, 220, 560, 420]}
+
+        seats = state._build_seat_candidates([sofa], 640, [])
+        state._mark_saved_seat_occupied(seats, 'host_seat_center_x', 'host')
+        state._mark_saved_seat_occupied(seats, 'guest1_seat_center_x', 'guest1')
+        empty = [s for s in seats if not s['occupied']]
+
+        self.assertEqual(len(empty), 1)
+        self.assertEqual(state._select_empty_seat(empty)['index'], 3)
 
 
 if __name__ == '__main__':

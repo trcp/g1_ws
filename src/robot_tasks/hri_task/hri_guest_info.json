@@ -1,44 +1,30 @@
 {
-  "Guest_1": {
-    "name": "",
-    "drink": "",
-    "features": {
-      "features": [
-        "",
-        "",
-        "",
-        ""
-      ],
-      "raw": {
-        "upper_clothing_color": "",
-        "upper_clothing_type": "",
-        "lower_clothing_color": "",
-        "lower_clothing_type": "",
-        "accessories": "",
-        "hair": "",
-        "obvious_pattern": ""
-      }
-    }
-  },
-  "Guest_2": {
-    "name": "",
-    "drink": "",
-    "features": {
-      "features": [
-        "",
-        "",
-        ""
-      ],
-      "raw": {
-        "upper_clothing_color": "",
-        "upper_clothing_type": "",
-        "lower_clothing_color": "",
-        "lower_clothing_type": "",
-        "accessories": "",
-        "hair": "",
-        "obvious_pattern": ""
-      }
-    }
-  },
-  "last_updated": ""
+    "Guest_1": {
+        "name": "Alice",
+        "drink": "Coffee",
+        "features": {
+            "error": "API_FAILED"
+        }
+    },
+    "Guest_2": {
+        "name": "Steve",
+        "drink": "Milk",
+        "features": {
+            "features": [
+                "",
+                "",
+                ""
+            ],
+            "raw": {
+                "upper_clothing_color": "",
+                "upper_clothing_type": "",
+                "lower_clothing_color": "",
+                "lower_clothing_type": "",
+                "accessories": "",
+                "hair": "",
+                "obvious_pattern": ""
+            }
+        }
+    },
+    "last_updated": "2026-07-02 07:55:34"
 }
