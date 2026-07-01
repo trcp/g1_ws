@@ -191,6 +191,7 @@ def main():
                 start_msg="My name is erasers_g1, Did you finish my inspection?? If so, please say ByeBye or NO after the chime sounds.",
                 success_msg="Thank you! I will go to exit.",
                 timeout_msg="OK. I will stay.",
+                max_challenge=100,
             ),
             transitions={
                 "success": "MOVE_EXIT_POINT",
