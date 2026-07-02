@@ -1,26 +1,21 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>robot_tasks</name>
+  <name>bell_sound_detector</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="unitree@todo.todo">unitree</maintainer>
+  <description>Two-tone bell sound detector for ROS 2.</description>
+  <maintainer email="noy@abc-net.jp">0xNOY</maintainer>
   <license>TODO: License declaration</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <exec_depend>python3-numpy</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
-
-  <depend>lightweight_openpose_ros2</depend>
-  <depend>sam3_ros</depend>
-
-  <depend>g1_bringup</depend>
-  <depend>realsense2_camera</depend>
-  <depend>erasers_g1_api</depend>
-  <depend>smach_ros</depend>
-
-  <depend>machida_navigation</depend>
 
   <export>
     <build_type>ament_python</build_type>

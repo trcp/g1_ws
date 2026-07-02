@@ -567,7 +567,8 @@ class SpeechToText(smach.State):
                 )
 
             # bringup mic
-            self.__tts.say(text=self.__start_msg)
+            if num_challenge == 0:
+                self.__tts.say(text=self.__start_msg)
             request = SetBool.Request()
             request.data = True
             if not self.__send_mic_req(request):
@@ -671,7 +672,6 @@ class SpeechToText(smach.State):
                         return "timeout"
 
             userdata.stt_text = text_result
-            userdata.num_challenge = 0  # init challenge count
             self.__tts.say(self.__success_msg)
             return "success"
 

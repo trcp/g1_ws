@@ -46,8 +46,8 @@ setup(
     entry_points={
         'console_scripts': [
             'robot_inspection = robot_tasks.robot_inspection:main',
-            'receptionist = robot_tasks.receptionist:main',
             'restaurant_task = robot_tasks.restaurant:main',
+            'hri_task = hri_task.hri_task.main:main',
             'test = robot_tasks.test:main'
         ],
     },

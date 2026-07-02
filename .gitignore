@@ -1,40 +1,79 @@
-# ros workspace
-build/**
-install/**
-log/**
+# ==========================================
+# ROS 2 Workspace
+# ==========================================
+build/
+install/
+log/
 !build/.gitkeep
 !install/.gitkeep
 !log/.gitkeep
 
-
+# ==========================================
 # Python
+# ==========================================
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
 
-# ROSBAG
-rosbag/*
+# ==========================================
+# ROSBAG / Logs / Map
+# ==========================================
+rosbag/
+*.db3
+*.bag
+*.mcap
+*.log
+!rosbag/.gitkeep
 !rosbag/.gitkeepe
 
-# MAP
-map/*
+map/
 !map/.gitkeep
 
+# ==========================================
 # EDITOR & AGENT LLM
-.devcontainer
-.antigravity
-.vscode
-.agents
-.codex
+# ==========================================
+# AntigravityなどのAIエージェント、VSCode、その他エディタ関連を全無視
+.devcontainer/
+.antigravity/
+.vscode/
+.agents/
+.codex/
+.idea/
+.cursor/
+*.swp
+*.swo
 
+# ==========================================
 # pixi environments
-.pixi/*
+# ==========================================
+.pixi/
 !.pixi/config.toml
 
+# ==========================================
+# Models & Specific Large Files
+# ==========================================
 assets/sam3.pt
+src/erasers_g1_api/config/faster-whisper-small
+*.pt
+*.pth
+*.onnx
+*.engine
 
-# backup file
+# ==========================================
+# Backup & OS generated files
+# ==========================================
 *~
 \#*\#
 .\#*
-
-# whisper
-src/erasers_g1_api/config/faster-whisper-small
+*.zip
+*.tar.gz
+.DS_Store
+Thumbs.db
+.env
+*.ts

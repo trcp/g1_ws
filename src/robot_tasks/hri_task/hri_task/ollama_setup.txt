@@ -1,0 +1,179 @@
+HRI Ollama local LLM setup
+==========================
+
+Purpose
+-------
+This task uses a local Ollama model to extract guest name and favorite drink
+from the current interaction transcript.
+
+The model is downloaded once while the PC is online. After that, the HRI task
+can run offline as long as the Ollama binary and model files remain on the PC.
+
+Current settings
+----------------
+Ollama binary:
+  /home/roboworks/.local/bin/ollama
+
+Model:
+  qwen2.5:7b
+
+Model size:
+  about 4.7 GB
+
+HRI Python module:
+  src/robot_tasks/hri_task/hri_task/llm_guest_info.py
+
+Default Ollama API URL:
+  http://127.0.0.1:11434/api/generate
+
+The root compose.yaml uses network_mode: host for katana, so main.py running
+inside the katana container can access the host Ollama server at 127.0.0.1.
+
+
+Online setup on another PC
+--------------------------
+Run these commands on the target PC while it is online.
+
+1. Create local directories.
+
+  mkdir -p /home/roboworks/.local/bin
+  mkdir -p /home/roboworks/.local/lib
+
+2. Download and extract Ollama without sudo.
+
+  curl -L https://ollama.com/download/ollama-linux-amd64.tgz -o /tmp/ollama-linux-amd64.tgz
+  tar -xzf /tmp/ollama-linux-amd64.tgz -C /home/roboworks/.local
+
+If the download is provided as .tar.zst instead of .tgz, use:
+
+  curl -L https://ollama.com/download/ollama-linux-amd64.tar.zst -o /tmp/ollama-linux-amd64.tar.zst
+  zstd -d /tmp/ollama-linux-amd64.tar.zst -o /tmp/ollama-linux-amd64.tar
+  tar -xf /tmp/ollama-linux-amd64.tar -C /home/roboworks/.local
+
+3. Check the binary.
+
+  /home/roboworks/.local/bin/ollama --version
+
+4. Start the Ollama server in one terminal.
+
+  /home/roboworks/.local/bin/ollama serve
+
+5. Pull the model in another terminal while the server is running.
+
+  /home/roboworks/.local/bin/ollama pull qwen2.5:7b
+
+6. Confirm that the model exists.
+
+  /home/roboworks/.local/bin/ollama list
+
+Expected model:
+
+  qwen2.5:7b
+
+After this point, the PC can be disconnected from the network.
+
+
+Offline use
+-----------
+Start the HRI WezTerm task. The task file has an Ollama pane that runs:
+
+  /home/roboworks/.local/bin/ollama serve
+
+Then run the normal HRI task from the hri_main pane.
+
+The interaction flow still stores the extracted values in the existing fields:
+
+  guest_name
+  guest_drink
+  hri_guest_info.json
+
+The rest of the interaction code should not need to change.
+
+
+Manual text test without speech recognition
+-------------------------------------------
+With the Ollama server running, test extraction directly:
+
+  cd /home/roboworks/g1_ws
+  python3 src/robot_tasks/hri_task/hri_task/llm_guest_info.py --text "My name is Andrew and my favorite drink is orange juice."
+
+Expected output:
+
+  {"name": "Andrew", "drink": "Orange Juice"}
+
+Interactive test:
+
+  cd /home/roboworks/g1_ws
+  python3 src/robot_tasks/hri_task/hri_task/llm_guest_info.py --interactive
+
+
+Model load and unload
+---------------------
+Load the model before interaction:
+
+  cd /home/roboworks/g1_ws
+  python3 src/robot_tasks/hri_task/hri_task/llm_guest_info.py --activate
+
+Unload the model:
+
+  cd /home/roboworks/g1_ws
+  python3 src/robot_tasks/hri_task/hri_task/llm_guest_info.py --deactivate
+
+Check loaded models:
+
+  /home/roboworks/.local/bin/ollama ps
+
+The current extraction code sends keep_alive=0 during normal parsing, so the
+model is unloaded after the extraction call. Use --activate only when you want
+to pre-load it just before name/drink interaction.
+
+
+Measured time on this PC
+------------------------
+Measured with qwen2.5:7b and the current llm_guest_info.py.
+
+Cold or unloaded extraction:
+  about 2.8 seconds
+
+Manual pre-load:
+  about 2.7 seconds
+
+Extraction after pre-load:
+  about 0.5 seconds
+
+The current normal HRI path unloads after extraction, so each independent call
+is closer to the cold/unloaded time unless --activate is called immediately
+before the interaction.
+
+
+Copying an already prepared offline setup
+-----------------------------------------
+For a PC with no network access, prepare these directories on an online PC and
+copy them to the same paths on the offline PC:
+
+  /home/roboworks/.local/bin/ollama
+  /home/roboworks/.local/lib/ollama
+  /home/roboworks/.ollama/models
+
+Then check:
+
+  /home/roboworks/.local/bin/ollama serve
+  /home/roboworks/.local/bin/ollama list
+
+If qwen2.5:7b appears in ollama list, the HRI task can use it offline.
+
+
+Troubleshooting
+---------------
+If main.py cannot connect to Ollama, check that the server is running:
+
+  /home/roboworks/.local/bin/ollama ps
+
+If the API address must be changed, set OLLAMA_URL before running main.py:
+
+  export OLLAMA_URL=http://127.0.0.1:11434/api/generate
+
+If the model name changes, set OLLAMA_MODEL:
+
+  export OLLAMA_MODEL=qwen2.5:7b
+

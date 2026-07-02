@@ -1,0 +1,42 @@
+{
+    "Guest_1": {
+        "name": "Dennis",
+        "drink": "Cola",
+        "features": {
+            "upper_clothing_color": "white",
+            "upper_clothing_sleeve": "long",
+            "upper_clothing_pattern": "none",
+            "upper_clothing_type": "shirt",
+            "lower_clothing_color": "black",
+            "lower_clothing_type": "trousers",
+            "lower_clothing_pattern": "solid",
+            "hair_color": "none",
+            "hair_style": "short",
+            "glasses": "none",
+            "mask": "none",
+            "hat": "none",
+            "bag": "none"
+        }
+    },
+    "Guest_2": {
+        "name": "Kevin",
+        "drink": "Coffee",
+        "features": {
+            "features": [
+                "",
+                "",
+                ""
+            ],
+            "raw": {
+                "upper_clothing_color": "",
+                "upper_clothing_type": "",
+                "lower_clothing_color": "",
+                "lower_clothing_type": "",
+                "accessories": "",
+                "hair": "",
+                "obvious_pattern": ""
+            }
+        }
+    },
+    "last_updated": "2026-07-02 10:42:39"
+}
