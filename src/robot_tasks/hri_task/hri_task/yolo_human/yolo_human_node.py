@@ -343,7 +343,16 @@ class YoloHumanNode(Node):
                             self.get_logger().info(f"{self.feature_mode.upper()} VLM call succeeded. Caching results.")
                         except Exception as e:
                             self.get_logger().error(f"VLM extraction failed: {e}. Returning failure status.")
-                            self.online_features_cache = {"error": "API_FAILED"}
+                            self.online_features_cache = {
+                                "error": "API_FAILED",
+                                "mode": self.feature_mode,
+                                "message": str(e),
+                                "extractor": (
+                                    "online_openai"
+                                    if self.feature_mode == "online"
+                                    else "local_vlm"
+                                ),
+                            }
                         finally:
                             self.api_fetching = False
 

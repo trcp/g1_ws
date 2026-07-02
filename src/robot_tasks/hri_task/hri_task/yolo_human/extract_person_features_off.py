@@ -193,13 +193,9 @@ def extract_person_features(
     if image is None or getattr(image, "size", 0) == 0:
         raise ValueError("`image` must be a non-empty OpenCV image array.")
 
-    # Resolve the API key.
-    key = api_key or os.environ.get("OPENAI_API_KEY")
-    if not key:
-        raise ValueError(
-            "An OpenAI API key must be provided via `api_key` or the "
-            "`OPENAI_API_KEY` environment variable."
-        )
+    # Local OpenAI-compatible servers such as llama.cpp only require the
+    # Authorization header shape; the token value itself is not validated.
+    key = api_key or os.environ.get("OPENAI_API_KEY") or "local-vlm"
 
     # Encode the image and wrap it as a base64 data URL.
     success, buffer = cv2.imencode(image_format, image)

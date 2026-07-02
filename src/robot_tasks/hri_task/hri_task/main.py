@@ -227,7 +227,7 @@ def arm_action_cb(userdata, node: Node, tts_say, direct_arm: DirectJointControll
                 seat_description = f"the {ordinal_str} seat from the left"
             
             # 姿勢が固定されたまま喋る
-            tts_say(f"{seat_description.capitalize()} is empty. Please sit there.")
+            tts_say(f"Please sit there I am pointing.")
             
             # 喋り終わった後、次のフェーズに進むときにホームポジションへ移行する
             if direct_arm:
@@ -314,7 +314,7 @@ def parse_guest_info_cb(userdata, node: Node, direct_arm=None, guest_index=1):
             userdata.num_challenge = 0
         userdata.num_challenge += 1
 
-        if userdata.num_challenge >= 3:
+        if userdata.num_challenge >= 5:
             node.get_logger().warn("Exceeded max retries (2). Reporting missing info instead of using dummy.")
             
             missing_parts = []
@@ -775,7 +775,9 @@ def main():
 
         smach.StateMachine.add(
             'TRACK_PERSON_1',
-            YoloTrackingState(node=node, direct_arm=ARM, use_waist=True, timeout=30.0),
+            YoloTrackingState(
+                node=node, direct_arm=ARM, use_waist=True,
+                timeout=30.0, ideal_distance=0.7, distance_threshold=1.05),
             transitions={'success': 'GREET_GUEST_1',
                          'failure': 'GREET_GUEST_1',
                          'timeout': 'GREET_GUEST_1'})
@@ -795,7 +797,7 @@ def main():
                 'node': node, 'tts_say': SAY, 'navigation': NAVIGATION,
                 'control': CONTROL, 'location_name': 'chair_front',
                 'direct_arm': ARM,
-                'message': "Please follow me to the living room.",
+                'message': "Please follow me to the living room and stay behind me.",
                 'yolo_cmd_pub': yolo_cmd_pub}),
             transitions={'success': 'FIND_EMPTY_SEAT_1',
                          'failure': 'task_failed'})
@@ -837,7 +839,9 @@ def main():
 
         smach.StateMachine.add(
             'TRACK_PERSON_2',
-            YoloTrackingState(node=node, direct_arm=ARM, use_waist=True, timeout=30.0),
+            YoloTrackingState(
+                node=node, direct_arm=ARM, use_waist=True,
+                timeout=30.0, ideal_distance=0.7, distance_threshold=1.05),
             transitions={'success': 'GREET_GUEST_2',
                          'failure': 'GREET_GUEST_2',
                          'timeout': 'GREET_GUEST_2'})
@@ -854,9 +858,22 @@ def main():
         smach.StateMachine.add(
             'DESCRIBE_GUEST_1',
             smach.CBState(cb=describe_guest_1_cb, cb_kwargs={'node': node, 'tts_say': SAY}),
-            transitions={'success': 'MOVE_TO_LIVING_2',
-                         'failure': 'MOVE_TO_LIVING_2'},
+            transitions={'success': 'CHECK_BAG_GRASP',
+                         'failure': 'CHECK_BAG_GRASP'},
             remapping={'g1_name': 'guest1_name', 'g1_features': 'guest1_features'})
+
+        smach.StateMachine.add(
+            'CHECK_BAG_GRASP',
+            smach.CBState(cb=check_skip_bag_grasp_cb, cb_kwargs={'node': node}),
+            transitions={'skip': 'MOVE_TO_LIVING_2',
+                         'run': 'BAG_GRASP_INTERACTION'})
+
+        smach.StateMachine.add(
+            'BAG_GRASP_INTERACTION',
+            YoloBagGraspInteractionState(node=node, tts_say=SAY, direct_arm=ARM, control=CONTROL, timeout=8.0),
+            transitions={'success': 'MOVE_TO_LIVING_2',
+                         'failure': 'MOVE_TO_LIVING_2',
+                         'timeout': 'MOVE_TO_LIVING_2'})
 
         smach.StateMachine.add(
             'MOVE_TO_LIVING_2',
@@ -864,7 +881,7 @@ def main():
                 'node': node, 'tts_say': SAY, 'navigation': NAVIGATION,
                 'control': CONTROL, 'location_name': 'chair_front',
                 'direct_arm': ARM,
-                'message': "Please follow me to the living room.",
+                'message': "Please follow me to the living room and stay behind me .",
                 'yolo_cmd_pub': yolo_cmd_pub}),
             transitions={'success': 'FIND_EMPTY_SEAT_2',
                          'failure': 'task_failed'})
@@ -889,30 +906,17 @@ def main():
             'INTRODUCE_GUESTS',
             smach.CBState(cb=introduce_guests_cb, cb_kwargs={
                 'node': node, 'tts_say': SAY, 'control': CONTROL, 'direct_arm': ARM}),
-            transitions={'success': 'CHECK_BAG_GRASP',
-                         'failure': 'CHECK_BAG_GRASP'},
+            transitions={'success': 'CHECK_SKIP_FOLLOW',
+                         'failure': 'CHECK_SKIP_FOLLOW'},
             remapping={'g1_name': 'guest1_name', 'g1_drink': 'guest1_drink',
                        'g2_name': 'guest2_name', 'g2_drink': 'guest2_drink'})
-
-        smach.StateMachine.add(
-            'CHECK_BAG_GRASP',
-            smach.CBState(cb=check_skip_bag_grasp_cb, cb_kwargs={'node': node}),
-            transitions={'skip': 'CHECK_SKIP_FOLLOW',
-                         'run': 'BAG_GRASP_INTERACTION'})
-
-        smach.StateMachine.add(
-            'BAG_GRASP_INTERACTION',
-            YoloBagGraspInteractionState(node=node, tts_say=SAY, direct_arm=ARM, control=CONTROL, timeout=8.0),
-            transitions={'success': 'CHECK_SKIP_FOLLOW',
-                         'failure': 'CHECK_SKIP_FOLLOW',
-                         'timeout': 'CHECK_SKIP_FOLLOW'})
 
         # ====== ホスト追従 (止まったら終了) ======
         smach.StateMachine.add(
             'CHECK_SKIP_FOLLOW',
             smach.CBState(cb=check_skip_follow_host_cb, cb_kwargs={'node': node}),
-            transitions={'skip': 'DROP_BAG',
-                         'run': 'FOLLOW_HOST'})
+            transitions={'skip': 'task_completed',
+                         'run': 'task_completed'})
 
         smach.StateMachine.add(
             'FOLLOW_HOST',

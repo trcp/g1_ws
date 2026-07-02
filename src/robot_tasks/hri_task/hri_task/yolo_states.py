@@ -118,8 +118,8 @@ class YoloTrackingState(BaseYoloState):
     """
 
     def __init__(self, node, target_classes=None, timeout=30.0,
-                 direct_arm=None, use_waist=True, distance_threshold=1.3,
-                 ideal_distance=1.0, center_threshold=0.45,
+                 direct_arm=None, use_waist=True, distance_threshold=1.05,
+                 ideal_distance=0.7, center_threshold=0.45,
                  stationary_angle_threshold=0.08, stationary_depth_threshold=0.18,
                  consecutive_frames=3, max_loops=3):
         if target_classes is None:
@@ -148,9 +148,9 @@ class YoloTrackingState(BaseYoloState):
             angle_rad = -float(det.get('angle_rad', 0.0))
             w_ratio = float(det.get('bbox_width_ratio', 0.0))
             score = (
-                abs(z - self.ideal_distance) * 1.2
-                + abs(angle_rad) * 1.5
-                + max(0.0, z - self.distance_threshold) * 2.0
+                abs(z - self.ideal_distance) * 1.5
+                + abs(angle_rad) * 2.0
+                + max(0.0, z - self.distance_threshold) * 3.0
             )
             candidates.append({
                 'det': det,
@@ -181,7 +181,12 @@ class YoloTrackingState(BaseYoloState):
             return
         angle_rad = candidate['angle_rad']
         w_ratio = candidate['w_ratio']
-        if w_ratio < 0.6 and abs(angle_rad) > 0.2:
+        if (
+            w_ratio < 0.6
+            and candidate['z'] <= self.distance_threshold + 0.25
+            and abs(angle_rad) > 0.2
+            and abs(angle_rad) < 0.75
+        ):
             try:
                 self.direct_arm.turn_waist_towards(angle_rad, hold_sec=0)
             except Exception as e:
@@ -412,6 +417,47 @@ class YoloEmptyChairState(BaseYoloState):
             'occupant': None,
             'inferred': inferred,
         }
+
+    def _snapshot_from_seats(self, seats):
+        snapshot = []
+        for seat in sorted(seats, key=lambda s: s['center_x']):
+            snapshot.append({
+                'center_x': seat['center_x'],
+                'bbox': list(seat['bbox']),
+                'description': seat['description'],
+                'source_label': seat['source_label'],
+                'source_bbox': list(seat.get('source_bbox', seat['bbox'])),
+                'split_count': seat.get('split_count', 1),
+                'split_part': seat.get('split_part', 1),
+                'inferred': seat.get('inferred', False),
+            })
+        return snapshot
+
+    def _seats_from_snapshot(self, snapshot):
+        seats = []
+        for item in snapshot or []:
+            bbox = item.get('bbox')
+            if not isinstance(bbox, list) or len(bbox) != 4:
+                continue
+            seats.append(self._seat_from_bbox(
+                bbox,
+                source_label=item.get('source_label', 'snapshot_seat'),
+                source_bbox=item.get('source_bbox', bbox),
+                split_count=item.get('split_count', 1),
+                split_part=item.get('split_part', 1),
+                description=item.get('description'),
+                inferred=item.get('inferred', False),
+            ))
+        return self._finalize_seat_indices(seats)
+
+    def _snapshot_seats_available(self):
+        if not self.direct_arm or self.guest_index < 2:
+            return None
+        snapshot = getattr(self.direct_arm, 'seat_layout_snapshot', None)
+        if not snapshot:
+            return None
+        seats = self._seats_from_snapshot(snapshot)
+        return seats or None
 
     def _split_object_into_seats(self, obj, split_count):
         x1, y1, x2, y2 = self._bbox(obj)
@@ -724,6 +770,28 @@ class YoloEmptyChairState(BaseYoloState):
         setattr(self.direct_arm, f"{prefix}_seat_center_x", empty_seat['center_x'])
         setattr(self.direct_arm, f"{prefix}_waist_yaw", seat_waist_yaws[empty_seat['index']])
 
+    def _refresh_guest1_seat_if_needed(self, occupied_seats, seat_waist_yaws):
+        if not self.direct_arm or self.guest_index < 2 or not occupied_seats:
+            return
+        old_x = getattr(self.direct_arm, 'guest1_seat_center_x', None)
+        if old_x is None:
+            return
+
+        seat = min(occupied_seats, key=lambda s: abs(s['center_x'] - old_x))
+        slot_width = max(40.0, seat['bbox'][2] - seat['bbox'][0])
+        if abs(seat['center_x'] - old_x) > slot_width * 1.5:
+            return
+
+        self.direct_arm.guest1_seat_index = seat['index']
+        self.direct_arm.guest1_seat_center_x = seat['center_x']
+        self.direct_arm.guest1_waist_yaw = seat_waist_yaws[seat['index']]
+        if hasattr(self, 'node') and self.node:
+            self.node.get_logger().info(
+                f"[YOLO SEAT] Refreshed Guest 1 seat for introduction -> "
+                f"index={seat['index']}, center={seat['center_x']:.1f}, "
+                f"waist={self.direct_arm.guest1_waist_yaw:.3f}"
+            )
+
     def _select_empty_seat(self, empty_seats):
         if not empty_seats:
             return None
@@ -759,7 +827,14 @@ class YoloEmptyChairState(BaseYoloState):
 
                     max_x = max([self.image_width] + [self._bbox(d)[2] for d in detections if d.get('bbox')])
                     frame_width = max(self.image_width, max_x)
-                    seats = self._build_seat_candidates(seating_objects, frame_width, seating_people)
+                    snapshot_seats = self._snapshot_seats_available()
+                    if snapshot_seats:
+                        seats = snapshot_seats
+                        self.node.get_logger().info(
+                            f"[YOLO SEAT] Using saved seat layout snapshot: seats={len(seats)}"
+                        )
+                    else:
+                        seats = self._build_seat_candidates(seating_objects, frame_width, seating_people)
                     self._assign_people_to_seats(seating_people, seats)
                     if self.guest_index >= 2:
                         self._mark_saved_seat_occupied(seats, 'host_seat_center_x', 'host')
@@ -773,8 +848,12 @@ class YoloEmptyChairState(BaseYoloState):
 
                     if self.guest_index == 1 and self.direct_arm:
                         self.direct_arm.saved_chair_x_centers = [s['center_x'] for s in seats]
+                        self.direct_arm.seat_layout_snapshot = self._snapshot_from_seats(seats)
                         self.node.get_logger().info(
                             f"[YOLO SEAT] Saved initial seat centers: {self.direct_arm.saved_chair_x_centers}"
+                        )
+                        self.node.get_logger().info(
+                            f"[YOLO SEAT] Saved seat layout snapshot: seats={len(self.direct_arm.seat_layout_snapshot)}"
                         )
 
                     empty_seats = [s for s in seats if not s['occupied']]
@@ -842,6 +921,7 @@ class YoloEmptyChairState(BaseYoloState):
                             self.direct_arm.seat_candidates_debug = seats
 
                             self._save_host_if_needed(occupied_seats, seat_waist_yaws)
+                            self._refresh_guest1_seat_if_needed(occupied_seats, seat_waist_yaws)
                             self._save_guest_seat(empty_seat, seat_waist_yaws)
 
                             current_guest_waist = seat_waist_yaws[empty_idx]

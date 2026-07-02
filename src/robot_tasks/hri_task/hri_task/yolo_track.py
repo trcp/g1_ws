@@ -31,6 +31,7 @@ TRACKING_GATE = 0.5    # 追跡ゲート距離 (m) (他人に乗り移らない�
 MAX_LOST_FRAMES = 15   # 連続ロストフレーム上限
 MAHA_GATE = 5.99       # マハラノビス距離閾値 (χ²分布 自由度2, 95%点)
 TENTATIVE_ID_CONFIRM = 3  # 仮マッチIDの確定に必要な連続フレーム数
+TRACK_ID_SCORE_BONUS = 0.75  # ID一致は参考情報に留め、位置一貫性を優先する
 
 # 到着判定
 REACHED_DISTANCE_TOLERANCE = 0.12  # 距離トレランス ±12cm (旧: ±20cm)
@@ -470,19 +471,12 @@ class YoloHumanTracker(Node):
         else:
             self.yolo_lost_start_time = None
 
-        # --- track_id ベースのマッチング ---
+        # --- 位置一貫性ベースのマッチング ---
         best_cluster = None
         matched_tid = None
 
-        # 優先度 1: track_id が一致する人を探す
-        if self.target_track_id is not None:
-            for pos, tid, bwr in clusters:
-                if tid == self.target_track_id:
-                    best_cluster = pos
-                    matched_tid = tid
-                    break
-
-        # 優先度 2: track_idが見つからない場合、マハラノビス距離＋外見スコアで最適な人を選ぶ
+        # track_id は乗り移りやすいため絶対優先しない。
+        # EKF予測位置に近い候補を主軸にし、ID一致は小さなボーナスだけ与える。
         if best_cluster is None:
             pred_pos = self.ekf.x[:2]
             best_idx = None
@@ -492,6 +486,8 @@ class YoloHumanTracker(Node):
                 # マハラノビス距離（EKFの不確実性を考慮した統計的距離）
                 maha = self.ekf.mahalanobis(pos)
                 score = maha
+                if self.target_track_id is not None and tid == self.target_track_id:
+                    score *= TRACK_ID_SCORE_BONUS
                 
                 # 外見一貫性: bbox_width_ratio が大きくずれている場合はペナルティ
                 if self.target_bbox_width > 0.01:

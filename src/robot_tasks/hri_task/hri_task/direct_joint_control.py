@@ -89,6 +89,9 @@ class DirectJointController:
         
         # バックグラウンド追従用のフラグとサブスクライバ
         self.bg_tracking_active = False
+        self.bg_tracking_ideal_distance = 0.7
+        self.bg_tracking_max_distance = 1.05
+        self.bg_tracking_max_angle = 0.75
         self.yolo_sub = self.node.create_subscription(
             String,
             '/yolo_human/result',
@@ -251,21 +254,32 @@ class DirectJointController:
             
         try:
             detections = json.loads(msg.data)
-            people = [d for d in detections if d.get('label') == 'person']
-            if not people:
+            candidates = []
+            for person in detections:
+                if person.get('label') != 'person':
+                    continue
+                z = float(person.get('distance_z', 999.0))
+                if not (0.1 < z <= self.bg_tracking_max_distance):
+                    continue
+
+                angle_rad = -float(person.get('angle_rad', 0.0))
+                w_ratio = float(person.get('bbox_width_ratio', 0.0))
+                if w_ratio >= 0.7 or abs(angle_rad) > self.bg_tracking_max_angle:
+                    continue
+
+                score = (
+                    abs(z - self.bg_tracking_ideal_distance) * 1.5
+                    + abs(angle_rad) * 2.0
+                )
+                candidates.append((score, z, angle_rad, w_ratio))
+
+            if not candidates:
                 return
-                
-            # 一番近い人を抽出
-            target = min(people, key=lambda p: p.get('distance_z', 999.0))
-            z = target.get('distance_z', 999.0)
-            # YOLO出力は右が正。ジョイント座標系（左が正）に統一するため反転
-            angle_rad = -target.get('angle_rad', 0.0)
-            w_ratio = target.get('bbox_width_ratio', 0.0)
+
+            _, z, angle_rad, w_ratio = min(candidates, key=lambda c: c[0])
             
-            # 1.3m以内であれば追従 (z=0.0は深度エラーとして除外)
-            if w_ratio < 0.6 and 0.1 < z < 1.3:
-                # 遊び（デッドバンド）: 0.2 rad
-                if abs(angle_rad) > 0.2:
-                    self.turn_waist_towards(angle_rad, hold_sec=0)
+            # 遊び（デッドバンド）: 0.2 rad
+            if w_ratio < 0.6 and abs(angle_rad) > 0.2:
+                self.turn_waist_towards(angle_rad, hold_sec=0)
         except Exception:
             pass

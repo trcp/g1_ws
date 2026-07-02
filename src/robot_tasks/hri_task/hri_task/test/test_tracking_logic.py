@@ -26,8 +26,8 @@ from yolo_states import YoloTrackingState
 
 def make_state():
     state = YoloTrackingState.__new__(YoloTrackingState)
-    state.distance_threshold = 1.3
-    state.ideal_distance = 1.0
+    state.distance_threshold = 1.05
+    state.ideal_distance = 0.7
     state.center_threshold = 0.45
     state.stationary_angle_threshold = 0.08
     state.stationary_depth_threshold = 0.18
@@ -40,14 +40,14 @@ class TrackingLogicTest(unittest.TestCase):
         state = make_state()
         detections = [
             {'label': 'person', 'distance_z': 0.9, 'angle_rad': 0.85, 'bbox_width_ratio': 0.4},
-            {'label': 'person', 'distance_z': 1.1, 'angle_rad': 0.08, 'bbox_width_ratio': 0.35},
+            {'label': 'person', 'distance_z': 0.75, 'angle_rad': 0.08, 'bbox_width_ratio': 0.35},
             {'label': 'chair', 'distance_z': 1.0, 'angle_rad': 0.0},
         ]
 
         candidates = state._person_candidates(detections)
 
         self.assertEqual(len(candidates), 2)
-        self.assertAlmostEqual(candidates[0]['z'], 1.1)
+        self.assertAlmostEqual(candidates[0]['z'], 0.75)
         self.assertTrue(state._is_good_guest_candidate(candidates[0]))
 
     def test_stationary_candidate_allows_small_motion(self):

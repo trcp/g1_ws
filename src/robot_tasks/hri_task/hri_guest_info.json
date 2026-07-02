@@ -1,14 +1,26 @@
 {
     "Guest_1": {
-        "name": "Alice",
-        "drink": "Coffee",
+        "name": "Dennis",
+        "drink": "Cola",
         "features": {
-            "error": "API_FAILED"
+            "upper_clothing_color": "white",
+            "upper_clothing_sleeve": "long",
+            "upper_clothing_pattern": "none",
+            "upper_clothing_type": "shirt",
+            "lower_clothing_color": "black",
+            "lower_clothing_type": "trousers",
+            "lower_clothing_pattern": "solid",
+            "hair_color": "none",
+            "hair_style": "short",
+            "glasses": "none",
+            "mask": "none",
+            "hat": "none",
+            "bag": "none"
         }
     },
     "Guest_2": {
-        "name": "Steve",
-        "drink": "Milk",
+        "name": "Kevin",
+        "drink": "Coffee",
         "features": {
             "features": [
                 "",
@@ -26,5 +38,5 @@
             }
         }
     },
-    "last_updated": "2026-07-02 07:55:34"
+    "last_updated": "2026-07-02 10:42:39"
 }

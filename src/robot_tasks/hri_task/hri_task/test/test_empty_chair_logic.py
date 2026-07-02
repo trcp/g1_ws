@@ -143,22 +143,55 @@ class EmptyChairLogicTest(unittest.TestCase):
         self.assertFalse(seats[1]['occupied'])
         self.assertTrue(seats[2]['occupied'])
 
-    def test_saved_host_and_guest1_seats_are_not_recommended_again(self):
+    def test_saved_guest1_seat_is_not_recommended_again(self):
         state = make_state()
         state.guest_index = 2
         arm = DummyArm()
-        arm.host_seat_center_x = 160.0
         arm.guest1_seat_center_x = 320.0
         state.direct_arm = arm
         sofa = {'label': 'sofa', 'confidence': 0.9, 'bbox': [80, 220, 560, 420]}
 
         seats = state._build_seat_candidates([sofa], 640, [])
-        state._mark_saved_seat_occupied(seats, 'host_seat_center_x', 'host')
         state._mark_saved_seat_occupied(seats, 'guest1_seat_center_x', 'guest1')
         empty = [s for s in seats if not s['occupied']]
 
-        self.assertEqual(len(empty), 1)
-        self.assertEqual(state._select_empty_seat(empty)['index'], 3)
+        self.assertEqual(len(empty), 2)
+        self.assertNotEqual(state._select_empty_seat(empty)['index'], 2)
+
+    def test_guest1_seat_angle_is_refreshed_on_second_visit(self):
+        state = make_state()
+        state.guest_index = 2
+        arm = DummyArm()
+        arm.guest1_seat_center_x = 300.0
+        state.direct_arm = arm
+        seats = [
+            {'index': 1, 'center_x': 170.0, 'bbox': [100, 220, 240, 420]},
+            {'index': 2, 'center_x': 330.0, 'bbox': [260, 220, 400, 420]},
+            {'index': 3, 'center_x': 500.0, 'bbox': [430, 220, 570, 420]},
+        ]
+        waist_yaws = {1: 0.4, 2: 0.1, 3: -0.4}
+
+        state._refresh_guest1_seat_if_needed([seats[1]], waist_yaws)
+
+        self.assertEqual(arm.guest1_seat_index, 2)
+        self.assertEqual(arm.guest1_seat_center_x, 330.0)
+        self.assertEqual(arm.guest1_waist_yaw, 0.1)
+
+    def test_saved_layout_snapshot_restores_descriptions(self):
+        state = make_state()
+        sofa = {'label': 'sofa', 'confidence': 0.9, 'bbox': [80, 220, 430, 420]}
+        chair = {'label': 'chair', 'confidence': 0.8, 'bbox': [470, 245, 590, 430]}
+        seats = state._build_seat_candidates([sofa, chair], 640, [])
+        snapshot = state._snapshot_from_seats(seats)
+
+        restored = state._seats_from_snapshot(snapshot)
+
+        self.assertEqual(len(restored), 4)
+        self.assertEqual(
+            [s['description'] for s in restored],
+            [s['description'] for s in seats],
+        )
+        self.assertEqual(restored[1]['description'], "the middle of the sofa")
 
 
 if __name__ == '__main__':
