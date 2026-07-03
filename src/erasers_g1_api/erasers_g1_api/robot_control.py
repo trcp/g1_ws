@@ -176,6 +176,9 @@ class G1Control:
 
 
 class G1Navigation:
+    
+    GET_BY_TOPIC = True
+
     def __init__(
         self,
         node: Node,
@@ -200,7 +203,7 @@ class G1Navigation:
         """
         self.node = node
         self.TIMEOUT_SEC = 60.0
-        self.FACE_GOAL_TIMEOUT_SEC = 10.0
+        self.FACE_GOAL_TIMEOUT_SEC = 30.0
         self.__current_goal_handle = None
         self.__latest_odom_pose = None
         self.__odom_lock = threading.Lock()
@@ -243,7 +246,7 @@ class G1Navigation:
             localization_qos,
         )
 
-    def get_current_pose(self, simple: bool = False, use_topic: bool = True):
+    def get_current_pose(self, simple: bool = False):
         """
         現在のロボットの位置姿勢を取得する．
 
@@ -263,7 +266,7 @@ class G1Navigation:
             simple=False の場合はマップ座標系基準の PoseStamped。
             simple=True の場合は [x, y, yaw] を格納したリスト。
         """
-        if use_topic:
+        if self.GET_BY_TOPIC:
             last_warn_time = 0.0
             while rclpy.ok():
                 rclpy.spin_once(self.node, timeout_sec=0.05)
@@ -2416,7 +2419,42 @@ class ArmControl:
         wait: bool = True,
     ) -> bool:
         """
-        定義済み状態への遷移．
+        SRDF に定義された MoveIt group_state へ遷移する。
+
+        `src/g1_moveit/config/g1.srdf` の group_state 定義を読み取り、
+        指定グループの全ジョイントに JointConstraint を設定して MoveGroup に送る。
+
+        Parameters
+        ----------
+        group_name : str, optional
+            遷移対象の MoveIt planning group 名。選択可能な主なグループは
+            `upper_body`, `arm_left`, `arm_right`。
+
+            SRDF には内部用として `__pure_arm_left`, `__pure_arm_right`,
+            `__left_hand`, `__right_hand` も定義されているが、この API では
+            通常 `upper_body`, `arm_left`, `arm_right` を指定する。
+        group_state : str, optional
+            SRDF に定義された遷移姿勢名。
+
+            選択可能な group_state は次の通り。
+
+            - `upper_body`: `home`, `walk`
+            - `arm_left`: `home`, `walk`
+            - `arm_right`: `home`, `walk`
+            - `__pure_arm_left`: `walk`（内部用）
+            - `__pure_arm_right`: `walk`（内部用）
+
+            `home` はゼロ姿勢、`walk` は歩行時に近い腕姿勢を表す。
+        wait : bool, optional
+            True の場合は MoveGroup action の完了を待つ。False の場合は goal
+            送信後に結果を待たずに戻る。
+
+        Returns
+        -------
+        bool
+            MoveGroup goal の送信または実行が成功した場合 True。
+            指定した `group_name` と `group_state` の組み合わせが SRDF に存在しない、
+            または MoveGroup goal が失敗した場合 False。
         """
         joints = self.__get_srdf_group_state_joints(group_name, group_state)
         if joints is None:
@@ -2446,7 +2484,75 @@ class ArmControl:
         **kwargs,
     ) -> bool:
         """
-        ジョイント角度制御．
+        MoveIt planning group に対してジョイント角度を直接指定する。
+
+        `src/g1_moveit/config/g1.srdf` の planning group 定義に対応する
+        ジョイントへ JointConstraint を設定して MoveGroup に送る。
+        `kwargs` には制御したいジョイント名をキー、目標角度(rad)を値として渡す。
+        指定されないジョイントは現在角度を保持する。
+
+        Parameters
+        ----------
+        rlt : bool, optional
+            True の場合、`kwargs` の値を現在角度からの相対角度(rad)として扱う。
+            False の場合、`kwargs` の値を絶対角度(rad)として扱う。
+        wait : bool, optional
+            True の場合は MoveGroup action の完了を待つ。False の場合は goal
+            送信後に結果を待たずに戻る。
+        planning_group : str, optional
+            制御対象の planning group 名。選択可能なグループは
+            `upper_body`, `arm_left`, `arm_right`。
+
+            SRDF には `__pure_arm_left`, `__pure_arm_right`,
+            `__left_hand`, `__right_hand` も定義されているが、
+            このメソッドの実装では上記 3 グループのみ対応する。
+        **kwargs : float
+            ジョイント名と目標角度(rad)の対応。
+
+            `upper_body` で制御可能なジョイント:
+
+            - `waist_yaw_joint`
+            - `left_shoulder_pitch_joint`
+            - `left_shoulder_roll_joint`
+            - `left_shoulder_yaw_joint`
+            - `left_elbow_joint`
+            - `left_wrist_roll_joint`
+            - `right_shoulder_pitch_joint`
+            - `right_shoulder_roll_joint`
+            - `right_shoulder_yaw_joint`
+            - `right_elbow_joint`
+            - `right_wrist_roll_joint`
+
+            `arm_left` で制御可能なジョイント:
+
+            - `left_shoulder_pitch_joint`
+            - `left_shoulder_roll_joint`
+            - `left_shoulder_yaw_joint`
+            - `left_elbow_joint`
+            - `left_wrist_roll_joint`
+
+            `arm_right` で制御可能なジョイント:
+
+            - `right_shoulder_pitch_joint`
+            - `right_shoulder_roll_joint`
+            - `right_shoulder_yaw_joint`
+            - `right_elbow_joint`
+            - `right_wrist_roll_joint`
+
+        Returns
+        -------
+        bool
+            MoveGroup goal の送信または実行が成功した場合 True。
+            未対応の `planning_group` が指定された場合、または MoveGroup goal が
+            失敗した場合 False。
+
+        Examples
+        --------
+        >>> arm.joint_control(
+        ...     planning_group="upper_body",
+        ...     right_shoulder_pitch_joint=-0.7,
+        ...     right_elbow_joint=1.0,
+        ... )
         """
         goal_msg = MoveGroup.Goal()
         goal_msg.request.group_name = planning_group
