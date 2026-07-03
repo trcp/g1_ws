@@ -71,6 +71,7 @@ public:
     declare_parameter("path_obstacle_threshold", 75);
     declare_parameter("path_check_horizon",      1.5);   // how far ahead to check for obstacles [m]
     declare_parameter("path_check_use_memory",   true);  // true=memory grid, false=raw local costmap
+    declare_parameter("path_check_skip_radius",  0.0);   // skip path points within this distance of robot [m]
     declare_parameter("local_plan_frequency",    5.0);
     declare_parameter("goal_tolerance",          0.15);
     declare_parameter("replan_cooldown",         2.0);
@@ -81,6 +82,7 @@ public:
     declare_parameter("move_servo_timeout_sec",  2.0);
     declare_parameter("navigation_start_tilt",   0.7);
     declare_parameter("navigation_finish_tilt",  0.0);
+    declare_parameter("use_head_camera",         true);
 
     map_frame_        = get_parameter("map_frame").as_string();
     robot_base_frame_ = get_parameter("robot_base_frame").as_string();
@@ -366,6 +368,13 @@ private:
   {
     if (!is_active_navigation(nav_id)) return;
 
+    if (!get_parameter("use_head_camera").as_bool()) {
+      RCLCPP_INFO(get_logger(),
+        "Head camera is disabled; starting navigation without head tilt-up");
+      request_plan(nav_id, goal);
+      return;
+    }
+
     if (!move_servo_client_->service_is_ready()) {
       RCLCPP_WARN(get_logger(),
         "Service %s not available; continuing navigation without head tilt-up",
@@ -525,6 +534,13 @@ private:
 
   void send_finish_servo(const std::string & reason)
   {
+    if (!get_parameter("use_head_camera").as_bool()) {
+      RCLCPP_INFO(get_logger(),
+        "Head camera is disabled; skipping head tilt restore after %s",
+        reason.c_str());
+      return;
+    }
+
     const double tilt = get_parameter("navigation_finish_tilt").as_double();
 
     if (!move_servo_client_->service_is_ready()) {
@@ -801,6 +817,8 @@ private:
     const double check_horizon = get_parameter("path_check_horizon").as_double();
     const int    obs_threshold = get_parameter("path_obstacle_threshold").as_int();
     const bool   use_memory    = get_parameter("path_check_use_memory").as_bool();
+    const double skip_radius   = get_parameter("path_check_skip_radius").as_double();
+    const double skip_radius_sq = skip_radius * skip_radius;
 
     bool path_blocked = false;
     if (use_memory) {
@@ -817,6 +835,11 @@ private:
           if (i > nearest_idx) acc += distance(path[i - 1], path[i]);
           if (acc > check_horizon) break;
 
+          if (skip_radius_sq > 0.0) {
+            double dx = path[i].x - robot.x, dy = path[i].y - robot.y;
+            if (dx*dx + dy*dy < skip_radius_sq) continue;
+          }
+
           const int mx = static_cast<int>((path[i].x - mox) / mres);
           const int my = static_cast<int>((path[i].y - moy) / mres);
           if (mx < 0 || mx >= mw || my < 0 || my >= mh) continue;
@@ -824,7 +847,8 @@ private:
           if (static_cast<int>(memory_grid_[static_cast<size_t>(my * mw + mx)]) >= obs_threshold) {
             path_blocked = true;
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-              "Path blocked by obstacle at (%.2f, %.2f)", path[i].x, path[i].y);
+              "Path blocked by obstacle at (%.2f, %.2f), dist from robot: %.2f m",
+              path[i].x, path[i].y, distance(path[i], robot));
             publish_blocked_marker(path[i].x, path[i].y);
             break;
           }
@@ -869,6 +893,11 @@ private:
             if (i > nearest_idx) acc += distance(path[i - 1], path[i]);
             if (acc > check_horizon) break;
 
+            if (skip_radius_sq > 0.0) {
+              double dx = path[i].x - robot.x, dy = path[i].y - robot.y;
+              if (dx*dx + dy*dy < skip_radius_sq) continue;
+            }
+
             const double cx = same_frame ? path[i].x : cos_r * path[i].x - sin_r * path[i].y + tx;
             const double cy = same_frame ? path[i].y : sin_r * path[i].x + cos_r * path[i].y + ty;
             const int gx = static_cast<int>((cx - ox) / res);
@@ -878,7 +907,8 @@ private:
             if (static_cast<int>(costmap->data[static_cast<size_t>(gy * cw + gx)]) >= obs_threshold) {
               path_blocked = true;
               RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-                "Path blocked by obstacle at (%.2f, %.2f)", path[i].x, path[i].y);
+                "Path blocked by obstacle at (%.2f, %.2f), dist from robot: %.2f m",
+                path[i].x, path[i].y, distance(path[i], robot));
               publish_blocked_marker(path[i].x, path[i].y);
               break;
             }
