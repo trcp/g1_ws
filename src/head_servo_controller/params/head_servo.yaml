@@ -15,8 +15,8 @@ head_servo_node:
     # Calibration pulses from the existing hardware calibration.
     # These values correspond to the reference angles below, not necessarily
     # the camera-forward 0 rad pose.
-    pan_zero: 944 
-    tilt_zero: 952
+    pan_zero: 935
+    tilt_zero: 1072
     pan_zero_rad: -0.8727
     tilt_zero_rad: -1.5708
 
