@@ -30,6 +30,8 @@ import numpy as np
 import json
 import math
 import sys
+import os
+import time
 
 from ultralytics import YOLOE
 
@@ -81,11 +83,15 @@ class YoloHumanNode(Node):
         self.extract_features = False
         self.feature_mode = "online"  # Default
         self.target_classes = ["person"]
+        self.save_crops = False
+        self.crop_dir = "/tmp/hri_yolo_crops"
+        os.makedirs(self.crop_dir, exist_ok=True)
         
         # Async Feature Extraction State
         self.online_features_cache = None
         self.api_fetching = False
         self.api_disabled = False
+        self.feature_crop_path = None
 
         if self.is_active:
             self.get_logger().info("START_ACTIVE=True: 起動直後から検出開始")
@@ -144,16 +150,24 @@ class YoloHumanNode(Node):
                 new_extract = bool(cmd_data["extract_features"])
                 if new_extract and not self.extract_features:
                     self.online_features_cache = None  # Reset cache when turned ON
+                    self.feature_crop_path = None
                 self.extract_features = new_extract
                 self.get_logger().info(f"Extract features set to {self.extract_features}")
             elif "command" in cmd_data and cmd_data["command"] == "start":
                 # Default to False if command is start but no extract_features flag
                 self.extract_features = False
                 self.online_features_cache = None
+                self.feature_crop_path = None
 
             if "feature_mode" in cmd_data:
                 self.feature_mode = cmd_data["feature_mode"]
                 self.get_logger().info(f"Feature mode set to {self.feature_mode}")
+
+            if "save_crops" in cmd_data:
+                self.save_crops = bool(cmd_data["save_crops"])
+                self.get_logger().info(f"Save person crops set to {self.save_crops}")
+            elif "command" in cmd_data and cmd_data["command"] == "start":
+                self.save_crops = False
 
             if "classes" in cmd_data and isinstance(cmd_data["classes"], list):
                 self.target_classes = cmd_data["classes"]
@@ -213,6 +227,19 @@ class YoloHumanNode(Node):
             return 999.0, False
 
         return float(np.median(valid)), True
+
+    def _save_person_crop(self, image, bbox, prefix):
+        x1, y1, x2, y2 = bbox
+        crop = image[y1:y2, x1:x2].copy()
+        if crop.size == 0:
+            return None
+        path = os.path.join(
+            self.crop_dir,
+            f"{prefix}_{int(time.time() * 1000)}.jpg"
+        )
+        if cv2.imwrite(path, crop):
+            return path
+        return None
 
     def process_frame(self):
         if not self.is_active:
@@ -295,6 +322,11 @@ class YoloHumanNode(Node):
                     'offset_x': x_offset,
                     'track_id': track_id
                 }
+                if self.save_crops and label == "person":
+                    crop_path = self._save_person_crop(
+                        cv_rgb, (x1, y1, x2, y2), f"person_{len(detections)}")
+                    if crop_path:
+                        det_info['crop_path'] = crop_path
 
                 detections.append(det_info)
                 
@@ -327,6 +359,11 @@ class YoloHumanNode(Node):
                 if self.online_features_cache is None and not self.api_fetching:
                     self.api_fetching = True
                     crop = cv_rgb[y1:y2, x1:x2].copy()
+                    crop_path = self._save_person_crop(
+                        cv_rgb, (x1, y1, x2, y2), "feature_ref")
+                    if crop_path:
+                        self.feature_crop_path = crop_path
+                        detections[closest_det_idx]['feature_crop_path'] = crop_path
 
                     def fetch():
                         try:
@@ -365,6 +402,8 @@ class YoloHumanNode(Node):
 
             if features is not None:
                 detections[closest_det_idx]['features'] = features
+                if self.feature_crop_path:
+                    detections[closest_det_idx]['feature_crop_path'] = self.feature_crop_path
 
         # Publish results
         res_msg = String()

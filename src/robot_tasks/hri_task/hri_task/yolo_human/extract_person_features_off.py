@@ -9,6 +9,17 @@ import cv2
 import numpy as np
 
 
+def _image_to_data_url(image: np.ndarray, image_format: str) -> str:
+    if image is None or getattr(image, "size", 0) == 0:
+        raise ValueError("`image` must be a non-empty OpenCV image array.")
+    success, buffer = cv2.imencode(image_format, image)
+    if not success:
+        raise ValueError(f"Failed to encode image with format {image_format!r}.")
+    b64_image = base64.b64encode(buffer.tobytes()).decode("ascii")
+    mime = "image/png" if image_format.lower() == ".png" else "image/jpeg"
+    return f"data:{mime};base64,{b64_image}"
+
+
 # Default extraction schema for `extract_person_features`, expressed as a
 # mapping of field name to a short description. This follows the YAML
 # field-list format recommended by the LFM2.5-VL-Extract prompting guide.
@@ -189,22 +200,11 @@ def extract_person_features(
         urllib.error.URLError: If the HTTP request fails at the transport
             level (e.g. connection or timeout errors).
     """
-    # Validate the input image.
-    if image is None or getattr(image, "size", 0) == 0:
-        raise ValueError("`image` must be a non-empty OpenCV image array.")
-
     # Local OpenAI-compatible servers such as llama.cpp only require the
     # Authorization header shape; the token value itself is not validated.
     key = api_key or os.environ.get("OPENAI_API_KEY") or "local-vlm"
 
-    # Encode the image and wrap it as a base64 data URL.
-    success, buffer = cv2.imencode(image_format, image)
-    if not success:
-        raise ValueError(f"Failed to encode image with format {image_format!r}.")
-
-    b64_image = base64.b64encode(buffer.tobytes()).decode("ascii")
-    mime = "image/png" if image_format.lower() == ".png" else "image/jpeg"
-    data_url = f"data:{mime};base64,{b64_image}"
+    data_url = _image_to_data_url(image, image_format)
 
     # Build the extraction schema following the LFM2.5-VL-Extract prompting
     # guide: the fields to extract are listed as YAML (`name: description`)
@@ -273,3 +273,79 @@ def extract_person_features(
         return {"raw_output": content, "parse_error": "Response is not a JSON dictionary"}
 
     return {str(key): str(value) for key, value in extracted.items()}
+
+
+def match_reference_person(
+    reference_image: np.ndarray,
+    candidate_a: np.ndarray,
+    candidate_b: np.ndarray,
+    *,
+    api_key: str | None = None,
+    model: str = "LiquidAI/LFM2.5-VL-1.6B-Extract",
+    image_format: str = ".jpg",
+    detail: str = "auto",
+    max_tokens: int = 128,
+    temperature: float = 0.0,
+    timeout: float = 30.0,
+    base_url: str = "http://localhost:8000/v1",
+) -> dict[str, str]:
+    """Return which current candidate best matches the reference person.
+
+    The response is intentionally small so callers can treat low-confidence or
+    unparsable answers as a no-op fallback.
+    """
+    key = api_key or os.environ.get("OPENAI_API_KEY") or "local-vlm"
+    ref_url = _image_to_data_url(reference_image, image_format)
+    a_url = _image_to_data_url(candidate_a, image_format)
+    b_url = _image_to_data_url(candidate_b, image_format)
+
+    prompt = (
+        "Image 1 is the reference person. Image 2 is Candidate A. "
+        "Image 3 is Candidate B. Decide which candidate is the same person "
+        "as the reference, based only on clothing, colors, hair, and visible "
+        "accessories. If unsure, answer uncertain. Respond only as JSON: "
+        '{"match":"A|B|uncertain","confidence":0.0,"reason":"short reason"}'
+    )
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": ref_url, "detail": detail}},
+                    {"type": "image_url", "image_url": {"url": a_url, "detail": detail}},
+                    {"type": "image_url", "image_url": {"url": b_url, "detail": detail}},
+                ],
+            }
+        ],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "response_format": {"type": "json_object"},
+    }
+    request = urllib.request.Request(
+        url=f"{base_url}/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        error_detail = exc.read().decode("utf-8", errors="replace")
+        raise ValueError(
+            f"OpenAI API request failed with status {exc.code}: {error_detail}"
+        ) from exc
+
+    content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as exc:
+        return {"match": "uncertain", "confidence": "0.0", "reason": str(exc)}
+    if not isinstance(parsed, dict):
+        return {"match": "uncertain", "confidence": "0.0", "reason": "not a dict"}
+    return {str(k): str(v) for k, v in parsed.items()}

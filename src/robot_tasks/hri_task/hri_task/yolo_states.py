@@ -14,13 +14,21 @@ import time
 import math
 import subprocess
 import threading
+import cv2
 from rclpy.executors import SingleThreadedExecutor
 from std_msgs.msg import String
 from geometry_msgs.msg import Twist
 
-from direct_joint_control import ARM_POSE_EXTEND_LEFT, ARM_POSE_EXTEND_RIGHT, HOME_POSE
+from direct_joint_control import HOME_POSE
 from bag_grasp_ik import calculate_bag_grasp_joints
 from yolo_track import YoloHumanTracker
+
+try:
+    from yolo_human.extract_person_features_off import match_reference_person
+except Exception:
+    match_reference_person = None
+
+ENABLE_OCCUPANT_CONTEXT_SPEECH = True
 
 # ============================================================
 # ベースクラス: YOLO コマンド送信 + 結果受信
@@ -278,10 +286,12 @@ class YoloEmptyChairState(BaseYoloState):
     """
 
     SEATING_LABELS = {"chair", "sofa", "couch", "bench"}
-    SPLIT_LABELS = {"sofa", "couch", "bench"}
+    SPLIT_LABELS = {"sofa", "couch"}
 
     def __init__(self, node, direct_arm=None, guest_index=1, timeout=5.0,
-                 expected_seat_count=3, image_width=640):
+                 expected_seat_count=3, image_width=640,
+                 seat_stable_seconds=2.0, seat_stable_frames=3,
+                 min_split_seat_width_px=90.0):
         super().__init__(
             node,
             target_classes=["person", "chair", "sofa", "couch", "bench"],
@@ -291,6 +301,9 @@ class YoloEmptyChairState(BaseYoloState):
         self.guest_index = guest_index
         self.expected_seat_count = expected_seat_count
         self.image_width = image_width
+        self.seat_stable_seconds = seat_stable_seconds
+        self.seat_stable_frames = seat_stable_frames
+        self.min_split_seat_width_px = min_split_seat_width_px
 
     def _det_conf(self, det):
         return float(det.get('confidence', det.get('score', 1.0)))
@@ -370,11 +383,7 @@ class YoloEmptyChairState(BaseYoloState):
 
     def _is_splittable_seating_object(self, obj, frame_width):
         label = obj.get('label', '')
-        width = self._bbox_width(obj)
-        if label in self.SPLIT_LABELS:
-            return True
-        # デバッグ環境ではソファーが chair と出ることがあるため、横幅で救済する。
-        return width >= frame_width * 0.35
+        return label in self.SPLIT_LABELS
 
     def _part_name(self, part_index, part_count):
         if part_count == 2:
@@ -391,12 +400,8 @@ class YoloEmptyChairState(BaseYoloState):
         label = obj.get('label', 'seat')
         if label == "couch":
             return "sofa"
-        if label == "bench":
-            return "bench"
         if label == "sofa":
             return "sofa"
-        if self._is_splittable_seating_object(obj, self.image_width):
-            return "large chair"
         return "chair"
 
     def _seat_from_bbox(self, bbox, source_label='inferred_seat',
@@ -477,6 +482,63 @@ class YoloEmptyChairState(BaseYoloState):
                 description=f"the {part} of the {source_name}",
             ))
         return seats
+
+    def _is_wide_enough_to_split(self, obj, split_count):
+        slot_width = self._bbox_width(obj) / max(1, split_count)
+        return slot_width >= self.min_split_seat_width_px, slot_width
+
+    def _select_primary_sofa(self, objects, frame_width):
+        sofas = [o for o in objects if o.get('label') in self.SPLIT_LABELS]
+        if not sofas:
+            return None
+        image_center = frame_width / 2.0
+        return min(
+            sofas,
+            key=lambda o: (
+                abs(self._bbox_center_x(o) - image_center),
+                -self._bbox_width(o),
+                -self._det_conf(o),
+            )
+        )
+
+    def _expand_sofa_bbox_with_seated_people(self, sofa, people, frame_width):
+        x1, y1, x2, y2 = self._bbox(sofa)
+        sofa_width = max(1.0, x2 - x1)
+        left_people = []
+        right_people = []
+
+        for person in people:
+            p_x1, p_y1, p_x2, p_y2 = self._bbox(person)
+            px = (p_x1 + p_x2) / 2.0
+            near_x = (x1 - sofa_width * 1.2) <= px <= (x2 + sofa_width * 1.2)
+            bottom_near_seat = p_y2 >= y1 - 20.0
+            torso_reaches_seat = p_y1 <= y2 + 30.0
+            lower_body_near_sofa = p_y2 <= y2 + max(80.0, (y2 - y1) * 0.45)
+
+            if not (near_x and bottom_near_seat and torso_reaches_seat and lower_body_near_sofa):
+                continue
+            if px < x1:
+                left_people.append((p_x1, p_x2))
+            elif px > x2:
+                right_people.append((p_x1, p_x2))
+
+        if not left_people or not right_people:
+            return sofa
+
+        expanded_x1 = min([x1] + [p[0] for p in left_people])
+        expanded_x2 = max([x2] + [p[1] for p in right_people])
+        used_people = len(left_people) + len(right_people)
+
+        expanded = dict(sofa)
+        expanded['bbox'] = [
+            max(0.0, expanded_x1),
+            y1,
+            min(float(frame_width), expanded_x2),
+            y2,
+        ]
+        expanded['raw_sofa_bbox'] = [x1, y1, x2, y2]
+        expanded['expanded_with_people_count'] = used_people
+        return expanded
 
     def _median(self, values, default):
         values = sorted(values)
@@ -589,13 +651,35 @@ class YoloEmptyChairState(BaseYoloState):
         if not objects and not people:
             return []
 
-        splittable = [o for o in objects if self._is_splittable_seating_object(o, frame_width)]
-        if splittable:
-            split_target = max(splittable, key=self._bbox_width)
+        split_target = self._select_primary_sofa(objects, frame_width)
+        if split_target:
+            split_target = self._expand_sofa_bbox_with_seated_people(
+                split_target, people, frame_width)
+            can_split, slot_width = self._is_wide_enough_to_split(
+                split_target, self.expected_seat_count)
+            if not can_split:
+                x1, y1, x2, y2 = self._bbox(split_target)
+                if hasattr(self, 'node') and self.node:
+                    self.node.get_logger().info(
+                        f"[YOLO SEAT] Sofa too narrow to split -> "
+                        f"width={self._bbox_width(split_target):.1f}, "
+                        f"slot_width={slot_width:.1f}, "
+                        f"min_slot_width={self.min_split_seat_width_px:.1f}"
+                    )
+                return self._finalize_seat_indices([
+                    self._seat_from_bbox(
+                        [x1, y1, x2, y2],
+                        source_label=split_target.get('label', 'sofa'),
+                        source_bbox=[x1, y1, x2, y2],
+                        description=f"the {self._source_name(split_target)}",
+                    )
+                ])
             seats = self._split_object_into_seats(split_target, self.expected_seat_count)
             split_box = self._bbox(split_target)
             for obj in objects:
                 if obj is split_target:
+                    continue
+                if obj.get('label') in self.SPLIT_LABELS:
                     continue
                 obj_center = self._bbox_center_x(obj)
                 obj_box = self._bbox(obj)
@@ -609,17 +693,17 @@ class YoloEmptyChairState(BaseYoloState):
                 ))
             return self._finalize_seat_indices(seats)
 
-        if len(objects) < self.expected_seat_count:
-            row_bbox = self._row_bounds_from_detections(objects, people, frame_width)
-            if row_bbox:
-                source_label = 'inferred_row' if not objects else objects[0].get('label', 'seat')
-                return self._finalize_seat_indices(
-                    self._build_uniform_seat_slots(
-                        row_bbox,
-                        source_label=source_label,
-                        inferred=True,
-                    )
-                )
+        chairs = [o for o in objects if o.get('label') not in self.SPLIT_LABELS]
+        if chairs:
+            seats = []
+            for obj in chairs:
+                x1, y1, x2, y2 = self._bbox(obj)
+                seats.append(self._seat_from_bbox(
+                    [x1, y1, x2, y2],
+                    source_label=obj.get('label', 'seat'),
+                    source_bbox=[x1, y1, x2, y2],
+                ))
+            return self._finalize_seat_indices(seats)
 
         seats = []
         for obj in objects:
@@ -702,7 +786,71 @@ class YoloEmptyChairState(BaseYoloState):
                 'person_y': py,
                 'overlap': overlap,
                 'distance_z': person.get('distance_z', 999.0),
+                'crop_path': person.get('crop_path'),
+                'bbox': person.get('bbox'),
             }
+
+        self._mark_person_overlap_unsafe_seats(people, seats)
+
+    def _mark_person_overlap_unsafe_seats(self, people, seats):
+        """人物bboxがかかる座席を保守的に塞ぎ、誤って人を指さすのを防ぐ。"""
+        for p_idx, person in enumerate(people):
+            p_box = self._bbox(person)
+            p_w = self._bbox_width(person)
+            p_h = self._bbox_height(person)
+            if p_w <= 5.0 or p_h <= 40.0:
+                continue
+
+            p_x1, _, p_x2, p_y2 = p_box
+            px = (p_x1 + p_x2) / 2.0
+
+            for seat in seats:
+                s_box = seat['bbox']
+                s_x1, s_y1, s_x2, s_y2 = s_box
+                seat_w = max(1.0, s_x2 - s_x1)
+                seat_h = max(1.0, s_y2 - s_y1)
+
+                x_left = max(p_x1, s_x1)
+                x_right = min(p_x2, s_x2)
+                overlap_w = max(0.0, x_right - x_left)
+                slot_overlap = overlap_w / seat_w
+                person_overlap = overlap_w / max(1.0, p_w)
+
+                lower_band_top = s_y1 + seat_h * 0.10
+                lower_band_bottom = s_y2 + max(55.0, seat_h * 0.45)
+                lower_body_near_seat = lower_band_top <= p_y2 <= lower_band_bottom
+                person_large_enough = p_h >= max(55.0, seat_h * 0.55)
+                center_near_slot = (s_x1 - seat_w * 0.10) <= px <= (s_x2 + seat_w * 0.10)
+
+                if not (lower_body_near_seat and person_large_enough):
+                    continue
+
+                if (
+                    slot_overlap >= 0.28
+                    or person_overlap >= 0.25
+                    or (center_near_slot and slot_overlap >= 0.12)
+                ):
+                    if not seat.get('occupied'):
+                        seat['occupied'] = True
+                        seat['occupant'] = {
+                            'person_index': f"unsafe_{p_idx + 1}",
+                            'person_x': px,
+                            'person_y': (p_box[1] + p_box[3]) / 2.0,
+                            'overlap': max(slot_overlap, person_overlap),
+                            'distance_z': person.get('distance_z', 999.0),
+                            'crop_path': person.get('crop_path'),
+                            'bbox': person.get('bbox'),
+                            'unsafe_overlap': True,
+                        }
+                    else:
+                        occupant = seat.get('occupant') or {}
+                        occupant['unsafe_overlap'] = True
+                        occupant['overlap'] = max(
+                            float(occupant.get('overlap', 0.0)),
+                            slot_overlap,
+                            person_overlap,
+                        )
+                        seat['occupant'] = occupant
 
     def _recover_seated_people(self, people, seating_objects, foreground_people):
         recovered = list(foreground_people)
@@ -795,8 +943,92 @@ class YoloEmptyChairState(BaseYoloState):
     def _select_empty_seat(self, empty_seats):
         if not empty_seats:
             return None
-        center_index = (self.expected_seat_count + 1) / 2.0
-        return min(empty_seats, key=lambda s: (abs(s['index'] - center_index), s['index']))
+
+        sofa_seats = [s for s in empty_seats if s.get('source_label') in self.SPLIT_LABELS]
+        if sofa_seats:
+            edge_order = [1, self.expected_seat_count]
+            if self.guest_index >= 2:
+                edge_order.reverse()
+            for part in edge_order:
+                for seat in sofa_seats:
+                    if seat.get('split_part') == part:
+                        return seat
+            return min(
+                sofa_seats,
+                key=lambda s: (
+                    1 if s.get('split_part') == 2 else 0,
+                    s.get('split_part', s['index']),
+                )
+            )
+
+        return min(empty_seats, key=lambda s: s['index'])
+
+    def _seat_stability_key(self, seat):
+        if seat.get('source_label') in self.SPLIT_LABELS:
+            return ('sofa', seat.get('split_part'))
+        return (seat.get('source_label'), seat.get('index'))
+
+    def _seat_side_name(self, seat):
+        if seat.get('split_count') == 3:
+            return {
+                1: "left side",
+                2: "middle",
+                3: "right side",
+            }.get(seat.get('split_part'), seat.get('description', 'seat'))
+        return seat.get('description', 'seat')
+
+    def _build_selected_seat_speech(self, selected_seat, seats):
+        if not selected_seat:
+            return None
+
+        if selected_seat.get('source_label') in self.SPLIT_LABELS:
+            if selected_seat.get('split_count', 1) <= 1:
+                return (
+                    "From my point of view, the sofa in front of me is empty. "
+                    "Please sit there."
+                )
+
+            selected_side = self._seat_side_name(selected_seat)
+            base = (
+                f"From my point of view, the {selected_side} of the sofa "
+                f"in front of me is empty. Please sit there."
+            )
+            if not ENABLE_OCCUPANT_CONTEXT_SPEECH:
+                return base
+
+            occupied_sofa = [
+                s for s in seats
+                if s.get('source_label') in self.SPLIT_LABELS
+                and s.get('occupied')
+                and s.get('index') != selected_seat.get('index')
+            ]
+            if not occupied_sofa:
+                return base
+
+            occupied_sides = [self._seat_side_name(s) for s in occupied_sofa]
+            if len(occupied_sides) == 1:
+                occupied_text = f"Someone is on the {occupied_sides[0]} of the sofa"
+            else:
+                occupied_text = (
+                    "People are on "
+                    + " and ".join([f"the {side}" for side in occupied_sides])
+                    + " of the sofa"
+                )
+            return (
+                f"{occupied_text}. From my point of view, the {selected_side} of the sofa "
+                f"is empty. Please sit there."
+            )
+
+        chair_seats = [s for s in seats if s.get('source_label') not in self.SPLIT_LABELS]
+        chair_order = 1
+        for i, seat in enumerate(sorted(chair_seats, key=lambda s: s['center_x']), start=1):
+            if seat is selected_seat or seat.get('index') == selected_seat.get('index'):
+                chair_order = i
+                break
+        return (
+            f"From my point of view, the {self._ordinal(chair_order)} chair "
+            f"from the left is empty. Please sit there."
+        )
 
     def _waist_yaw_for_x(self, x_center, current_waist):
         angle_rad = (self.image_width / 2.0 - x_center) * (87.0 / self.image_width) * math.pi / 180.0
@@ -804,12 +1036,120 @@ class YoloEmptyChairState(BaseYoloState):
         target_waist = current_waist + (target_turn * 0.8)
         return max(-1.2, min(1.2, target_waist)), target_turn
 
+    def _start_yolo_for_seats(self):
+        cmd = {
+            "command": "start",
+            "classes": list(self.target_classes),
+            "save_crops": self.guest_index >= 2,
+        }
+        msg = String()
+        msg.data = json.dumps(cmd)
+        self.cmd_pub.publish(msg)
+        self.node.get_logger().info(f"[YOLO] START classes={self.target_classes}, save_crops={cmd['save_crops']}")
+
+    def _maybe_start_guest1_vlm_match(self, occupied_seats, seat_waist_yaws):
+        if not self.direct_arm or self.guest_index < 2 or match_reference_person is None:
+            return
+        if getattr(self.direct_arm, 'guest1_vlm_match_running', False):
+            return
+
+        ref_path = getattr(self.direct_arm, 'guest1_reference_crop_path', None)
+        if not ref_path or not os.path.exists(ref_path):
+            return
+
+        candidates = []
+        for seat in occupied_seats:
+            occupant = seat.get('occupant') or {}
+            crop_path = occupant.get('crop_path')
+            if not crop_path or not os.path.exists(crop_path):
+                continue
+            bbox = occupant.get('bbox') or seat.get('bbox')
+            if not bbox or len(bbox) != 4:
+                continue
+            bbox_h = max(1.0, float(bbox[3]) - float(bbox[1]))
+            if bbox_h < 55.0:
+                continue
+            candidates.append({
+                'seat': seat,
+                'crop_path': crop_path,
+                'waist_yaw': seat_waist_yaws.get(seat['index']),
+            })
+
+        if len(candidates) < 2:
+            return
+
+        old_x = getattr(self.direct_arm, 'guest1_seat_center_x', None)
+        position_candidate = None
+        if old_x is not None:
+            position_candidate = min(candidates, key=lambda c: abs(c['seat']['center_x'] - old_x))
+
+        candidates = sorted(candidates, key=lambda c: c['seat']['center_x'])[:2]
+        self.direct_arm.guest1_vlm_match_running = True
+        self.direct_arm.guest1_vlm_match_status = "running"
+
+        def worker():
+            try:
+                ref_img = cv2.imread(ref_path)
+                a_img = cv2.imread(candidates[0]['crop_path'])
+                b_img = cv2.imread(candidates[1]['crop_path'])
+                result = match_reference_person(ref_img, a_img, b_img, timeout=30.0)
+                match = str(result.get('match', 'uncertain')).strip().upper()
+                try:
+                    confidence = float(result.get('confidence', 0.0))
+                except (TypeError, ValueError):
+                    confidence = 0.0
+
+                vlm_candidate = None
+                if match == 'A':
+                    vlm_candidate = candidates[0]
+                elif match == 'B':
+                    vlm_candidate = candidates[1]
+
+                selected = None
+                if vlm_candidate is not None:
+                    if position_candidate is None and confidence >= 0.70:
+                        selected = vlm_candidate
+                    elif vlm_candidate is position_candidate:
+                        selected = vlm_candidate
+                    elif confidence >= 0.85:
+                        selected = vlm_candidate
+                    else:
+                        selected = position_candidate
+                elif position_candidate is not None:
+                    selected = position_candidate
+
+                if selected and selected.get('waist_yaw') is not None:
+                    seat = selected['seat']
+                    self.direct_arm.guest1_seat_index = seat['index']
+                    self.direct_arm.guest1_seat_center_x = seat['center_x']
+                    self.direct_arm.guest1_waist_yaw = selected['waist_yaw']
+                    self.direct_arm.guest1_vlm_match_status = (
+                        f"selected seat {seat['index']} by "
+                        f"{'vlm' if selected is vlm_candidate else 'position'} "
+                        f"(vlm={match}, conf={confidence:.2f})"
+                    )
+                    self.node.get_logger().info(
+                        f"[YOLO SEAT] Guest1 VLM match -> {self.direct_arm.guest1_vlm_match_status}"
+                    )
+                else:
+                    self.direct_arm.guest1_vlm_match_status = f"uncertain (vlm={match}, conf={confidence:.2f})"
+            except Exception as e:
+                self.direct_arm.guest1_vlm_match_status = f"failed: {e}"
+                self.node.get_logger().warn(f"[YOLO SEAT] Guest1 VLM match failed: {e}")
+            finally:
+                self.direct_arm.guest1_vlm_match_running = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def execute(self, userdata):
         self.node.get_logger().info("[YOLO SEAT] Searching for empty seat...")
-        self.start_yolo()
+        self._start_yolo_for_seats()
+        stable_key = None
+        stable_since = None
+        stable_frames = 0
 
-        for _ in range(5):
-            msg = self.wait_for_result()
+        for _ in range(30):
+            msg = self.wait_for_result(timeout=min(self.timeout, 1.0))
             if msg:
                 try:
                     detections = json.loads(msg)
@@ -822,6 +1162,8 @@ class YoloEmptyChairState(BaseYoloState):
                         d for d in detections
                         if d.get('label') in self.SEATING_LABELS and self._det_conf(d) >= 0.55
                     ]
+                    visible_sofa_count = sum(1 for d in seating_objects if d.get('label') in self.SPLIT_LABELS)
+                    visible_chair_count = sum(1 for d in seating_objects if d.get('label') not in self.SPLIT_LABELS)
                     seating_people = self._recover_seated_people(
                         people, seating_objects, foreground_people)
 
@@ -885,6 +1227,7 @@ class YoloEmptyChairState(BaseYoloState):
                     )
                     self.node.get_logger().info(
                         f"[YOLO SEAT] Summary -> seating_objects={len(seating_objects)}, "
+                        f"visible_sofas={visible_sofa_count}, visible_chairs={visible_chair_count}, "
                         f"people={len(people)}, foreground_people={len(foreground_people)}, "
                         f"seating_people={len(seating_people)}, "
                         f"background_people={len(background_people)}, seats={len(seats)}, empty={len(empty_seats)}"
@@ -903,6 +1246,29 @@ class YoloEmptyChairState(BaseYoloState):
 
                     if empty_seats:
                         empty_seat = self._select_empty_seat(empty_seats)
+                        candidate_key = self._seat_stability_key(empty_seat)
+                        now = time.time()
+                        if candidate_key != stable_key:
+                            stable_key = candidate_key
+                            stable_since = now
+                            stable_frames = 1
+                        else:
+                            stable_frames += 1
+
+                        stable_elapsed = 0.0 if stable_since is None else now - stable_since
+                        if (
+                            stable_frames < self.seat_stable_frames
+                            or stable_elapsed < self.seat_stable_seconds
+                        ):
+                            self.node.get_logger().info(
+                                f"[YOLO SEAT] Waiting for stable empty seat -> "
+                                f"candidate={candidate_key}, frames={stable_frames}/"
+                                f"{self.seat_stable_frames}, elapsed={stable_elapsed:.1f}/"
+                                f"{self.seat_stable_seconds:.1f}s"
+                            )
+                            time.sleep(0.25)
+                            continue
+
                         empty_idx = empty_seat['index']
                         userdata.empty_seat_index = empty_idx
 
@@ -917,12 +1283,16 @@ class YoloEmptyChairState(BaseYoloState):
 
                             self.direct_arm.empty_seat_index = empty_idx
                             self.direct_arm.selected_seat_description = empty_seat['description']
+                            self.direct_arm.selected_seat_speech = self._build_selected_seat_speech(empty_seat, seats)
+                            self.direct_arm.selected_seat_source_label = empty_seat.get('source_label')
+                            self.direct_arm.selected_seat_safe = True
                             self.direct_arm.seat_waist_yaws = seat_waist_yaws
                             self.direct_arm.seat_candidates_debug = seats
 
                             self._save_host_if_needed(occupied_seats, seat_waist_yaws)
                             self._refresh_guest1_seat_if_needed(occupied_seats, seat_waist_yaws)
                             self._save_guest_seat(empty_seat, seat_waist_yaws)
+                            self._maybe_start_guest1_vlm_match(occupied_seats, seat_waist_yaws)
 
                             current_guest_waist = seat_waist_yaws[empty_idx]
                             target_turn = seat_turns[empty_idx]
@@ -950,10 +1320,13 @@ class YoloEmptyChairState(BaseYoloState):
             userdata.empty_seat_index = fallback_idx
             self.direct_arm.empty_seat_index = fallback_idx
             self.direct_arm.selected_seat_description = None
+            self.direct_arm.selected_seat_speech = None
+            self.direct_arm.selected_seat_source_label = None
+            self.direct_arm.selected_seat_safe = False
             
-            # フォールバック時も hold_sec=0.0 で即座に次の腕の動作に移行させる
-            fallback_turn = 0.5 if fallback_idx == 1 else -0.5
-            self.direct_arm.turn_waist_towards(fallback_turn, hold_sec=0.0)
+            self.node.get_logger().warn(
+                "[YOLO SEAT] No safe empty seat confirmed. Skipping fallback pointing."
+            )
         return 'failure'
 
 
@@ -1127,7 +1500,6 @@ class YoloBagGraspInteractionState(BaseYoloState):
         self.direct_arm = direct_arm
         self.control = control
         self.cmd_vel_pub = self.node.create_publisher(Twist, '/cmd_vel', 10)
-        self.max_reachable_bag_z = 0.85
 
     def _say(self, text):
         if self.tts_say:
@@ -1142,28 +1514,48 @@ class YoloBagGraspInteractionState(BaseYoloState):
             self.node.get_logger().warn(f"  -> hand_control({command}, {hand}) failed: {e}")
             return False
 
-    def _hook_bag_fallback(self, reason, bag_home):
-        self.node.get_logger().warn(f"  -> Bag grasp fallback: {reason}")
-        if self.direct_arm:
+    def _detect_bag_grasp_target(self, timeout):
+        start_time = time.time()
+        while rclpy.ok() and (time.time() - start_time < timeout):
+            msg = self.wait_for_result(timeout=1.0)
+            if not msg:
+                continue
+
             try:
-                hook_pose = calculate_bag_grasp_joints(320.0, 240.0, 0.3, head_tilt=-0.5)
-                self.node.get_logger().info(f"  -> Moving to default wrist-hook pose: {hook_pose}")
+                detections = json.loads(msg)
+                bags = [d for d in detections if d.get('label') == 'bag']
+                if not bags:
+                    continue
+
+                target_bag = min(bags, key=lambda b: b.get('distance_z', 999.0))
+                bag_z = target_bag.get('distance_z', 0.3)
+                bbox = target_bag.get('bbox', [320, 240, 320, 240])
+                if (
+                    not isinstance(bbox, list)
+                    or len(bbox) != 4
+                    or bbox[2] <= bbox[0]
+                    or bbox[3] <= bbox[1]
+                ):
+                    self.node.get_logger().warn(
+                        f"  -> Bag bbox invalid; using default image center: {bbox}"
+                    )
+                    bbox = [320, 240, 320, 240]
+
+                bbox_width = bbox[2] - bbox[0]
+                bbox_height = bbox[3] - bbox[1]
+                bag_cx = (bbox[0] + bbox[2]) / 2.0
+
+                return {
+                    'cx': bag_cx + (bbox_width * 0.15),
+                    'cy': bbox[1] + (bbox_height * 0.05),
+                    'z': bag_z,
+                    'bbox': bbox,
+                }
+
             except Exception as e:
-                self.node.get_logger().warn(f"  -> Default hook IK failed, using fixed hook pose: {e}")
-                hook_pose = ARM_POSE_EXTEND_RIGHT.copy()
-                hook_pose['right_elbow_joint'] = 0.8
-            self.direct_arm.send_joints(hook_pose, hold_sec=1.5)
-        self._try_hand_control("open", "right")
-        if reason == "gripper":
-            self._say("Please hook the bag handle on my right hand. I will close my hand in a few seconds.")
-        else:
-            self._say("I cannot reach the bag. Please hook the bag handle on my right hand. I will close my hand in a few seconds.")
-        time.sleep(5.0)
-        self._try_hand_control("close", "right")
-        time.sleep(1.0)
-        if self.direct_arm:
-            self.direct_arm.send_joints(bag_home, hold_sec=1.5)
-        return 'success'
+                self.node.get_logger().error(f"  -> Error parsing bag: {e}")
+
+        return None
 
     def execute(self, userdata):
         self.node.get_logger().info("[YOLO BAG GRASP] Starting visual servoing for bag grasp...")
@@ -1189,65 +1581,31 @@ class YoloBagGraspInteractionState(BaseYoloState):
             time.sleep(1.0)
             self.start_yolo()
 
-            # 2. バッグを1回だけ見つけて座標を取得（移動はしない）
-            start_time = time.time()
-            found_bag = False
+            # 2. バッグを一度認識し、前に出してもらってから再認識する。
             final_bag_cx = 320.0
             final_bag_cy = 240.0
             final_bag_z = 0.3
-            
-            while rclpy.ok() and (time.time() - start_time < self.timeout):
-                msg = self.wait_for_result(timeout=1.0)
-                if not msg:
-                    continue
 
-                try:
-                    detections = json.loads(msg)
-                    bags = [d for d in detections if d.get('label') == 'bag']
-                    if not bags:
-                        continue
-
-                    target_bag = min(bags, key=lambda b: b.get('distance_z', 999.0))
-
-                    raw_z = float(target_bag.get('distance_z', 0.3))
-                    valid_depth = target_bag.get('valid_depth', True)
-                    if valid_depth and 0.1 < raw_z <= self.max_reachable_bag_z:
-                        bag_z = raw_z
-                    else:
-                        self.node.get_logger().warn(
-                            f"  -> Bag depth invalid/out of range; using default z=0.3 "
-                            f"(raw_z={raw_z:.2f}, valid_depth={valid_depth})"
-                        )
-                        bag_z = 0.3
-
-                    bbox = target_bag.get('bbox', [320, 240, 320, 240])
-                    if (
-                        not isinstance(bbox, list)
-                        or len(bbox) != 4
-                        or bbox[2] <= bbox[0]
-                        or bbox[3] <= bbox[1]
-                    ):
-                        self.node.get_logger().warn(
-                            f"  -> Bag bbox invalid; using default image center: {bbox}"
-                        )
-                        bbox = [320, 240, 320, 240]
-
-                    bbox_width = bbox[2] - bbox[0]
-                    bbox_height = bbox[3] - bbox[1]
-                    bag_cx = (bbox[0] + bbox[2]) / 2.0
-                    
-                    # 持ち手部分（上部）と、右手把持を考慮した右寄りオフセット
-                    final_bag_cx = bag_cx + (bbox_width * 0.15)
-                    final_bag_cy = bbox[1] + (bbox_height * 0.05)
-                    final_bag_z = bag_z
-                    
-                    found_bag = True
-                    break
-
-                except Exception as e:
-                    self.node.get_logger().error(f"  -> Error parsing bag: {e}")
-
-            if not found_bag:
+            first_target = self._detect_bag_grasp_target(self.timeout)
+            if first_target:
+                self.node.get_logger().info(
+                    f"  -> Initial bag detected: bbox={first_target['bbox']}, z={first_target['z']}"
+                )
+                self._say("I will take your bag first. Please hold it out in front of me.")
+                time.sleep(3.0)
+                second_target = self._detect_bag_grasp_target(self.timeout)
+                if second_target:
+                    final_bag_cx = second_target['cx']
+                    final_bag_cy = second_target['cy']
+                    final_bag_z = second_target['z']
+                    self.node.get_logger().info(
+                        f"  -> Re-detected bag for grasp: bbox={second_target['bbox']}, z={final_bag_z}"
+                    )
+                else:
+                    self.node.get_logger().warn(
+                        "  -> Could not re-detect bag. Attempting grasp at default position."
+                    )
+            else:
                 self.node.get_logger().warn(
                     "  -> Could not find bag. Attempting grasp at default position."
                 )
@@ -1266,7 +1624,7 @@ class YoloBagGraspInteractionState(BaseYoloState):
                 self.direct_arm.send_joints(target_joints, hold_sec=2.0)
                 
                 # 手を閉じる前の案内と待機
-                self._say("Please place the bag handle in my right hand. I will close my hand in three seconds.")
+                self._say("I will close my grip now.")
                 
                 self.node.get_logger().info("  -> Waiting 3 seconds before closing hand...")
                 time.sleep(3.0)

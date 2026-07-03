@@ -74,6 +74,7 @@ def save_current_guest_info(node, guest_idx, name=None, drink=None, features=Non
             node.get_logger().error(f"Failed to save guest info: {e}")
 
 from std_msgs.msg import String
+from geometry_msgs.msg import Twist
 
 # ====== g1_ws API ======
 from erasers_g1_api.tts import TTS
@@ -206,28 +207,80 @@ def move_to_cb(userdata, node: Node, tts_say, navigation,
         return 'failure'
 
 
+def nudge_forward_before_sofa_pointing(node: Node, distance_m: float = 0.18,
+                                       speed_mps: float = 0.10):
+    """ソファ案内時だけ、指差し前に少し前進して停止する。"""
+    if distance_m <= 0.0 or speed_mps <= 0.0:
+        return
+
+    pub = node.create_publisher(Twist, '/cmd_vel', 10)
+    duration = distance_m / speed_mps
+    cmd = Twist()
+    cmd.linear.x = speed_mps
+
+    node.get_logger().info(
+        f"[YOLO SEAT] Sofa seat selected. Nudging forward before pointing "
+        f"(distance={distance_m:.2f}m, speed={speed_mps:.2f}m/s)."
+    )
+
+    time.sleep(0.2)
+    start = time.time()
+    while rclpy.ok() and time.time() - start < duration:
+        pub.publish(cmd)
+        rclpy.spin_once(node, timeout_sec=0.02)
+        time.sleep(0.08)
+
+    stop = Twist()
+    for _ in range(5):
+        pub.publish(stop)
+        rclpy.spin_once(node, timeout_sec=0.02)
+        time.sleep(0.05)
+
+
 @smach.cb_interface(outcomes=['success', 'failure'], input_keys=[])
 def arm_action_cb(userdata, node: Node, tts_say, direct_arm: DirectJointController,
                   action_type: str):
     """アーム操作を一括で行うコールバック。DirectJointController を使用。"""
     try:
         if action_type == 'point_seat':
-            # YoloEmptyChairState で既に腰の目標値はセットされている。
-            # ここで腕の目標値をセットして2秒間待つことで、腰と腕が同時に動く。
-            if direct_arm:
-                direct_arm.point_right(hold_sec=2.0)
-                
             # 空席検出で保存した説明文を優先する。ソファー分割時は
             # "the left side of the sofa" のように案内する。
             seat_idx = getattr(direct_arm, 'empty_seat_index', 1)
             seat_description = getattr(direct_arm, 'selected_seat_description', None)
+            seat_speech = getattr(direct_arm, 'selected_seat_speech', None)
+            seat_source_label = getattr(direct_arm, 'selected_seat_source_label', None)
+            seat_safe = bool(getattr(direct_arm, 'selected_seat_safe', False))
             if not seat_description:
                 ordinals = {1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth"}
                 ordinal_str = ordinals.get(seat_idx, f"{seat_idx}th")
                 seat_description = f"the {ordinal_str} seat from the left"
+
+            if not seat_safe:
+                node.get_logger().warn(
+                    "[YOLO SEAT] Safe empty seat was not confirmed. "
+                    "Skipping pointing motion."
+                )
+                tts_say("I cannot identify a safe empty seat right now. Please wait a moment.")
+                if direct_arm:
+                    direct_arm.go_home(hold_sec=1.0)
+                return 'success'
+
+            # 空席検出で腰の指差し角度を決めた後、ソファ案内時だけ少し前進する。
+            # 腕を伸ばすのは前進・停止後に限定する。
+            if seat_source_label in {'sofa', 'couch'}:
+                nudge_forward_before_sofa_pointing(node)
+
+            # YoloEmptyChairState で既に腰の目標値はセットされている。
+            # 前進後に改めて腕を伸ばして、指差しと発話を行う。
+            if direct_arm:
+                direct_arm.point_right(hold_sec=1.0)
             
             # 姿勢が固定されたまま喋る
-            tts_say(f"Please sit there I am pointing.")
+            tts_say(seat_speech or f"Please sit on {seat_description}.")
+            if direct_arm:
+                speech_text = seat_speech or f"Please sit on {seat_description}."
+                hold_after_speech = max(2.0, min(5.0, len(speech_text.split()) * 0.25))
+                direct_arm.point_right(hold_sec=hold_after_speech)
             
             # 喋り終わった後、次のフェーズに進むときにホームポジションへ移行する
             if direct_arm:
@@ -361,9 +414,9 @@ def parse_guest_info_cb(userdata, node: Node, direct_arm=None, guest_index=1):
             missing.append("your favorite drink")
             
         if len(missing) == 2:
-            tts.say("I could not catch that. Please tell me your name and favorite drink again after pin sound.")
+            tts.say("I could not catch that. Please tell me laudry your name and favorite drink again after pin sound.")
         else:
-            tts.say(f"I could not catch {missing[0]}. Please tell me {missing[0]} again after pin sound.")
+            tts.say(f"I could not catch {missing[0]}. Please tell me laudry {missing[0]} again after pin sound.")
             
         return 'retry'
 
@@ -596,6 +649,7 @@ class YoloSpeechToTextState(smach.State):
             data = json.loads(msg.data)
             min_z = float('inf')
             closest_features = None
+            closest_crop_path = None
             for det in data:
                 if det.get('label') == 'person' and det.get('features'):
                     z = float(det.get('distance_z', 999.0))
@@ -604,9 +658,12 @@ class YoloSpeechToTextState(smach.State):
                     if z < min_z:
                         min_z = z
                         closest_features = det['features']
+                        closest_crop_path = det.get('feature_crop_path')
             
             if closest_features is not None:
                 self.latest_features = closest_features
+                if closest_crop_path and self.direct_arm and self.guest_index == 1:
+                    self.direct_arm.guest1_reference_crop_path = closest_crop_path
         except:
             pass
 
@@ -684,7 +741,7 @@ def create_greeting_sm(node, tts_say, tts_obj, direct_arm, control,
             YoloSpeechToTextState(
                 node=node, tts=tts_obj,
                 start_msg="Hello! I am the host robot. "
-                          "What is your name and favorite drink please talk tell me after pin sound",
+                          "What is your name and favorite drink please talk tell me laudry after pin sound ",
                 direct_arm=direct_arm,
                 control=control,
                 guest_index=guest_index,
@@ -858,8 +915,8 @@ def main():
         smach.StateMachine.add(
             'DESCRIBE_GUEST_1',
             smach.CBState(cb=describe_guest_1_cb, cb_kwargs={'node': node, 'tts_say': SAY}),
-            transitions={'success': 'CHECK_BAG_GRASP',
-                         'failure': 'CHECK_BAG_GRASP'},
+            transitions={'success': 'MOVE_TO_LIVING_2',
+                         'failure': 'MOVE_TO_LIVING_2'},
             remapping={'g1_name': 'guest1_name', 'g1_features': 'guest1_features'})
 
         smach.StateMachine.add(

@@ -30,6 +30,7 @@ def make_state():
     state.image_width = 640
     state.direct_arm = None
     state.guest_index = 1
+    state.min_split_seat_width_px = 90.0
     return state
 
 
@@ -60,6 +61,21 @@ class EmptyChairLogicTest(unittest.TestCase):
         self.assertLess(seats[0]['center_x'], seats[1]['center_x'])
         self.assertLess(seats[1]['center_x'], seats[2]['center_x'])
 
+    def test_person_overlap_across_sofa_slots_blocks_both_slots(self):
+        state = make_state()
+        sofa = {'label': 'sofa', 'confidence': 0.9, 'bbox': [100, 220, 550, 420]}
+        people = [
+            {'label': 'person', 'confidence': 0.95, 'bbox': [100, 130, 310, 450], 'distance_z': 2.0},
+            {'label': 'person', 'confidence': 0.95, 'bbox': [280, 130, 520, 450], 'distance_z': 2.1},
+        ]
+
+        foreground, _ = state._filter_foreground_people(people)
+        seats = state._build_seat_candidates([sofa], 640, foreground)
+        state._assign_people_to_seats(foreground, seats)
+
+        self.assertTrue(all(s['occupied'] for s in seats))
+        self.assertEqual([s for s in seats if not s['occupied']], [])
+
     def test_hidden_chairs_are_inferred_from_people_and_partial_chair(self):
         state = make_state()
         chair = {'label': 'chair', 'confidence': 0.8, 'bbox': [260, 250, 380, 430]}
@@ -72,11 +88,8 @@ class EmptyChairLogicTest(unittest.TestCase):
         seats = state._build_seat_candidates([chair], 640, foreground)
         state._assign_people_to_seats(foreground, seats)
 
-        self.assertEqual(len(seats), 3)
-        self.assertTrue(all(s['inferred'] for s in seats))
-        self.assertTrue(seats[0]['occupied'])
-        self.assertFalse(seats[1]['occupied'])
-        self.assertTrue(seats[2]['occupied'])
+        self.assertEqual(len(seats), 1)
+        self.assertFalse(seats[0]['inferred'])
 
     def test_background_people_are_ignored(self):
         state = make_state()
@@ -101,6 +114,69 @@ class EmptyChairLogicTest(unittest.TestCase):
         self.assertEqual(len(seats), 3)
         self.assertEqual(len(set(centers)), 3)
         self.assertEqual([s['index'] for s in seats], [1, 2, 3])
+        self.assertEqual(
+            [s['description'] for s in seats],
+            ["the left side of the sofa", "the middle of the sofa", "the right side of the sofa"],
+        )
+
+    def test_narrow_sofa_is_not_split_into_tiny_slots(self):
+        state = make_state()
+        sofa = {'label': 'sofa', 'confidence': 0.9, 'bbox': [260, 220, 410, 420]}
+
+        seats = state._build_seat_candidates([sofa], 640, [])
+
+        self.assertEqual(len(seats), 1)
+        self.assertEqual(seats[0]['source_label'], 'sofa')
+        self.assertEqual(seats[0]['split_count'], 1)
+        self.assertEqual(seats[0]['description'], "the sofa")
+
+    def test_narrow_sofa_bbox_expands_with_people_on_both_sides(self):
+        state = make_state()
+        sofa = {'label': 'sofa', 'confidence': 0.9, 'bbox': [260, 220, 380, 420]}
+        people = [
+            {'label': 'person', 'confidence': 0.95, 'bbox': [95, 130, 210, 450], 'distance_z': 2.0},
+            {'label': 'person', 'confidence': 0.95, 'bbox': [430, 130, 545, 450], 'distance_z': 2.1},
+        ]
+
+        foreground, _ = state._filter_foreground_people(people)
+        seats = state._build_seat_candidates([sofa], 640, foreground)
+        state._assign_people_to_seats(foreground, seats)
+        empty = [s for s in seats if not s['occupied']]
+
+        self.assertEqual(len(seats), 3)
+        self.assertTrue(seats[0]['occupied'])
+        self.assertFalse(seats[1]['occupied'])
+        self.assertTrue(seats[2]['occupied'])
+        self.assertEqual(empty[0]['split_part'], 2)
+        self.assertEqual(empty[0]['description'], "the middle of the sofa")
+        self.assertLessEqual(seats[0]['source_bbox'][0], 95.0)
+        self.assertGreaterEqual(seats[2]['source_bbox'][2], 545.0)
+
+    def test_narrow_sofa_with_center_person_is_not_split(self):
+        state = make_state()
+        sofa = {'label': 'sofa', 'confidence': 0.9, 'bbox': [260, 220, 380, 420]}
+        people = [
+            {'label': 'person', 'confidence': 0.95, 'bbox': [275, 130, 365, 450], 'distance_z': 2.0},
+            {'label': 'person', 'confidence': 0.95, 'bbox': [430, 130, 545, 450], 'distance_z': 2.1},
+        ]
+
+        foreground, _ = state._filter_foreground_people(people)
+        seats = state._build_seat_candidates([sofa], 640, foreground)
+        state._assign_people_to_seats(foreground, seats)
+        sofa_seats = [s for s in seats if s['source_label'] == 'sofa']
+
+        self.assertEqual(len(sofa_seats), 1)
+        self.assertEqual(sofa_seats[0]['source_bbox'], [260.0, 220.0, 380.0, 420.0])
+        self.assertTrue(sofa_seats[0]['occupied'])
+
+    def test_wide_chair_is_not_split(self):
+        state = make_state()
+        chair = {'label': 'chair', 'confidence': 0.9, 'bbox': [90, 220, 560, 420]}
+
+        seats = state._build_seat_candidates([chair], 640, [])
+
+        self.assertEqual(len(seats), 1)
+        self.assertEqual(seats[0]['source_label'], 'chair')
 
     def test_extra_chair_is_kept_next_to_split_sofa(self):
         state = make_state()
@@ -127,7 +203,7 @@ class EmptyChairLogicTest(unittest.TestCase):
 
         self.assertFalse(seats[0]['occupied'])
 
-    def test_people_can_infer_hidden_seats_when_chairs_are_occluded(self):
+    def test_people_without_sofa_do_not_create_three_split_seats(self):
         state = make_state()
         people = [
             {'label': 'person', 'confidence': 0.95, 'bbox': [90, 120, 220, 455], 'distance_z': 2.2},
@@ -136,12 +212,54 @@ class EmptyChairLogicTest(unittest.TestCase):
 
         foreground, _ = state._filter_foreground_people(people)
         seats = state._build_seat_candidates([], 640, foreground)
-        state._assign_people_to_seats(foreground, seats)
 
-        self.assertEqual(len(seats), 3)
-        self.assertTrue(seats[0]['occupied'])
-        self.assertFalse(seats[1]['occupied'])
-        self.assertTrue(seats[2]['occupied'])
+        self.assertEqual(len(seats), 0)
+
+    def test_edge_sofa_seat_is_preferred_over_middle(self):
+        state = make_state()
+        sofa = {'label': 'sofa', 'confidence': 0.9, 'bbox': [100, 220, 550, 420]}
+        seats = state._build_seat_candidates([sofa], 640, [])
+        seats[2]['occupied'] = True
+
+        selected = state._select_empty_seat([s for s in seats if not s['occupied']])
+
+        self.assertEqual(selected['split_part'], 1)
+
+    def test_second_guest_prefers_opposite_sofa_edge(self):
+        state = make_state()
+        state.guest_index = 2
+        sofa = {'label': 'sofa', 'confidence': 0.9, 'bbox': [100, 220, 550, 420]}
+        seats = state._build_seat_candidates([sofa], 640, [])
+
+        selected = state._select_empty_seat(seats)
+
+        self.assertEqual(selected['split_part'], 3)
+
+    def test_front_sofa_speech_mentions_viewpoint_and_empty_side(self):
+        state = make_state()
+        sofa = {'label': 'sofa', 'confidence': 0.9, 'bbox': [100, 220, 550, 420]}
+        seats = state._build_seat_candidates([sofa], 640, [])
+        seats[0]['occupied'] = True
+        selected = seats[2]
+
+        speech = state._build_selected_seat_speech(selected, seats)
+
+        self.assertIn("From my point of view", speech)
+        self.assertIn("right side", speech)
+        self.assertIn("sofa", speech)
+
+    def test_chair_speech_uses_left_to_right_order(self):
+        state = make_state()
+        chairs = [
+            {'label': 'chair', 'confidence': 0.9, 'bbox': [80, 220, 180, 420]},
+            {'label': 'chair', 'confidence': 0.9, 'bbox': [270, 220, 370, 420]},
+            {'label': 'chair', 'confidence': 0.9, 'bbox': [460, 220, 560, 420]},
+        ]
+        seats = state._build_seat_candidates(chairs, 640, [])
+
+        speech = state._build_selected_seat_speech(seats[1], seats)
+
+        self.assertIn("second chair from the left", speech)
 
     def test_saved_guest1_seat_is_not_recommended_again(self):
         state = make_state()
@@ -192,6 +310,16 @@ class EmptyChairLogicTest(unittest.TestCase):
             [s['description'] for s in seats],
         )
         self.assertEqual(restored[1]['description'], "the middle of the sofa")
+
+    def test_only_primary_front_sofa_is_split(self):
+        state = make_state()
+        side_sofa = {'label': 'sofa', 'confidence': 0.95, 'bbox': [0, 220, 180, 420]}
+        front_sofa = {'label': 'sofa', 'confidence': 0.8, 'bbox': [210, 220, 520, 420]}
+
+        seats = state._build_seat_candidates([side_sofa, front_sofa], 640, [])
+
+        self.assertEqual(len(seats), 3)
+        self.assertEqual([s['source_bbox'] for s in seats], [[210.0, 220.0, 520.0, 420.0]] * 3)
 
 
 if __name__ == '__main__':
