@@ -674,6 +674,8 @@ class G1Navigation:
         wait: bool = True,
         timeout: float = None,
         use_odom_only: bool = False,
+        retry_on_feedback_timeout: bool = True,
+        feedback_timeout_sec: float = 5.0,
     ) -> bool:
         """
         与えられた目標姿勢に基づいてロボットを自律移動させる．
@@ -694,6 +696,11 @@ class G1Navigation:
             デフォルトは None (self.TIMEOUT_SEC を使用)。0 以下の場合はタイムアウトなし。
         use_odom_only : bool, optional
             True の場合、machida_navigation を使わず /odom と /cmd_vel による簡易移動を行う。
+        retry_on_feedback_timeout : bool, optional
+            True の場合、Action goal が accept された後に feedback_timeout_sec 秒以内に feedback が
+            返らなければ、現在の goal を cancel して同じ goal を再送する。デフォルトは False。
+        feedback_timeout_sec : float, optional
+            retry_on_feedback_timeout が True の場合の feedback 待機時間。デフォルトは 5.0 秒。
 
         Returns
         -------
@@ -713,6 +720,10 @@ class G1Navigation:
             return False
 
         if use_odom_only:
+            if retry_on_feedback_timeout:
+                self.node.get_logger().warn(
+                    "retry_on_feedback_timeout is ignored when use_odom_only=True."
+                )
             return self.__move_to_pose_odom_only(
                 goal_pose,
                 tolerance=tolerance,
@@ -743,9 +754,65 @@ class G1Navigation:
 
         goal_msg = NavigateToPose.Goal()
         goal_msg.pose = goal_pose
-        self.__debug_goal_pub.publish(goal_pose)
 
-        future = self.__action_client.send_goal_async(goal_msg)
+        feedback_lock = threading.Lock()
+        last_feedback_time = None
+        goal_accept_time = time.monotonic()
+
+        def feedback_callback(_feedback_msg):
+            nonlocal last_feedback_time
+            with feedback_lock:
+                last_feedback_time = time.monotonic()
+
+        def send_navigation_goal():
+            nonlocal last_feedback_time
+            with feedback_lock:
+                last_feedback_time = None
+            self.__debug_goal_pub.publish(goal_pose)
+            return self.__action_client.send_goal_async(
+                goal_msg,
+                feedback_callback=feedback_callback,
+            )
+
+        def wait_for_goal_accept(goal_future):
+            nonlocal goal_accept_time, last_feedback_time
+            rclpy.spin_until_future_complete(
+                self.node, goal_future, timeout_sec=10.0
+            )
+            if not goal_future.done():
+                self.node.get_logger().error("Send goal timed out")
+                return None
+
+            accepted_goal_handle = goal_future.result()
+            self.__current_goal_handle = accepted_goal_handle
+
+            if accepted_goal_handle is None:
+                self.node.get_logger().error("Goal response is empty")
+                return None
+
+            if not accepted_goal_handle.accepted:
+                self.node.get_logger().error("Goal rejected by server")
+                return None
+
+            with feedback_lock:
+                last_feedback_time = None
+                goal_accept_time = time.monotonic()
+
+            return accepted_goal_handle
+
+        if retry_on_feedback_timeout and not wait:
+            self.node.get_logger().warn(
+                "retry_on_feedback_timeout requires wait=True and is ignored."
+            )
+
+        feedback_retry_enabled = (
+            retry_on_feedback_timeout
+            and wait
+            and feedback_timeout_sec is not None
+            and feedback_timeout_sec > 0.0
+        )
+
+        future = send_navigation_goal()
 
         if not wait:
             # 非同期モードの場合は送信完了まで少し待機して終了とする
@@ -757,16 +824,8 @@ class G1Navigation:
 
         # 同期モード (wait=True)
         try:
-            rclpy.spin_until_future_complete(self.node, future, timeout_sec=10.0)
-            if not future.done():
-                self.node.get_logger().error("Send goal timed out")
-                return False
-
-            goal_handle = future.result()
-            self.__current_goal_handle = goal_handle
-
-            if not goal_handle.accepted:
-                self.node.get_logger().error("Goal rejected by server")
+            goal_handle = wait_for_goal_accept(future)
+            if goal_handle is None:
                 return False
 
             result_future = goal_handle.get_result_async()
@@ -774,6 +833,7 @@ class G1Navigation:
             nav_success = False
             timeout_sec = self.TIMEOUT_SEC if timeout is None else timeout
             start_time = time.time()
+            retry_count = 0
             while rclpy.ok() and not result_future.done():
                 if timeout_sec is not None and timeout_sec > 0:
                     if time.time() - start_time > timeout_sec:
@@ -785,6 +845,41 @@ class G1Navigation:
                         return False
 
                 rclpy.spin_once(self.node, timeout_sec=0.1)
+
+                if feedback_retry_enabled:
+                    with feedback_lock:
+                        feedback_reference_time = (
+                            last_feedback_time
+                            if last_feedback_time is not None
+                            else goal_accept_time
+                        )
+
+                    if (
+                        time.monotonic() - feedback_reference_time
+                        >= feedback_timeout_sec
+                    ):
+                        retry_count += 1
+                        self.node.get_logger().warn(
+                            "No navigation feedback for "
+                            f"{feedback_timeout_sec:.1f} sec after goal accept. "
+                            f"Canceling and resending goal (retry={retry_count})."
+                        )
+
+                        cancel_future = goal_handle.cancel_goal_async()
+                        rclpy.spin_until_future_complete(
+                            self.node, cancel_future, timeout_sec=2.0
+                        )
+                        if not cancel_future.done():
+                            self.node.get_logger().warn(
+                                "Cancel goal timed out before resend; resending anyway."
+                            )
+
+                        future = send_navigation_goal()
+                        goal_handle = wait_for_goal_accept(future)
+                        if goal_handle is None:
+                            return False
+                        result_future = goal_handle.get_result_async()
+                        continue
 
                 if tolerance is not None and tolerance > 0.0:
                     current_pose = self.get_current_pose(simple=True)
@@ -848,6 +943,8 @@ class G1Navigation:
         wait: bool = True,
         timeout: float = None,
         use_odom_only: bool = False,
+        retry_on_feedback_timeout: bool = True,
+        feedback_timeout_sec: float = 5.0,
     ) -> bool:
         """
         基準フレームでの絶対座標を指定してロボットを自律移動させる．
@@ -871,6 +968,10 @@ class G1Navigation:
             ナビゲーションのタイムアウト時間(秒)。デフォルトは None (タイムアウトなし)。
         use_odom_only : bool, optional
             True の場合、x, y, yaw を odom 座標系の絶対目標として扱い簡易移動する。
+        retry_on_feedback_timeout : bool, optional
+            True の場合、Action goal accept 後に feedback が一定時間返らないとき goal を再送する。
+        feedback_timeout_sec : float, optional
+            feedback 未受信時の再送判定時間。デフォルトは 5.0 秒。
 
         Returns
         -------
@@ -897,6 +998,8 @@ class G1Navigation:
             wait=wait,
             timeout=timeout,
             use_odom_only=use_odom_only,
+            retry_on_feedback_timeout=retry_on_feedback_timeout,
+            feedback_timeout_sec=feedback_timeout_sec,
         )
 
     def move_rel(
@@ -908,6 +1011,8 @@ class G1Navigation:
         wait: bool = True,
         timeout: float = None,
         use_odom_only: bool = False,
+        retry_on_feedback_timeout: bool = True,
+        feedback_timeout_sec: float = 5.0,
     ) -> bool:
         """
         ロボットの現在の位置・姿勢からの相対座標で自律移動させる．
@@ -929,6 +1034,10 @@ class G1Navigation:
             ナビゲーションのタイムアウト時間(秒)。デフォルトは None (タイムアウトなし)。
         use_odom_only : bool, optional
             True の場合、現在 odom 姿勢からのロボット座標系相対量として簡易移動する。
+        retry_on_feedback_timeout : bool, optional
+            True の場合、Action goal accept 後に feedback が一定時間返らないとき goal を再送する。
+        feedback_timeout_sec : float, optional
+            feedback 未受信時の再送判定時間。デフォルトは 5.0 秒。
 
         Returns
         -------
@@ -936,6 +1045,10 @@ class G1Navigation:
             ナビゲーションが成功した場合は True、失敗・キャンセルされた場合は False。
         """
         if use_odom_only:
+            if retry_on_feedback_timeout:
+                self.node.get_logger().warn(
+                    "retry_on_feedback_timeout is ignored when use_odom_only=True."
+                )
             if not wait:
                 self.node.get_logger().warn(
                     "use_odom_only=True does not support wait=False."
@@ -971,6 +1084,8 @@ class G1Navigation:
             reference_frame="map",
             wait=wait,
             timeout=timeout,
+            retry_on_feedback_timeout=retry_on_feedback_timeout,
+            feedback_timeout_sec=feedback_timeout_sec,
         )
 
     def set_initialpose(
