@@ -41,7 +41,7 @@ import math
 
 # --- デバッグ・シミュレーション用定数 ---
 SKIP_VOICE_INTARACT = False  # True のとき音声対話ステートをスキップして success 扱いにする
-SKIP_HAND_CONTROL = True # True のときハンド操作をスキップする
+SKIP_HAND_CONTROL = False # True のときハンド操作をスキップする
 
 
 """
@@ -117,7 +117,7 @@ def cb_state_skip_handover_confirm(userdata, node: Node):
 
 @smach.cb_interface(outcomes=["success", "failure"], input_keys=[], output_keys=[])
 def cb_state_create_around_map(
-    userdata, node: Node, tts_say: TTS.say, navigation: G1Navigation, control: G1Control
+    userdata, node: Node, tts_say: TTS.say, navigation: G1Navigation
 ):
     try:
         # control.pose_policy("running")
@@ -193,12 +193,12 @@ def cb_state_move_to_customer(
         customer_pose.pose.position.y = person_y
         customer_pose.pose.position.z = person_z
         customer_pose.pose.orientation.w = 1.0
-        if not navigation.move_to_pose(customer_pose, tolerance=tolerance):
+        if not navigation.move_to_pose(customer_pose, tolerance=tolerance, retry_on_feedback_timeout=False):
             node.get_logger().error("Failed to move to customer")
             return "failure"
 
         tts_say("I reached the customer!")
-        control.pose_policy("start")
+        # control.pose_policy("start")
         return "success"
 
     except Exception as e:
@@ -281,12 +281,12 @@ def cb_state_check_order_confirmation(userdata, node: Node, tts_say: TTS.say):
 
 @smach.cb_interface(outcomes=["success", "failure"], input_keys=[], output_keys=[])
 def cb_state_move_to_bar_counter(
-    userdata, node: Node, navigation: G1Navigation, control: G1Control
+    userdata, node: Node, navigation: G1Navigation
 ):
     try:
         #control.pose_policy("running")
 
-        navigation.move_abs(0.0, 0.0, 0.0)
+        navigation.move_abs(0.0, 0.0, 0.0, retry_on_feedback_timeout=False)
 
         #control.pose_policy("start")
         return "success"
@@ -420,14 +420,13 @@ def cb_state_reset_and_return(
     userdata,
     node: Node,
     navigation: G1Navigation,
-    control: G1Control,
     arm: ArmControl,
 ):
     try:
         arm.enable_upper_body_control(False)
-        control.pose_policy("running")
+        # control.pose_policy("running")
         navigation.move_abs()
-        control.pose_policy("start")
+        # control.pose_policy("start")
 
         userdata.completed_orders += 1
         node.get_logger().info(
@@ -452,8 +451,7 @@ def cb_state_reset_and_return(
 def searching_customer_state(
         node: Node,
         tts_say: TTS.say,
-        arm_control: ArmControl,
-        robot_control: G1Control
+        arm_control: ArmControl
     ):
     """
     客人を見つけるステート
@@ -644,14 +642,14 @@ def main():
 
     NAVIGATION.GET_BY_TOPIC = False
 
-    ROBOT.pose_policy('start')
+    # ROBOT.pose_policy('start')
 
     # init smach
     sm = smach.StateMachine(outcomes=["success", "timeout", "failure"])
 
     # userdatas
     #sm.userdata.searching_range = [-1.57, 1.57, 7] # [腰関節の開始位置、腰関節の終了位置、分割数]
-    sm.userdata.searching_range = [0.0, 1.57, 5]
+    sm.userdata.searching_range = [-1.0, 1.0, 5]
     sm.userdata.person_poses = []
     sm.userdata.stt_text = ""  # 音声認識の結果
     sm.userdata.order_list = []  # 注文品リスト
@@ -676,19 +674,19 @@ def main():
                 timeout_msg='I am wait again fot push to my hand.',
             ),
             transitions={
-                'success': 'TURN_TABLE',
+                'success': 'SERCHING_CUSTOMER_STATE',
                 'timeout': 'START_TASK',
                 'failure': 'failure'
             }
         )
 
-        smach.StateMachine.add('TURN_TABLE', smach.CBState(cb=cb_state_create_around_map,
-                                                            cb_kwargs={'node': node, 'tts_say': SAY, 'navigation': NAVIGATION, 'control': CONROL},),
-                                 transitions={'success': 'SERCHING_CUSTOMER_STATE',
-                                              'failure': 'failure'})
+        # smach.StateMachine.add('TURN_TABLE', smach.CBState(cb=cb_state_create_around_map,
+        #                                                     cb_kwargs={'node': node, 'tts_say': SAY, 'navigation': NAVIGATION},),
+        #                          transitions={'success': 'SERCHING_CUSTOMER_STATE',
+        #                                       'failure': 'failure'})
 
         # 客人探索ステート
-        searching_customer = searching_customer_state(node, SAY, ARM, ROBOT)
+        searching_customer = searching_customer_state(node, SAY, ARM)
         smach.StateMachine.add("SERCHING_CUSTOMER_STATE",
                                searching_customer,
                                transitions={
@@ -800,7 +798,7 @@ def main():
             "MOVE_TO_BARCOUNTER",
             smach.CBState(
                 cb=cb_state_move_to_bar_counter,
-                cb_kwargs={"node": node, "navigation": NAVIGATION, "control": ROBOT},
+                cb_kwargs={"node": node, "navigation": NAVIGATION},
             ),
             transitions={"success": "ORDER_REPORT", "failure": "failure"},
         )
@@ -924,7 +922,6 @@ def main():
                 cb_kwargs={
                     "node": node,
                     "navigation": NAVIGATION,
-                    "control": ROBOT,
                     "arm": ARM,
                 },
             ),

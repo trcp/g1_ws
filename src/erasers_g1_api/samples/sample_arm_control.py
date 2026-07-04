@@ -25,22 +25,28 @@ def main():
     say = tts.say
 
     # init arm pose
-    say("Armed upper body control.")
     arm.enable_upper_body_control(True)
+    arm.joint_control(
+        left_shoulder_pitch_joint=-0.735,
+        left_wrist_roll_joint=-1.57,
+        right_shoulder_pitch_joint=-0.735,
+        right_wrist_roll_joint=1.57,
+    )
+    arm.hand_control(command="open", hand="both")
 
-    say("Init pose")
-    arm.move_groupstate(group_state="home")
+    say("Close hand, 5, 4, 3, 2, 1")
 
-    say("Walk pose")
-    arm.move_groupstate(group_state="walk")
+    arm.hand_control(command="close", hand="both")
 
-    say("Joint Control")
-    arm.joint_control(right_shoulder_pitch_joint=-0.735,
-                      right_wrist_roll_joint=1.57,
-                      planning_group="upper_body")
+    # arm.joint_control(
+    #     left_shoulder_pitch_joint=0.273,
+    #     left_shoulder_yaw_joint=-0.07,
+    #     right_shoulder_pitch_joint=0.273,
+    #     right_shoulder_yaw_joint=0.07,
+    # )
 
-    # say("Disarmed upper body control.")
-    # arm.enable_upper_body_control(False)
+    # arm.move_groupstate(group_name="home")
+    arm.enable_upper_body_control(False)
 
 if __name__ == '__main__':
     main()

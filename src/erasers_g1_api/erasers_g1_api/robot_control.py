@@ -2571,6 +2571,22 @@ class ArmControl:
             指定した `group_name` と `group_state` の組み合わせが SRDF に存在しない、
             または MoveGroup goal が失敗した場合 False。
         """
+        group_states = self.__load_srdf_group_states()
+        if group_states is None:
+            return False
+
+        available_groups = {group for group, _ in group_states.keys()}
+        available_states = {state for _, state in group_states.keys()}
+        if group_name in available_states and group_state in available_groups:
+            group_name, group_state = group_state, group_name
+        if (
+            group_state == "home"
+            and group_name not in available_groups
+            and group_name in available_states
+        ):
+            group_state = group_name
+            group_name = "upper_body"
+
         joints = self.__get_srdf_group_state_joints(group_name, group_state)
         if joints is None:
             return False
