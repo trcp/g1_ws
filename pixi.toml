@@ -41,6 +41,8 @@ rustypot = ">=1.4.2, <2"
 
 [activation.env]
 RMW_IMPLEMENTATION = "rmw_cyclonedds_cpp"
+CYCLONEDDS_URI = "file:///home/roboworks/g1_ws/cyclonedds/cyclonedds.katana.xml"
+ROS_DOMAIN_ID = "0"
 
 [activation]
 scripts = ["install/setup.sh"]

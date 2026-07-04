@@ -414,9 +414,9 @@ def parse_guest_info_cb(userdata, node: Node, direct_arm=None, guest_index=1):
             missing.append("your favorite drink")
             
         if len(missing) == 2:
-            tts.say("I could not catch that. Please tell me laudry your name and favorite drink again after pin sound.")
+            tts.say("I could not catch that. Please tell me laudry your name and favorite drink again after pin sound please wait a moment.")
         else:
-            tts.say(f"I could not catch {missing[0]}. Please tell me laudry {missing[0]} again after pin sound.")
+            tts.say(f"I could not catch {missing[0]}. Please tell me laudry {missing[0]} again after pin sound please wait a moment.")
             
         return 'retry'
 
@@ -741,7 +741,7 @@ def create_greeting_sm(node, tts_say, tts_obj, direct_arm, control,
             YoloSpeechToTextState(
                 node=node, tts=tts_obj,
                 start_msg="Hello! I am the host robot. "
-                          "What is your name and favorite drink please talk tell me laudry after pin sound ",
+                          "What is your name and favorite drink please talk tell me laudry after pin sound please wait a moment",
                 direct_arm=direct_arm,
                 control=control,
                 guest_index=guest_index,

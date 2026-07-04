@@ -8,12 +8,16 @@ RUN apt-get update && apt-get install -y \
     ros-humble-cv-bridge \
     ros-humble-rmw-cyclonedds-cpp \
     git \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # YOLOv8、OpenCV、そしてCLIP（競合回避のため複数指定）をインストール
-RUN pip3 install --no-cache-dir ultralytics opencv-python "numpy<2" openai-clip "lap>=0.5.12"
+RUN pip3 install --timeout 1000 --retries 10 ultralytics opencv-python "numpy<2" openai-clip "lap>=0.5.12"
 
 WORKDIR /app
+
+COPY download_weights.sh /usr/local/bin/download_weights.sh
+RUN chmod +x /usr/local/bin/download_weights.sh
 
 # Pythonのstdoutバッファリングを無効化（docker logsにリアルタイムで出力）
 ENV PYTHONUNBUFFERED=1
@@ -21,4 +25,4 @@ ENV PYTHONUNBUFFERED=1
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 # ROSの環境を読み込んでからPythonスクリプトを直接実行
-CMD ["/bin/bash", "-c", "source /opt/ros/humble/setup.bash && python3 /app/yolo_human_node.py"]
+CMD ["/bin/bash", "-c", "download_weights.sh && source /opt/ros/humble/setup.bash && python3 /app/yolo_human_node.py"]

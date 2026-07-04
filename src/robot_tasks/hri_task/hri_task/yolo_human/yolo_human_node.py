@@ -31,7 +31,9 @@ import json
 import math
 import sys
 import os
+import shutil
 import time
+from pathlib import Path
 
 from ultralytics import YOLOE
 
@@ -46,6 +48,93 @@ try:
 except Exception as e:
     extract_person_features_offline = None
     print(f"Failed to import extract_person_features_offline: {e}")
+
+
+def prepare_yolo_weight(model_path: str, logger) -> str:
+    """Ensure the YOLO weight file exists before constructing YOLOE."""
+    path = Path(model_path)
+
+    if path.is_dir():
+        logger.warn(f"{model_path} is a directory. Removing it before model download.")
+        shutil.rmtree(path)
+
+    if path.is_file():
+        logger.info(f"YOLO weight already exists: {model_path}")
+        return str(path)
+
+    logger.info(f"YOLO weight not found. Downloading: {model_path}")
+    try:
+        from ultralytics.utils.downloads import attempt_download_asset
+
+        downloaded_path = Path(attempt_download_asset(model_path))
+        if downloaded_path.is_file():
+            logger.info(f"YOLO weight downloaded: {downloaded_path}")
+            return str(downloaded_path)
+    except Exception as e:
+        logger.warn(f"Explicit YOLO weight download failed, falling back to YOLOE loader: {e}")
+
+    return str(path)
+
+
+def remove_corrupt_torchscript_asset(asset_name: str, logger) -> None:
+    """Delete a cached TorchScript asset if PyTorch cannot load it."""
+    try:
+        import torch
+    except Exception as e:
+        logger.warn(f"Could not validate {asset_name} before loading: {e}")
+        return
+
+    for path in cached_asset_candidates(asset_name):
+        if path.is_dir():
+            logger.warn(f"{path} is a directory. Removing it before text encoder download.")
+            shutil.rmtree(path)
+            continue
+        if not path.is_file():
+            continue
+
+        try:
+            torch.jit.load(str(path), map_location="cpu")
+        except Exception as e:
+            logger.warn(f"Cached {asset_name} is invalid at {path}. Removing it: {e}")
+            path.unlink()
+        else:
+            logger.info(f"Cached {asset_name} is valid: {path}")
+
+
+def cached_asset_candidates(asset_name: str):
+    cache_root = Path.home() / ".cache" / "ultralytics"
+    return [
+        cache_root / "weights" / asset_name,
+        cache_root / "assets" / asset_name,
+        Path(asset_name),
+        Path("/app") / asset_name,
+    ]
+
+
+def cached_asset_exists(asset_name: str) -> bool:
+    return any(path.is_file() and path.stat().st_size > 0 for path in cached_asset_candidates(asset_name))
+
+
+def ensure_local_cached_asset(asset_name: str, logger) -> bool:
+    """Expose a cached asset under /app for libraries that resolve relative paths."""
+    app_path = Path("/app") / asset_name
+    if app_path.is_file() and app_path.stat().st_size > 0:
+        return True
+
+    for path in cached_asset_candidates(asset_name):
+        if path == app_path or not path.is_file() or path.stat().st_size <= 0:
+            continue
+        try:
+            if app_path.exists() or app_path.is_symlink():
+                app_path.unlink()
+            app_path.symlink_to(path)
+            logger.info(f"Linked cached {asset_name}: {app_path} -> {path}")
+            return True
+        except Exception as e:
+            logger.warn(f"Could not link cached {asset_name} from {path}: {e}")
+
+    return False
+
 
 class YoloHumanNode(Node):
     def __init__(self):
@@ -63,16 +152,30 @@ class YoloHumanNode(Node):
         else:
             self.get_logger().warn("CUDA is NOT available! Falling back to CPU.")
 
+        model_path = prepare_yolo_weight(model_path, self.get_logger())
         self.get_logger().info(f"Loading YOLO model from {model_path}...")
         self.model = YOLOE(model_path)
         
         # Open-Vocabulary configuration (言語司令)
         self.target_classes = ["person"]
-        try:
-            self.model.set_classes(self.target_classes)
-            self.get_logger().info(f"Initialized with classes: {self.target_classes}")
-        except AttributeError:
-            self.get_logger().info("Model does not support set_classes, continuing with standard classes.")
+        text_encoder_asset = "mobileclip2_b.ts"
+        remove_corrupt_torchscript_asset(text_encoder_asset, self.get_logger())
+        self.can_set_classes = ensure_local_cached_asset(text_encoder_asset, self.get_logger())
+        if self.can_set_classes:
+            try:
+                self.model.set_classes(self.target_classes)
+                self.get_logger().info(f"Initialized with classes: {self.target_classes}")
+            except AttributeError:
+                self.get_logger().info("Model does not support set_classes, continuing with standard classes.")
+            except Exception as e:
+                self.can_set_classes = False
+                self.get_logger().warn(
+                    f"set_classes failed. Continuing with standard model classes: {e}"
+                )
+        else:
+            self.get_logger().warn(
+                f"{text_encoder_asset} is not cached. Skipping set_classes to allow offline startup."
+            )
 
         self.get_logger().info("Model loaded successfully.")
 
@@ -171,10 +274,17 @@ class YoloHumanNode(Node):
 
             if "classes" in cmd_data and isinstance(cmd_data["classes"], list):
                 self.target_classes = cmd_data["classes"]
-                try:
-                    self.model.set_classes(self.target_classes)
-                except AttributeError:
-                    pass
+                if self.can_set_classes:
+                    try:
+                        self.model.set_classes(self.target_classes)
+                    except AttributeError:
+                        self.can_set_classes = False
+                    except Exception as e:
+                        self.can_set_classes = False
+                        self.get_logger().warn(
+                            f"set_classes failed after command. "
+                            f"Continuing with standard model classes: {e}"
+                        )
                 self.get_logger().info(
                     f"Target classes updated: {self.target_classes}, model.names={self.model.names}"
                 )

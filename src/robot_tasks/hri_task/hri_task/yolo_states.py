@@ -1337,7 +1337,7 @@ class YoloFindBagState(BaseYoloState):
     """YOLO で bag を検出するステート。"""
 
     def __init__(self, node, timeout=5.0):
-        super().__init__(node, target_classes=["bag"], timeout=timeout)
+        super().__init__(node, target_classes=["mug"], timeout=timeout)
 
     def execute(self, userdata):
         self.node.get_logger().info("[YOLO BAG] Searching for bag...")

@@ -10,12 +10,14 @@ import rclpy
 from rclpy.node import Node
 from direct_joint_control import DirectJointController
 from bag_grasp_ik import calculate_bag_grasp_joints
+#from erasers_g1_api.robot_control import ArmControl
 
 def main(args=None):
     rclpy.init(args=args)
     node = Node('test_bag_grasp')
 
     arm = DirectJointController(node)
+    #hand = ArmControl(node)
 
     # テスト開始前にホームポジションにする
     node.get_logger().info("Moving to home position before test...")
@@ -30,12 +32,15 @@ def main(args=None):
     node.get_logger().info(f"Target Bag Position: cx={bag_cx}, cy={bag_cy}, distance={bag_z}m")
     
     # 修正した IK を使って関節角度を計算
+    #hand_hand_control(command="open", hand="right")
     joints = calculate_bag_grasp_joints(bag_cx, bag_cy, bag_z)
     node.get_logger().info(f"Calculated Joints:\n{joints}")
 
     # 把持姿勢を取る
     node.get_logger().info("Taking grasp posture...")
     arm.send_joints(joints, hold_sec=5.0)
+    #hand_hand_control(command="close", hand="right")
+    
 
     # ホームに戻る
     node.get_logger().info("Moving back to home position...")

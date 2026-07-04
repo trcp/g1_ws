@@ -49,7 +49,7 @@ def _json_from_response(text):
         return json.loads(match.group(0))
 
 
-def _call_ollama(prompt, keep_alive="5m", timeout=10.0, num_predict=96):
+def _call_ollama(prompt, keep_alive="5m", timeout=30.0, num_predict=96):
     payload = {
         "model": OLLAMA_MODEL,
         "prompt": prompt,

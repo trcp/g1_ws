@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   yolo_human:
     build: .
@@ -9,14 +7,14 @@ services:
       - ./yolo_human_node.py:/app/yolo_human_node.py
       - ./extract_person_features_off.py:/app/extract_person_features_off.py
       - ./extract_person_features.py:/app/extract_person_features.py
-      - ./yoloe-26x-seg.pt:/app/yoloe-26x-seg.pt
-      - ./mobileclip2_b.ts:/app/mobileclip2_b.ts
       - ~/.cache:/root/.cache
       - /home/roboworks/g1_ws/cyclonedds/cyclonedds.katana.xml:/tmp/cyclonedds.xml
     env_file:
       - .env
     environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - CYCLONEDDS_URI=file:///tmp/cyclonedds.xml
+      - ROS_DOMAIN_ID=0
       - PYTHONUNBUFFERED=1
     # コンテナが落ちても自動再起動
     restart: unless-stopped

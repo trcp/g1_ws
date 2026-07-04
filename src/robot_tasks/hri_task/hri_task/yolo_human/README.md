@@ -35,3 +35,20 @@ OPENAI_API_KEY=${OPENAI_API_KEY}
 ```
 
 これで、キーをファイルに直書きすることなく安全にDockerコンテナを起動できます。
+
+## 重みファイルの取得について
+
+YOLOE などの重みファイルはコンテナ内で自動取得され、ホストの `~/.cache` を
+`/root/.cache` にマウントしてキャッシュします。`docker-compose.yml` では
+`yoloe-26x-seg.pt` や `mobileclip2_b.ts` を個別に bind mount しません。
+
+ホスト側に存在しないファイルを `./file:/app/file` として mount すると、Docker は
+ホスト側の `./file` をディレクトリとして作成してしまい、重みのダウンロード先が
+壊れます。新しいデバイスでその状態になった場合は、コンテナを停止してから以下を
+実行してください。
+
+```bash
+docker compose down
+sudo rm -rf yoloe-26x-seg.pt mobileclip2_b.ts
+docker compose up --build
+```
