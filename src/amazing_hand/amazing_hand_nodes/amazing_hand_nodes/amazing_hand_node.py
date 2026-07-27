@@ -47,6 +47,7 @@ class AmazingHandControllerNode(Node):
         self.max_speed = 7
         self.close_speed = 3
         self.close_finger_angles = (60, -60)
+        self.close_thumb_angles = (75, -75)
 
         # calibration values
         self.middle_pos = {
@@ -175,6 +176,7 @@ class AmazingHandControllerNode(Node):
                 self.move_finger(finger, *self.close_finger_angles, self.close_speed, h)
 
             self.move_finger("thumb", *self.close_finger_angles, self.close_speed + 4, h)
+            self.move_finger("thumb", *self.close_thumb_angles, self.close_speed + 4, h)
 
     def open_hand_progressive(self, hand):
         self.get_logger().info(f"Open progressive: {hand}")

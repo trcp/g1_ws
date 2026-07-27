@@ -1,10 +1,10 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>erasers_g1_api</name>
+  <name>person_tracker</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
-  <maintainer email="unitree@todo.todo">unitree</maintainer>
+  <maintainer email="sakamaki@aibot.jp">roboworks</maintainer>
   <license>TODO: License declaration</license>
 
   <test_depend>ament_copyright</test_depend>
@@ -12,15 +12,11 @@
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
 
-  <depend>rclpy_util</depend>
-  <depend>smach_ros</depend>
-  <depend>amazing_hand_interfaces</depend>
-  <depend>g1_srvs</depend>
-  <depend>g1_description</depend>
-  <depend>nav_msgs</depend>
-  <depend>ament_index_python</depend>
-  <depend>tf_transformations</depend>
-  <exec_depend>g1_moveit</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

@@ -130,6 +130,6 @@ def generate_launch_description():
         condition=IfCondition(use_rviz)
     )
     ld.add_action(move_group)
-    ld.add_action(rviz_node)
+    #ld.add_action(rviz_node)
 
     return ld

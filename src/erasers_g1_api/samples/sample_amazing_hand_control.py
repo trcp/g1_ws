@@ -13,13 +13,25 @@ def main():
     arm_control = ArmControl(node)
 
     # 両手を広げる
-    tts.say('Open both hands')
+    tts.say("Open both hands")
     arm_control.hand_control(command="open", hand="both")
 
     # 両手を閉じる
-    tts.say('Close both hands')
+    tts.say("Close both hands")
     arm_control.hand_control(command="close", hand="both")
 
     # 歩行用姿勢にする
-    tts.say('Set to walking posture')
+    tts.say("Set to walking posture")
+    arm_control.hand_control(command="walk", hand="both")
+
+    # 右手を閉じる
+    tts.say("Close right hands")
+    arm_control.hand_control(command="close", hand="right")
+
+    # 左手を閉じる
+    tts.say("Close left hands")
+    arm_control.hand_control(command="close", hand="left")
+
+    # 歩行用姿勢にする
+    tts.say("Finish the sample amazing hand operation.")
     arm_control.hand_control(command="walk", hand="both")

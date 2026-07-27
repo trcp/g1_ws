@@ -55,6 +55,7 @@ setup(
             'sample_play_audio = samples.sample_play_audio:main',
             'sample_voice_recongnition = samples.sample_state_voice_recong:main',
             'sample_gemini = samples.sample_state_gemini:main',
+            'sample_wait_push_hand = samples.sample_state_wait_push_hand:main',
         ],
     },
 )

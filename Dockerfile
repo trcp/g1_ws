@@ -74,14 +74,14 @@ RUN apt-get update && apt-get install -y --allow-downgrades \
     rm -rf /var/lib/apt/lists/*
 
 # install python packages
-USER $USERNAME
-RUN pip install --index-url https://pypi.org/simple \
-    pyserial \
-    rustypot \
-    transform3d \
-    faster-whisper \
-    "numpy==1.22.4" \
-    "setuptools==58.2.0"
+# USER $USERNAME
+# RUN pip install --index-url https://pypi.org/simple \
+#     pyserial \
+#     rustypot \
+#     transform3d \
+#     faster-whisper \
+#     "numpy==1.22.4" \
+#     "setuptools==58.2.0"
 
 # Add workspace
 USER $USERNAME
@@ -99,7 +99,6 @@ USER $USERNAME
 RUN mv thirdparty/livox_ros_driver2/package_ROS2.xml thirdparty/livox_ros_driver2/package.xml
 
 # resolve depends
-USER $USERNAME
 USER root
 RUN . /opt/ros/${ROS}/setup.bash &&\
     apt-get update &&\
@@ -110,32 +109,36 @@ RUN . /opt/ros/${ROS}/setup.bash &&\
     --skip-keys fast_lio \
     --skip-keys lightweight_openpose_ros2 \
     --skip-keys sam3_ros \
+    --skip-keys nakalab_ultralutics_ros2 \
     --skip-keys glim_ros &&\
     rm -rf /var/lib/apt/lists/*
 
 # Optimize pointcloud_to_2dmap for the ROS Humble/PCL toolchain
 RUN sed -i 's/boost::make_shared<pcl::PointCloud<pcl::PointXYZ>>()/pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>()/' \
-        ./thirdparty/pointcloud_to_2dmap/src/pointcloud_to_2dmap.cpp && \
+    ./thirdparty/pointcloud_to_2dmap/src/pointcloud_to_2dmap.cpp && \
     sed -i 's/${CV_INCLUDE_DIRS}/${OpenCV_INCLUDE_DIRS}/g' \
-        ./thirdparty/pointcloud_to_2dmap/CMakeLists.txt
+    ./thirdparty/pointcloud_to_2dmap/CMakeLists.txt
 
 # COPY amcl2 code
 COPY assets/emcl2_node.cpp ./thirdparty/emcl2/src/emcl2_node.cpp
 
 # setup lightweight_openpose_ros2
-WORKDIR /home/${USERNAME}/colcon_ws/thirdparty/lightweight_openpose_ros2
-RUN pip install --index-url https://pypi.org/simple -r requirements.txt &&\
-    cd ./lightweight_openpose_ros2/datas/ &&\
-    wget https://download.01.org/opencv/openvino_training_extensions/models/human_pose_estimation/checkpoint_iter_370000.pth
+# WORKDIR /home/${USERNAME}/colcon_ws/thirdparty/lightweight_openpose_ros2
+# RUN pip install --index-url https://pypi.org/simple -r requirements.txt &&\
+#     cd ./lightweight_openpose_ros2/datas/ &&\
+#     wget https://download.01.org/opencv/openvino_training_extensions/models/human_pose_estimation/checkpoint_iter_370000.pth
 
-# setup sam3_ros
-WORKDIR /home/${USERNAME}/colcon_ws
-RUN pip install --index-url https://pypi.org/simple -U ultralytics &&\
-    pip install --index-url https://pypi.org/simple git+https://github.com/openai/CLIP.git &&\
-    pip install --index-url https://pypi.org/simple "numpy==1.22.4"
+# # setup sam3_ros
+# WORKDIR /home/${USERNAME}/colcon_ws
+# RUN pip install --index-url https://pypi.org/simple -U ultralytics &&\
+#     pip install --index-url https://pypi.org/simple git+https://github.com/openai/CLIP.git
 
-# setup robotics ER
-RUN pip install --index-url https://pypi.org/simple -q google-genai
+# # setup robotics ER
+# RUN pip install --index-url https://pypi.org/simple -q google-genai &&\
+#     pip install --index-url https://pypi.org/simple "numpy==1.26.4"
+USER $USERNAME
+COPY ./requirements.txt ./requirements.txt
+RUN pip install --index-url https://pypi.org/simple -r requirements.txt
 
 # build workspace
 ENV ROS_EDITION=ROS2

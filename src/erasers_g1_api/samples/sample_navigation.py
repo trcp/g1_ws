@@ -20,4 +20,5 @@ def main():
     # init
     navigation = G1Navigation(node)
 
-    navigation.move_abs()
+    navigation.GET_BY_TOPIC = False
+    print(navigation.get_current_pose(simple=True))

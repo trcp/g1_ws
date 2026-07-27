@@ -477,9 +477,8 @@ def generate_launch_description():
             default_value="'0.1'",
             description="Robot footprint: radius, length,width, or x1,y1,... vertices.",
         ),
-        DeclareLaunchArgument("global_clearance", default_value="0.25"),
-        # DeclareLaunchArgument("local_clearance", default_value="0.30"),
-        DeclareLaunchArgument("local_clearance", default_value="0.45"),
+        DeclareLaunchArgument("global_clearance", default_value="0.1"),
+        DeclareLaunchArgument("local_clearance", default_value="0.30"),
         DeclareLaunchArgument(
             "free_space_weight",
             default_value="150.0",
@@ -511,7 +510,7 @@ def generate_launch_description():
         DeclareLaunchArgument("planner_obstacle_threshold", default_value="99"),
         DeclareLaunchArgument(
             "goal_snap_to_free",
-            default_value="false", # true for restraunt, default have to be false
+            default_value="true",
             description="Snap goal to nearest free cell when goal is inside an obstacle",
         ),
         DeclareLaunchArgument(
@@ -520,11 +519,11 @@ def generate_launch_description():
             description="Max search radius for goal snapping [m]",
         ),
         DeclareLaunchArgument("path_obstacle_threshold", default_value="75"),
-        DeclareLaunchArgument("path_check_horizon", default_value="0.8"), # 0.3 for restraunt, default have to be 0.8
+        DeclareLaunchArgument("path_check_horizon", default_value="0.3"),
         DeclareLaunchArgument("path_check_use_memory", default_value="true"),
         DeclareLaunchArgument(
             "path_check_skip_radius",
-            default_value="0.1", # 0.27
+            default_value="0.27",
             description="Skip path points within this distance of robot in path blocked check [m]. 0 disables.",
         ),
         DeclareLaunchArgument("local_plan_frequency", default_value="5.0"),
