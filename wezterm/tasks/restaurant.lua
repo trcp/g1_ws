@@ -33,7 +33,7 @@ local task = {
       description = "all navigation launch",
       commands = {
         default = {
-          template = "cd /home/unitree/g1_ws && /usr/bin/docker compose run --name nav --rm erasers_g1 bash -ic \"ros2 launch machida_navigation machida_navigation.launch.py launch_map_server:=false launch_localization:=false use_head_camera:=false goal_snap_to_free:=true path_check_horizon:=0.3\"",
+          template = "cd /home/unitree/g1_ws && /usr/bin/docker compose run --name nav --rm erasers_g1 bash -ic \"ros2 launch machida_navigation machida_navigation.launch.py launch_map_server:=false launch_localization:=false use_head_camera:=false\"",
           kill = "docker stop nav",
           variables = {},
         },
