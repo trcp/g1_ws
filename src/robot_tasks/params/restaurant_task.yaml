@@ -3,21 +3,17 @@ restaurant_task:
     # 注文の品物とそれを表す単語のリスト
     # オブジェクト名: [[日本語の単語, 英語の単語, その他フレーズ, ...], predict]
     objects:
-      pringles: [["pringles"], 0.1]
-      seaweed: [["seaweed", "sea weed", "sea", "see weed"], 0.1]
-
-      apple: [["apple"], 0.1]
-      peach: [["peach"], 0.1]
-      mangostane: [["mangostane", "mango"], 0.1]
-      lemon: [["lemon"], 0.1]
-      yellow_bellpepper: [["yellow bellpepper", "yellow bell pepper", "yellow bell"], 0.1]
-      red_bellpepper: [["red bellpepper", "red bell pepper", "red bell"], 0.1]
-
-      instant_noodles: [["instant noodles", "noodle"], 0.5]
-      cornflakes: [["cornflake", "corn flake", "corn", "flake"], 0.5]
-
-      coke: [["coke"], 0.5]
-      red_bull: [["red bull"], 0.5]
+      # Food
+      noodles: [["noodles", "noodle"], 0.1]
+      tea_bag: [["tea", "bag", "tea bag", "t bag"], 0.1]
+      corn_flakes: [["corn", "flake", "corn flakes", "cornflake"], 0.1]
+      potato_chips: [["potato", "chips", "potato chips", "potato chip"], 0.1]
+      # fluits
+      strawberry: [["strawberry", "berry"], 0.1]
+      banana: [["banana"], 0.1]
+      plum: [["plum", "plan"], 0.1]
+      # Drink
+      redbull: [["red", "blue", "red bull", "red blue", "red booth"], 0.1]
+      aquarius: [["aquarius"], 0.1]
+      coffee: [["coffee"], 0.5]
       milk: [["milk"], 0.5]
-      soju: [["soju"], 0.5]
-      pepsi: [["pepsi"], 0.5]

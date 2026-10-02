@@ -12,7 +12,7 @@
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
 
-  <depend>nakalab_ultralutics_ros2</depend>
+  <depend>nakalab_ultralytics_ros2</depend>
   <!--depend>sam3_ros</depend-->
 
   <depend>g1_bringup</depend>
