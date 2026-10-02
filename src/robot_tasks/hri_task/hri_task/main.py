@@ -102,8 +102,8 @@ from wait_push_hand_state import WaitPushHandState
 
 # 座標リスト [x, y, yaw(rad)]
 LOCATIONS = {
-    'entrance': [-0.97, -0.64, 0.3],
-    'chair_front': [-2.3, -0.95, 1.87],
+    'entrance': [-4.04, 1.11, 2.956],
+    'chair_front': [-2.4, -0.46, 1.49],
 }
 
 # ドアベルをスキップするかどうか（一旦skip）Trueがスキップfalseが実行

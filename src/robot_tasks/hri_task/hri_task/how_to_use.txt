@@ -1,4 +1,7 @@
 
+docker compose up katana
+source install/setup.bash
+
 extract_person_features_off.py使用時
 タスク実行前に別ターミナルで以下を実行しておく:
 docker run --gpus all -p 8000:8000 \

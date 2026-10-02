@@ -1,17 +1,17 @@
 {
     "Guest_1": {
-        "name": "Lisa",
-        "drink": "Tea",
+        "name": "Nancy",
+        "drink": "Milk",
         "features": {
-            "upper_clothing_color": "none",
-            "upper_clothing_sleeve": "short",
-            "upper_clothing_pattern": "solid",
-            "upper_clothing_type": "t-shirt",
-            "lower_clothing_color": "black",
-            "lower_clothing_type": "pants",
+            "upper_clothing_color": "white",
+            "upper_clothing_sleeve": "short sleeves",
+            "upper_clothing_pattern": "striped",
+            "upper_clothing_type": "shirt",
+            "lower_clothing_color": "none",
+            "lower_clothing_type": "skirt",
             "lower_clothing_pattern": "solid",
-            "hair_color": "none",
-            "hair_style": "long",
+            "hair_color": "dark",
+            "hair_style": "short",
             "glasses": "none",
             "mask": "none",
             "hat": "none",
@@ -19,8 +19,8 @@
         }
     },
     "Guest_2": {
-        "name": "Hera",
-        "drink": "Ice Tea",
+        "name": "Nancy",
+        "drink": "Cola",
         "features": {
             "features": [
                 "",
@@ -38,5 +38,5 @@
             }
         }
     },
-    "last_updated": "2026-07-04 13:23:29"
+    "last_updated": "2026-07-30 14:38:12"
 }
