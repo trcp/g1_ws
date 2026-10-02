@@ -459,7 +459,7 @@ class PersonDetectorState(smach.State, PersonDetector):
         finalized_person_poses = []
         for cluster in clusters:
             positions = [sample['position'] for sample in cluster]
-            representative_position = self.__median_point(positions)
+            representative_position = self.__mean_point(positions)
             best_sample = max(
                 cluster,
                 key=lambda sample: (
@@ -635,6 +635,13 @@ class PersonDetectorState(smach.State, PersonDetector):
         ]
 
     @staticmethod
+    def __mean_point(points):
+        return [
+            sum(point[axis] for point in points) / len(points)
+            for axis in range(3)
+        ]
+
+    @staticmethod
     def __median(values):
         sorted_values = sorted(values)
         value_count = len(sorted_values)
@@ -664,7 +671,7 @@ class PersonDetectorState(smach.State, PersonDetector):
     def __position_variance(points):
         if not points:
             return float('inf')
-        center = PersonDetectorState.__median_point(points)
+        center = PersonDetectorState.__mean_point(points)
         return sum(
             PersonDetectorState.__squared_distance(point, center)
             for point in points
