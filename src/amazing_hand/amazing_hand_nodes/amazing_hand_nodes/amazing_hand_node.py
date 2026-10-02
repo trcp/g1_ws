@@ -175,6 +175,7 @@ class AmazingHandControllerNode(Node):
             for finger in ["index", "middle", "ring"]:
                 self.move_finger(finger, *self.close_finger_angles, self.close_speed, h)
 
+            self.move_finger("thumb", *self.close_finger_angles, self.close_speed + 4, h)
             self.move_finger("thumb", *self.close_thumb_angles, self.close_speed + 4, h)
 
     def open_hand_progressive(self, hand):
