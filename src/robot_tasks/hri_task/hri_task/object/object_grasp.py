@@ -117,6 +117,10 @@ def calculate_object_grasp_plan(
     detection: ObjectDetection,
     head_tilt: float = -0.5,
     grasp_strategy: str = "center",
+    offset_x_m: float = 0.0,
+    offset_y_m: float = 0.0,
+    offset_z_m: float = 0.0,
+    right_wrist_roll: float = 0.0,
 ) -> GraspPlan:
     """物体検出結果から右腕用の把持計画を計算する。
 
@@ -159,9 +163,10 @@ def calculate_object_grasp_plan(
     camera_offset_y = geometry.NECK_BASE_Y + camera.CAM_FROM_NECK_Y
     camera_offset_z = geometry.NECK_BASE_Z + camera.CAM_FROM_NECK_Z
 
-    target_x = object_x + camera_offset_x
-    target_y = object_y + camera_offset_y
-    target_z = object_z + camera_offset_z
+    # IK の解法は変えず、ロボット座標系で目標位置だけを補正する。
+    target_x = object_x + camera_offset_x + offset_x_m
+    target_y = object_y + camera_offset_y + offset_y_m
+    target_z = object_z + camera_offset_z + offset_z_m
 
     # 右肩の正面へ対象物を合わせる腰角度。
     right_shoulder_y = -geometry.SHOULDER_Y
@@ -219,7 +224,7 @@ def calculate_object_grasp_plan(
         "right_elbow_joint": 1.5708 - elbow_angle,
         "right_shoulder_roll_joint": -0.2,
         "right_shoulder_yaw_joint": 0.0,
-        "right_wrist_roll_joint": 0.0,
+        "right_wrist_roll_joint": right_wrist_roll,
     }
 
     return GraspPlan(
