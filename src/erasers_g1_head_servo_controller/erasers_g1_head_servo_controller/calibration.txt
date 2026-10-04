@@ -1,2 +1,0 @@
-pan_zero=935
-tilt_zero=1072

@@ -12,13 +12,19 @@ head_servo_node:
     # 通信設定
     publish_rate: 10.0
 
-    # Calibration pulses from the existing hardware calibration.
-    # These values correspond to the reference angles below, not necessarily
-    # the camera-forward 0 rad pose.
-    pan_zero: 943
-    tilt_zero: 861
+    # 自動キャリブレーション設定 (コリジョン検知)
+    auto_calibrate: true
+    calib_velocity: 40                # 探索時のプロファイル速度 (2倍速: 約55 deg/s上限)
+    calib_step_pulse: 8               # 20msごとの前進量 (2倍速: 約35.2 deg/s, 5.8 rpm)
+    calib_current_limit_mA: 100       # 探索時の電流リミット (XL330保護用)
+    calib_current_threshold_mA: 80    # 衝突判定電流しきい値
+    calib_stall_count_threshold: 3    # 衝突確定に必要な連続検知回数 (約60ms)
+    calib_backoff_pulse: 30           # 衝突後の安全マージン後退パルス (約2.6度)
+    calib_timeout_sec: 15.0           # 1軸あたりの最大探索タイムアウト [秒]
+
+    # キャリブレーション基準角 [rad]
     pan_zero_rad: -0.8727
-    tilt_zero_rad: -1.5708
+    tilt_zero_rad: -1.5010            # 実機ストッパー角 (-86.0度: 水平0度補正)
 
     # URDF joint limits [rad]
     pan_min_rad: -0.7
@@ -28,7 +34,7 @@ head_servo_node:
 
     # +1: positive ROS angle increases Dynamixel pulse
     # -1: positive ROS angle decreases Dynamixel pulse
-    pan_dir: 1
+    pan_dir:  -1
     tilt_dir: 1
 
     profile_velocity: 1000
