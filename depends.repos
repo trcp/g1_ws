@@ -44,6 +44,12 @@ repositories:
         url: https://github.com/koide3/pointcloud_to_2dmap.git
         version: master
 
+    # 3D SLAM ROS 2 wrapper
+    thirdparty/glim_ros2:
+        type: git
+        url: https://github.com/koide3/glim_ros2.git
+        version: master
+
     # livox pkgs
     thirdparty/livox_ros_driver2:
         type: git

@@ -376,6 +376,7 @@ FROM g1-base AS ctranslate2-jetson
 FROM ctranslate2-${CTRANSLATE_ARCH} AS ctranslate2
 
 # install build tools
+USER root
 RUN apt-get update &&\
     apt-get install -y \
         cmake \
@@ -387,8 +388,8 @@ RUN apt-get update &&\
         build-essential \
     &&\
     rm -rf /var/lib/apt/lists/*
-RUN git clone --recursive https://github.com/OpenNMT/CTranslate2.git
-WORKDIR CTranslate2
+RUN git clone --recursive https://github.com/OpenNMT/CTranslate2.git /CTranslate2
+WORKDIR /CTranslate2
 RUN set -eux; \
     CMAKE_FLAGS="-DWITH_MKL=OFF -DOPENMP_RUNTIME=NONE"; \
     if [ -d /usr/local/cuda ]; then \
@@ -405,6 +406,85 @@ RUN pip3 install -r python/install_requirements.txt &&\
     cd python && CTRANSLATE2_ROOT=/usr/local python3 setup.py bdist_wheel
 
 
+# ==========
+# GLIM build
+# ==========
+FROM gai313/ubuntu:22.04.amd64.cuda12.8.cudnn9.toolkit AS glim-amd64
+FROM gai313/ubuntu:22.04.arm64 AS glim-arm64
+FROM g1-base AS glim-jetson
+
+FROM glim-${CTRANSLATE_ARCH} AS glim
+ARG CUDA_ARCHITECTURES=87
+USER root
+
+# Install build dependencies for GLIM and submodules
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    libboost-all-dev \
+    libeigen3-dev \
+    libfmt-dev \
+    libglfw3-dev \
+    libglm-dev \
+    libjpeg-dev \
+    libmetis-dev \
+    libomp-dev \
+    libpng-dev \
+    libspdlog-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CUDA_HOME=/usr/local/cuda
+ENV CUDAToolkit_ROOT=/usr/local/cuda
+ENV PATH=/usr/local/cuda/bin:${PATH}
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/targets/aarch64-linux/lib:${LD_LIBRARY_PATH}
+
+WORKDIR /tmp/glim_build
+# GTSAM
+RUN git clone --branch 4.3a0 --depth 1 https://github.com/borglab/gtsam.git gtsam && \
+    cmake -S gtsam -B gtsam/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
+        -DGTSAM_BUILD_TESTS=OFF \
+        -DGTSAM_WITH_TBB=OFF \
+        -DGTSAM_USE_SYSTEM_EIGEN=ON \
+        -DGTSAM_BUILD_WITH_MARCH_NATIVE=OFF && \
+    cmake --build gtsam/build -j$(nproc) && \
+    cmake --install gtsam/build && \
+    rm -rf gtsam
+# iridescence
+RUN git clone --recursive --depth 1 https://github.com/koide3/iridescence.git && \
+    cmake -S iridescence -B iridescence/build \
+        -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build iridescence/build -j$(nproc) && \
+    cmake --install iridescence/build && \
+    rm -rf iridescence
+# gtsam_points
+RUN git clone --depth 1 https://github.com/koide3/gtsam_points.git && \
+    cmake -S gtsam_points -B gtsam_points/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_WITH_CUDA=ON \
+        -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES} \
+        -DBUILD_WITH_MARCH_NATIVE=OFF \
+        -DCUDAToolkit_ROOT=/usr/local/cuda && \
+    cmake --build gtsam_points/build -j$(nproc) && \
+    cmake --install gtsam_points/build && \
+    rm -rf gtsam_points
+# glim standalone core
+RUN . /opt/ros/humble/setup.bash && \
+    git clone --depth 1 https://github.com/koide3/glim.git && \
+    cmake -S glim -B glim/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_WITH_CUDA=ON \
+        -DBUILD_WITH_VIEWER=ON \
+        -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES} \
+        -DBUILD_WITH_MARCH_NATIVE=OFF \
+        -DCUDAToolkit_ROOT=/usr/local/cuda && \
+    cmake --build glim/build -j$(nproc) && \
+    cmake --install glim/build && \
+    rm -rf glim /tmp/glim_build
+
+
 # =========================
 # eR@sers G1 Workspace base
 # =========================
@@ -419,6 +499,7 @@ RUN . /opt/ros/humble/setup.bash &&\
     rosdep update --rosdistro=$ROS_DISTRO &&\
     rosdep install -y -i --from-path . \
         --skip-keys pointcloud_to_2dmap \
+        --skip-keys glim \
         --skip-keys glim_ros \
         --skip-keys rviz2 \
         --skip-keys joint_state_publisher_gui \
@@ -440,6 +521,7 @@ RUN . /opt/ros/humble/setup.bash &&\
     rosdep update --rosdistro=$ROS_DISTRO &&\
     rosdep install -y -i --from-path . \
         --skip-keys pointcloud_to_2dmap \
+        --skip-keys glim \
         --skip-keys glim_ros \
         --skip-keys unitree_sdk2 \
         --skip-keys unitree_ros2 &&\
@@ -469,7 +551,18 @@ COPY --from=modeldownloader /tmp/lightweight_openpose/lightweight_openpose.pth /
 COPY ./onnxruntime/build/Linux/Release/libonnxruntime*.so* /usr/local/lib/
 COPY ./onnxruntime/include/onnxruntime /usr/local/include/onnxruntime
 COPY ./onnxruntime/build /tmp/onnxruntime
-# Install onnxruntime
+# GLIM artifacts
+COPY --from=glim /usr/local/lib/libgtsam* /usr/local/lib/
+COPY --from=glim /usr/local/lib/libiridescence* /usr/local/lib/
+COPY --from=glim /usr/local/lib/libgtsam_points* /usr/local/lib/
+COPY --from=glim /usr/local/lib/libglim* /usr/local/lib/
+COPY --from=glim /usr/local/include/gtsam /usr/local/include/gtsam
+COPY --from=glim /usr/local/include/iridescence /usr/local/include/iridescence
+COPY --from=glim /usr/local/include/gtsam_points /usr/local/include/gtsam_points
+COPY --from=glim /usr/local/include/glim /usr/local/include/glim
+COPY --from=glim /usr/local/lib/cmake/ /usr/local/lib/cmake/
+COPY --from=glim /usr/local/share/glim /usr/local/share/glim
+# Install onnxruntime & update ldconfig
 USER root
 RUN ldconfig
 # Install requirements Python packages

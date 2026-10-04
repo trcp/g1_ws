@@ -82,7 +82,7 @@ services:
     stop_signal: SIGINT
     environment:
       # Preference settings DO NOT EDIT
-      - DISPLAY=${DISPLAY}
+      #- DISPLAY=${DISPLAY}
       - LC_TIME
       - TZ=Asia/Tokyo
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
@@ -127,12 +127,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: base
       args:
         # DO NOT EDIT
         - L4T_VERSION=36.4
         - USERNAME=${USER}
         - GROUPNAME=${USER}
+        - PASSWORD=123
         # Arch settings
         - ARCH=arm64
         - CTRANSLATE_ARCH=jetson
