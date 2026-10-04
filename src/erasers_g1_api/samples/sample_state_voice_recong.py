@@ -53,12 +53,13 @@ def main():
 
     # userdata
     sm.userdata.num_challenge = 0
+    sm.userdata.success_keywards = []
 
     # sm
     with sm:
         smach.StateMachine.add('VOICE_RECONG', SpeechToText(node=node,
                                                             tts=tts,
-                                                            device='cuda',
+                                                            device='cpu',
                                                             lang='en',
                                                             silence_duration=5.0),
                                 transitions={'success': 'CHECK_VERIFY',

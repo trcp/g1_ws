@@ -37,11 +37,14 @@ import yaml
 import os
 import random  # ランダム選択用に追加
 import math
+import time
 
 
 # --- デバッグ・シミュレーション用定数 ---
-SKIP_VOICE_INTARACT = False  # True のとき音声対話ステートをスキップして success 扱いにする
-SKIP_HAND_CONTROL = False # True のときハンド操作をスキップする
+SKIP_VOICE_INTARACT = (
+    False  # True のとき音声対話ステートをスキップして success 扱いにする
+)
+SKIP_HAND_CONTROL = False  # True のときハンド操作をスキップする
 
 
 """
@@ -70,7 +73,11 @@ def load_params(node: Node, params_file: str):
 """
 
 
-@smach.cb_interface(outcomes=["success"], input_keys=["object_keywards"], output_keys=["stt_text", "order_list"])
+@smach.cb_interface(
+    outcomes=["success"],
+    input_keys=["object_keywards"],
+    output_keys=["stt_text", "order_list"],
+)
 def cb_state_skip_request_order(userdata, node: Node):
     try:
         kws = userdata.object_keywards
@@ -145,7 +152,7 @@ def cb_state_move_to_customer(
     tts_say: TTS.say,
     navigation: G1Navigation,
     control: G1Control,
-    tolerance: float = 1.0,
+    tolerance: float = 0.25,
 ):
     try:
         person_poses = getattr(userdata, "person_poses", [])
@@ -180,7 +187,7 @@ def cb_state_move_to_customer(
             )
             return "failure"
 
-        #control.pose_policy("running")
+        # control.pose_policy("running")
         tts_say("I will move to the customer. Please wait a moment.")
         node.get_logger().info("frame_id: %s" % frame_id)
         node.get_logger().info("pose x: %f" % person_x)
@@ -193,7 +200,9 @@ def cb_state_move_to_customer(
         customer_pose.pose.position.y = person_y
         customer_pose.pose.position.z = person_z
         customer_pose.pose.orientation.w = 1.0
-        if not navigation.move_to_pose(customer_pose, tolerance=tolerance, retry_on_feedback_timeout=False):
+        if not navigation.move_to_pose(
+            customer_pose, tolerance=tolerance, retry_on_feedback_timeout=True
+        ):
             node.get_logger().error("Failed to move to customer")
             return "failure"
 
@@ -213,20 +222,22 @@ def cb_state_move_to_customer(
 
 @smach.cb_interface(
     outcomes=["success", "timeout", "failure"],
-    input_keys=["object_keywards", "stt_text"],
+    input_keys=["objects_dict", "stt_text"],
     output_keys=["order_list"],
 )
 def cb_state_check_order(userdata, node: Node, tts_say: TTS.say):
     try:
-        voice_message = userdata.stt_text
+        voice_message = userdata.stt_text.casefold()
         order_list = [
-            kw for kw in userdata.object_keywards if kw in voice_message.lower()
+            name
+            for name, (keywords, _) in userdata.objects_dict.items()
+            if any(keyword.casefold() in voice_message for keyword in keywords)
         ]
         userdata.order_list = order_list
         if order_list == []:
             tts_say("Sorry, I failed to understand your order. Please try again.")
             return "timeout"
-        tts_say("You ordered %s." % "，".join(order_list))
+        tts_say("You ordered %s." % ", ".join(order_list))
         return "success"
     except:
         node.get_logger().error(
@@ -253,9 +264,8 @@ def cb_state_check_order_confirmation(userdata, node: Node, tts_say: TTS.say):
 
             # 注文された品物に絞り込む
             request_objects_dict = {}
-            for name, data in userdata.objects_dict.items():
-                kws, conf = data
-                if any(kw in userdata.order_list for kw in kws):
+            for name, (_, conf) in userdata.objects_dict.items():
+                if name in userdata.order_list:
                     request_objects_dict[name] = conf
 
             userdata.request_objects_dict = request_objects_dict
@@ -280,15 +290,13 @@ def cb_state_check_order_confirmation(userdata, node: Node, tts_say: TTS.say):
 
 
 @smach.cb_interface(outcomes=["success", "failure"], input_keys=[], output_keys=[])
-def cb_state_move_to_bar_counter(
-    userdata, node: Node, navigation: G1Navigation
-):
+def cb_state_move_to_bar_counter(userdata, node: Node, navigation: G1Navigation):
     try:
-        #control.pose_policy("running")
+        # control.pose_policy("running")
 
         navigation.move_abs(0.0, 0.0, 0.0, retry_on_feedback_timeout=False)
 
-        #control.pose_policy("start")
+        # control.pose_policy("start")
         return "success"
     except Exception as e:
         node.get_logger().error(f"Error in grasp_bag: {e}\n{traceback.format_exc()}")
@@ -302,22 +310,27 @@ def cb_state_move_to_bar_counter(
 
 @smach.cb_interface(
     outcomes=["success", "failure"],
-    input_keys=["order_list"],
+    input_keys=["request_objects_dict"],
     output_keys=["order_list"],
 )
-def cb_state_order_report(userdata, node: Node, tts_say: TTS.say, arm:ArmControl):
+def cb_state_order_report(userdata, node: Node, tts_say: TTS.say, arm: ArmControl):
     try:
-        tts_say("Barman, the customer ordered %s." % "，".join(userdata.order_list))
+        ordered_names = list(userdata.request_objects_dict)
+        tts_say("Barman, the customer ordered %s." % ", ".join(ordered_names))
         tts_say(
             "I will grasp there. Please put ther both my hand"
-            if len(userdata.order_list) > 1
+            if len(ordered_names) > 1
             else "I will grasp it. Please put ther which my hand"
         )
         arm.enable_upper_body_control(True)
-        arm.joint_control(left_shoulder_pitch_joint=-0.735,
-                      left_wrist_roll_joint=-1.57,
-                      right_shoulder_pitch_joint=-0.735,
-                      right_wrist_roll_joint=1.57,)
+        arm.joint_control(
+            left_shoulder_pitch_joint=-0.735,
+            left_wrist_roll_joint=-1.57,
+            right_shoulder_pitch_joint=-0.735,
+            right_wrist_roll_joint=1.57,
+        )
+        if not SKIP_HAND_CONTROL:
+            arm.hand_control(command="open")
         userdata.order_list = []
         return "success"
     except:
@@ -337,9 +350,11 @@ def cb_state_order_report(userdata, node: Node, tts_say: TTS.say, arm:ArmControl
     input_keys=[],
     output_keys=[],
 )
-def cb_state_grasp_item(userdata, node: Node, arm:ArmControl):
+def cb_state_grasp_item(userdata, node: Node, arm: ArmControl):
     try:
-        if not SKIP_HAND_CONTROL: arm.hand_control(command="close")
+        if not SKIP_HAND_CONTROL:
+            arm.hand_control(command="close")
+            time.sleep(2.0)
         arm.enable_upper_body_control(False)
         return "success"
     except:
@@ -369,12 +384,12 @@ def cb_state_handover_item(userdata, node: Node, tts_say: TTS.say, arm: ArmContr
             right_shoulder_pitch_joint=-0.735,
             right_wrist_roll_joint=1.57,
         )
-        if not SKIP_HAND_CONTROL: arm.hand_control(command="open")
+        if not SKIP_HAND_CONTROL:
+            arm.hand_control(command="open")
         return "success"
     except:
         node.get_logger().error(
-            "Error is occured in cb_state_handover_item\n%s"
-            % traceback.format_exc()
+            "Error is occured in cb_state_handover_item\n%s" % traceback.format_exc()
         )
         return "failure"
 
@@ -425,6 +440,9 @@ def cb_state_reset_and_return(
     try:
         arm.enable_upper_body_control(False)
         # control.pose_policy("running")
+        if not SKIP_HAND_CONTROL:
+            arm.hand_control(command="walk")
+            time.sleep(5)
         navigation.move_abs()
         # control.pose_policy("start")
 
@@ -448,28 +466,24 @@ def cb_state_reset_and_return(
         return "failure"
 
 
-def searching_customer_state(
-        node: Node,
-        tts_say: TTS.say,
-        arm_control: ArmControl
-    ):
+def searching_customer_state(node: Node, tts_say: TTS.say, arm_control: ArmControl):
     """
     客人を見つけるステート
     """
 
     sm = smach.StateMachine(
-        outcomes=['find_person', 'timeout', 'failure'],
-        input_keys=['searching_range'],
-        output_keys=['person_poses'],
+        outcomes=["find_person", "timeout", "failure"],
+        input_keys=["searching_range"],
+        output_keys=["person_poses"],
     )
-    searching_index = {'value': 0}
+    searching_index = {"value": 0}
 
     with sm:
         # Camera control
         @smach.cb_interface(
-            outcomes=['success', 'timeout', 'failure'],
-            input_keys=['searching_range'],
-            output_keys=[]
+            outcomes=["success", "timeout", "failure"],
+            input_keys=["searching_range"],
+            output_keys=[],
         )
         def cb_gaze_around(userdata):
             try:
@@ -486,10 +500,10 @@ def searching_customer_state(
                 count = max(count, 2)
                 step = (end - start) / (count - 1)
                 waist_targets = [start + step * i for i in range(count)]
-                target_index = searching_index['value']
+                target_index = searching_index["value"]
 
                 if target_index >= count:
-                    searching_index['value'] = 0
+                    searching_index["value"] = 0
                     return "timeout"
 
                 waist_yaw = waist_targets[target_index]
@@ -513,96 +527,102 @@ def searching_customer_state(
                     )
                     return "failure"
 
-                searching_index['value'] = target_index + 1
-                return 'success'
+                searching_index["value"] = target_index + 1
+                return "success"
             except Exception as e:
                 node.get_logger().error(
                     f"Error in cb_camera_control: {e}\n{traceback.format_exc()}"
                 )
             return "failure"
-        smach.StateMachine.add('CAMERA_CONTROL', smach.CBState(cb=cb_gaze_around),
-                               transitions={
-                                   'success': 'DECLARE_SEARCHING_PERSON',
-                                   'timeout': 'DECLARE_NOT_FIND_PERSON',
-                                   'failure': 'failure'
-                               })
+
+        smach.StateMachine.add(
+            "CAMERA_CONTROL",
+            smach.CBState(cb=cb_gaze_around),
+            transitions={
+                "success": "DECLARE_SEARCHING_PERSON",
+                "timeout": "DECLARE_NOT_FIND_PERSON",
+                "failure": "failure",
+            },
+        )
 
         @smach.cb_interface(
-            outcomes=['success', 'failure'],
-            input_keys=[],
-            output_keys=[]
+            outcomes=["success", "failure"], input_keys=[], output_keys=[]
         )
-        def cb_tts(userdata, text:str):
+        def cb_tts(userdata, text: str):
             try:
                 tts_say(text)
-                return 'success'
+                return "success"
             except Exception as e:
                 node.get_logger().error(
                     f"Error in cb_declare_searching_customer: {e}\n{traceback.format_exc()}"
                 )
             return "failure"
-        smach.StateMachine.add('DECLARE_SEARCHING_PERSON', smach.CBState(cb=cb_tts,
-                                                                         cb_kwargs={'text': 'Hi customer, Please rise up a hand if need order.'}),
-                               transitions={
-                                   'success': 'PERSON_DETECT',
-                                   'failure': 'failure'
-                               })
 
-        smach.StateMachine.add('PERSON_DETECT',
-                               PersonDetectorState(
-                                   node=node,
-                                   timeout_sec=10.0,
-                                   scan_time_sec=5.0,
-                                   condition='hand_up',
-                               ),
-                               transitions={
-                                   'success': 'DECLARE_FIND_PERSON',
-                                   'timeout': 'CAMERA_CONTROL',
-                                   'failure': 'failure',
-                               },
-                               remapping={
-                                   'person_poses': 'person_poses',
-                               })
+        smach.StateMachine.add(
+            "DECLARE_SEARCHING_PERSON",
+            smach.CBState(
+                cb=cb_tts,
+                cb_kwargs={"text": "Hi customer, Please rise up a hand if need order."},
+            ),
+            transitions={"success": "PERSON_DETECT", "failure": "failure"},
+        )
 
-        smach.StateMachine.add('DECLARE_NOT_FIND_PERSON', smach.CBState(cb=cb_tts,
-                                                                    cb_kwargs={'text': 'I cannot found then customer'}),
-                               transitions={
-                                   'success': 'TIMEOUT_INIT_POSE',
-                                   'failure': 'failure'
-                               })
+        smach.StateMachine.add(
+            "PERSON_DETECT",
+            PersonDetectorState(
+                node=node,
+                timeout_sec=10.0,
+                scan_time_sec=5.0,
+                condition="hand_up",
+            ),
+            transitions={
+                "success": "DECLARE_FIND_PERSON",
+                "timeout": "CAMERA_CONTROL",
+                "failure": "failure",
+            },
+            remapping={
+                "person_poses": "person_poses",
+            },
+        )
 
-        smach.StateMachine.add('DECLARE_FIND_PERSON', smach.CBState(cb=cb_tts,
-                                                                    cb_kwargs={'text': 'I found the customer'}),
-                               transitions={
-                                   'success': 'SUCCESS_INIT_POSE',
-                                   'failure': 'failure'
-                               })
-        
+        smach.StateMachine.add(
+            "DECLARE_NOT_FIND_PERSON",
+            smach.CBState(
+                cb=cb_tts, cb_kwargs={"text": "I cannot found then customer"}
+            ),
+            transitions={"success": "TIMEOUT_INIT_POSE", "failure": "failure"},
+        )
+
+        smach.StateMachine.add(
+            "DECLARE_FIND_PERSON",
+            smach.CBState(cb=cb_tts, cb_kwargs={"text": "I found the customer"}),
+            transitions={"success": "SUCCESS_INIT_POSE", "failure": "failure"},
+        )
+
         @smach.cb_interface(
-            outcomes=['success', 'failure'],
-            input_keys=[],
-            output_keys=[]
+            outcomes=["success", "failure"], input_keys=[], output_keys=[]
         )
         def cb_initpose(userdata):
             try:
                 arm_control.move_groupstate(group_state="walk")
                 arm_control.enable_upper_body_control(False)
-                return 'success'
+                return "success"
             except Exception as e:
                 node.get_logger().error(
                     f"Error in cb_declare_searching_customer: {e}\n{traceback.format_exc()}"
                 )
             return "failure"
-        smach.StateMachine.add('SUCCESS_INIT_POSE', smach.CBState(cb=cb_initpose),
-                               transitions={
-                                   'success': 'find_person',
-                                   'failure': 'failure'
-                               })
-        smach.StateMachine.add('TIMEOUT_INIT_POSE', smach.CBState(cb=cb_initpose),
-                               transitions={
-                                   'success': 'timeout',
-                                   'failure': 'failure'
-                               })
+
+        smach.StateMachine.add(
+            "SUCCESS_INIT_POSE",
+            smach.CBState(cb=cb_initpose),
+            transitions={"success": "find_person", "failure": "failure"},
+        )
+        smach.StateMachine.add(
+            "TIMEOUT_INIT_POSE",
+            smach.CBState(cb=cb_initpose),
+            transitions={"success": "timeout", "failure": "failure"},
+        )
 
     return sm
 
@@ -638,6 +658,7 @@ def main():
     # init pose
     # ARM.arm.enable_upper_body_control(False)
     ARM.move_groupstate(group_state="walk")
+    if not SKIP_HAND_CONTROL: ARM.hand_control(command="walk")
     ARM.enable_upper_body_control(False)
 
     NAVIGATION.GET_BY_TOPIC = False
@@ -648,7 +669,7 @@ def main():
     sm = smach.StateMachine(outcomes=["success", "timeout", "failure"])
 
     # userdatas
-    #sm.userdata.searching_range = [-1.57, 1.57, 7] # [腰関節の開始位置、腰関節の終了位置、分割数]
+    # sm.userdata.searching_range = [-1.57, 1.57, 7] # [腰関節の開始位置、腰関節の終了位置、分割数]
     sm.userdata.searching_range = [-1.0, 1.0, 5]
     sm.userdata.person_poses = []
     sm.userdata.stt_text = ""  # 音声認識の結果
@@ -669,15 +690,15 @@ def main():
                 node=node,
                 tts_say=SAY,
                 arm_control=ARM,
-                start_msg='Please push my hand to start restaurant task.',
-                success_msg='OK. Lets start restaurant task!',
-                timeout_msg='I am wait again fot push to my hand.',
+                start_msg="Please push my hand to start restaurant task.",
+                success_msg="OK. Lets start restaurant task!",
+                timeout_msg="I am wait again fot push to my hand.",
             ),
             transitions={
-                'success': 'SERCHING_CUSTOMER_STATE',
-                'timeout': 'START_TASK',
-                'failure': 'failure'
-            }
+                "success": "SERCHING_CUSTOMER_STATE",
+                "timeout": "START_TASK",
+                "failure": "failure",
+            },
         )
 
         # smach.StateMachine.add('TURN_TABLE', smach.CBState(cb=cb_state_create_around_map,
@@ -687,17 +708,19 @@ def main():
 
         # 客人探索ステート
         searching_customer = searching_customer_state(node, SAY, ARM)
-        smach.StateMachine.add("SERCHING_CUSTOMER_STATE",
-                               searching_customer,
-                               transitions={
-                                   'find_person': 'MOVE_TO_CUSTOMER',
-                                   'timeout': 'SERCHING_CUSTOMER_STATE',
-                                   'failure': 'failure',
-                               },
-                               remapping={
-                                   'searching_range': 'searching_range',
-                                   'person_poses': 'person_poses',
-                               })
+        smach.StateMachine.add(
+            "SERCHING_CUSTOMER_STATE",
+            searching_customer,
+            transitions={
+                "find_person": "MOVE_TO_CUSTOMER",
+                "timeout": "SERCHING_CUSTOMER_STATE",
+                "failure": "failure",
+            },
+            remapping={
+                "searching_range": "searching_range",
+                "person_poses": "person_poses",
+            },
+        )
 
         smach.StateMachine.add(
             "MOVE_TO_CUSTOMER",
@@ -719,7 +742,7 @@ def main():
             smach.StateMachine.add(
                 "REQUEST_ORDER",
                 smach.CBState(cb=cb_state_skip_request_order, cb_kwargs={"node": node}),
-                transitions={"success": "REQUEST_CHECK"}
+                transitions={"success": "REQUEST_CHECK"},
             )
         else:
             smach.StateMachine.add(
@@ -759,7 +782,7 @@ def main():
             smach.StateMachine.add(
                 "REQUEST_APPLY",
                 smach.CBState(cb=cb_state_skip_request_apply, cb_kwargs={"node": node}),
-                transitions={"success": "ORDER_CONFIRMATION"}
+                transitions={"success": "ORDER_CONFIRMATION"},
             )
         else:
             smach.StateMachine.add(
@@ -817,7 +840,7 @@ def main():
             smach.StateMachine.add(
                 "GRASP_APPLY",
                 smach.CBState(cb=cb_state_skip_grasp_apply, cb_kwargs={"node": node}),
-                transitions={"success": "GRASP"}
+                transitions={"success": "GRASP"},
             )
         else:
             smach.StateMachine.add(
@@ -879,8 +902,10 @@ def main():
         if SKIP_VOICE_INTARACT:
             smach.StateMachine.add(
                 "HANDOVER_CONFIRM",
-                smach.CBState(cb=cb_state_skip_handover_confirm, cb_kwargs={"node": node}),
-                transitions={"success": "CHECK_HANDOVER_CONFIRMATION"}
+                smach.CBState(
+                    cb=cb_state_skip_handover_confirm, cb_kwargs={"node": node}
+                ),
+                transitions={"success": "CHECK_HANDOVER_CONFIRMATION"},
             )
         else:
             smach.StateMachine.add(
