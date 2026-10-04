@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.actions import GroupAction
 from launch.actions import IncludeLaunchDescription
 from launch.actions import LogInfo
+from launch.actions import RegisterEventHandler
 from launch.conditions import IfCondition
+from launch.conditions import UnlessCondition
+from launch.event_handlers import OnProcessStart
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command
@@ -24,10 +28,12 @@ def generate_launch_description():
     erasers_g1_description_pkg_share_dir = get_package_share_directory('erasers_g1_description')
     erasers_g1_head_servo_controller_pkg_share_dir = get_package_share_directory(
         'erasers_g1_head_servo_controller')
+    erasers_g1_hw_controller_pkg_share_dir = get_package_share_directory(
+        'erasers_g1_hw_controller')
     rosbridge_server_pkg_share_dir = get_package_share_directory('rosbridge_server')
     default_voicevox_root = os.path.expanduser('~/colcon_ws/voicevox')
     default_robot_model = os.path.join(
-        erasers_g1_description_pkg_share_dir, 'urdf', 'erasers_g1.urdf')
+        erasers_g1_description_pkg_share_dir, 'urdf', 'erasers_g1.urdf.xacro')
     default_camera_params = os.path.join(pkg_share_dir, 'params', 'd455.yaml')
     default_head_servo_params = os.path.join(
         erasers_g1_head_servo_controller_pkg_share_dir, 'params', 'head_servo.yaml')
@@ -38,11 +44,14 @@ def generate_launch_description():
         erasers_g1_common_pkg_share_dir, 'config', 'robot_controller.yaml')
     default_display_launch = os.path.join(
         erasers_g1_description_pkg_share_dir, 'launch', 'display.launch.py')
+    default_controller_launch = os.path.join(
+        erasers_g1_hw_controller_pkg_share_dir, 'launch', 'controller.launch.py')
     default_rosbridge_launch = os.path.join(
         rosbridge_server_pkg_share_dir, 'launch', 'rosbridge_websocket_launch.xml')
     default_use_emc = os.environ.get('USE_EMC', 'false').lower().strip('\'"')
     default_use_head_camera = os.environ.get('USE_HEAD_CAMERA', 'false').lower().strip('\'"')
     default_use_amazing_hand = os.environ.get('USE_AMAZING_HAND', 'false').lower().strip('\'"')
+    default_use_mock_hardware = os.environ.get('USE_MOCK_HARDWARE', 'false').lower().strip('\'"')
     default_ah_path = os.environ.get('AH_PATH', '/dev/ttyACM0').strip('\'"')
     default_dx_path = os.environ.get('DX_PATH', '/dev/ttyUSB0').strip('\'"')
     default_voicevox_onnxruntime_path = os.path.join(
@@ -56,6 +65,7 @@ def generate_launch_description():
     use_head_camera = LaunchConfiguration('use_head_camera')
     use_amazing_hand = LaunchConfiguration('use_amazing_hand')
     use_emc = LaunchConfiguration('use_emc')
+    use_mock_hardware = LaunchConfiguration('use_mock_hardware')
     robot_model = LaunchConfiguration('robot_model')
     camera_params = LaunchConfiguration('camera_params')
     ptl_params = LaunchConfiguration('ptl_params')
@@ -82,6 +92,12 @@ def generate_launch_description():
         'use_emc',
         default_value=default_use_emc,
         description='駆動系有効時に緊急停止用 Joy を起動する',
+        choices=['true', 'false'],
+    )
+    declare_use_mock_hardware = DeclareLaunchArgument(
+        'use_mock_hardware',
+        default_value=default_use_mock_hardware,
+        description='モックハードウェアを使用する',
         choices=['true', 'false'],
     )
     declare_robot_model = DeclareLaunchArgument(
@@ -123,6 +139,7 @@ def generate_launch_description():
     ld.add_action(declare_use_head_camera)
     ld.add_action(declare_use_amazing_hand)
     ld.add_action(declare_use_emc)
+    ld.add_action(declare_use_mock_hardware)
     ld.add_action(declare_robot_model)
     ld.add_action(declare_camera_params)
     ld.add_action(declare_ptl_params)
@@ -138,6 +155,16 @@ def generate_launch_description():
         launch_arguments={
             'use_rviz': 'false',
             'robot_description': robot_model,
+            'use_mock_hardware': use_mock_hardware,
+            'use_sim_time': 'false',
+        }.items(),
+    )
+    include_controller = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(default_controller_launch),
+        launch_arguments={
+            'robot_model': robot_model,
+            'use_mock_hardware': use_mock_hardware,
+            'use_sim_time': 'false',
         }.items(),
     )
     # rosbridge の既存 XML Launch を読み込むため、対応するローダーを維持する。
@@ -150,7 +177,26 @@ def generate_launch_description():
 
     # actions
     log_start_action = LogInfo(msg='Starting erasers_g1 bringup system...')
+    start_controller_on_head_servo = RegisterEventHandler(
+        OnProcessStart(
+            target_action=lambda action: action is head_servo,
+            on_start=[
+                LogInfo(msg='head_servo started. Starting controller.launch.py...'),
+                include_controller,
+            ],
+        ),
+        condition=IfCondition(use_head_camera),
+    )
+    start_controller_direct = GroupAction(
+        actions=[
+            LogInfo(msg='use_head_camera is false. Starting controller.launch.py directly...'),
+            include_controller,
+        ],
+        condition=UnlessCondition(use_head_camera),
+    )
     ld.add_action(log_start_action)
+    ld.add_action(start_controller_on_head_servo)
+    ld.add_action(start_controller_direct)
 
 
     # nodes
