@@ -510,7 +510,7 @@ def generate_launch_description():
         DeclareLaunchArgument("planner_obstacle_threshold", default_value="99"),
         DeclareLaunchArgument(
             "goal_snap_to_free",
-            default_value="true",
+            default_value="true", # for restaurant is True
             description="Snap goal to nearest free cell when goal is inside an obstacle",
         ),
         DeclareLaunchArgument(
@@ -530,7 +530,7 @@ def generate_launch_description():
         DeclareLaunchArgument("goal_tolerance", default_value="0.15"),
         DeclareLaunchArgument("goal_yaw_tolerance", default_value="0.05"),
         DeclareLaunchArgument(
-            "replan_cooldown", default_value="10.0"
+            "replan_cooldown", default_value="5.0"
         ),  # default 2.0, 5.0 is good
         DeclareLaunchArgument(
             "use_head_camera",
