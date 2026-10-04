@@ -63,11 +63,12 @@ services:
         - USERNAME=${USER}
         - GROUPNAME=${USER}
         - PASSWORD
-        # Arch settings
         - ARCH=amd64
         - CTRANSLATE_ARCH=amd64
         - TARGET=katana
+        # Arch settings
         - WORKSPACE_TYPE=desktop
+        - CUDA_ARCHITECTURES=86
   
   erasers_g1:
     image: erasers_g1:g1
