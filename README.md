@@ -40,7 +40,7 @@ ssh unitree@192.168.123.164
 
 1. `g1_ws` 直下で `erasers_g1` コンテナをビルドします．
     ```bash
-    docker compose build erasers_G1
+    docker compose build erasers_g1
     ```
 1. コンテナ中の ROS2 パッケージをビルドします．
     ```bash
