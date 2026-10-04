@@ -1,13 +1,14 @@
-{"filename": "src/erasers_g1_cartographer/launch/3d_cartographer.launch.py"}
 #!/usr/bin/env python3
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch.conditions import IfCondition
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
-import os
+
 
 def generate_launch_description():
     ld = LaunchDescription()
@@ -16,7 +17,7 @@ def generate_launch_description():
     default_g1_cartographer_prefix = get_package_share_directory('erasers_g1_cartographer')
     default_cartographer_config_dir = os.path.join(default_g1_cartographer_prefix, 'config')
     default_configuration_basename = 'g1_3d.lua'
-    default_map_path = os.path.join(os.environ['HOME'], 'colcon_ws', 'map')
+    default_map_path = os.path.join(os.path.expanduser('~'), 'colcon_ws', 'map')
     default_map_name = 'map'
     default_save_late = 5000
 
@@ -29,11 +30,15 @@ def generate_launch_description():
     save_late = LaunchConfiguration('save_late')
     autostart = LaunchConfiguration('autostart')
     use_navigation = LaunchConfiguration('use_navigation')
+    points2_topic = LaunchConfiguration('points2_topic')
+    imu_topic = LaunchConfiguration('imu_topic')
+    use_auto_map_saver = LaunchConfiguration('use_auto_map_saver')
 
     # declare arguments
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time', default_value='false',
-        description='Use simulation (Gazebo) clock if true'
+        description='Use simulation (Gazebo) clock if true',
+        choices=['true', 'false']
     )
     declare_resolution = DeclareLaunchArgument(
         'resolution', default_value='0.05',
@@ -57,11 +62,26 @@ def generate_launch_description():
     )
     declare_autostart = DeclareLaunchArgument(
         'autostart', default_value='true',
-        description='Autostart'
+        description='Autostart',
+        choices=['true', 'false']
     )
     declare_use_navigation = DeclareLaunchArgument(
         'use_navigation', default_value='false',
-        description='Whether to start navigation'
+        description='Whether to start navigation',
+        choices=['true', 'false']
+    )
+    declare_points2_topic = DeclareLaunchArgument(
+        'points2_topic', default_value='/utlidar/cloud_livox_mid360',
+        description='Input PointCloud2 topic for 3D cartographer'
+    )
+    declare_imu_topic = DeclareLaunchArgument(
+        'imu_topic', default_value='/utlidar/imu_livox_mid360',
+        description='Input IMU topic for 3D cartographer'
+    )
+    declare_use_auto_map_saver = DeclareLaunchArgument(
+        'use_auto_map_saver', default_value='false',
+        description='Whether to start auto_map_saver node',
+        choices=['true', 'false']
     )
 
     ld.add_action(declare_use_sim_time)
@@ -72,6 +92,9 @@ def generate_launch_description():
     ld.add_action(declare_save_late)
     ld.add_action(declare_autostart)
     ld.add_action(declare_use_navigation)
+    ld.add_action(declare_points2_topic)
+    ld.add_action(declare_imu_topic)
+    ld.add_action(declare_use_auto_map_saver)
 
     # Cartographer Nodes
     cartographer_node = Node(
@@ -88,12 +111,12 @@ def generate_launch_description():
             '-configuration_basename', default_configuration_basename,
         ],
         remappings=[
-            ('points2', '/utlidar/cloud_livox_mid360_fixed'), # 3D LiDAR入力へリマップ
-            ('imu', '/utlidar/imu_livox_mid360_fixed'),
+            ('points2', points2_topic),
+            ('imu', imu_topic),
             ('odom', '/odom'),
         ]
     )
-    
+
     # 3DマップからNav2向けの2D Occupancy Gridを生成
     cartographer_occupancy_grid_node = Node(
         package='cartographer_ros',
@@ -119,11 +142,12 @@ def generate_launch_description():
             'map_name': map_name,
             'save_late': save_late,
         }],
+        condition=IfCondition(use_auto_map_saver)
     )
 
     ld.add_action(cartographer_node)
     ld.add_action(cartographer_occupancy_grid_node)
-    #ld.add_action(auto_map_saver)
+    ld.add_action(auto_map_saver)
 
     # Navigation launcher
     navigation = IncludeLaunchDescription(
@@ -145,3 +169,4 @@ def generate_launch_description():
     ld.add_action(navigation)
 
     return ld
+

@@ -6,7 +6,7 @@
     "enable_local_mapping": true,
     "extension_modules": [
       "libmemory_monitor.so",
-      "libstandard_viewer.so",
+      // "libstandard_viewer.so",
       "librviz_viewer.so"
     ],
     "image_qos": {

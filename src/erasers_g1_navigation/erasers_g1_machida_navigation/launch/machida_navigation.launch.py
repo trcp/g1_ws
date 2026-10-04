@@ -779,34 +779,6 @@ def generate_launch_description():
         ],
     )
 
-    # local_planner = Node(
-    #     package='erasers_g1_machida_navigation',
-    #     executable='local_planner',
-    #     name='pure_pursuit_local_planner',
-    #     output='screen',
-    #     parameters=[{
-    #         'use_sim_time': use_sim_time,
-    #         'path_topic': LaunchConfiguration('path_topic'),
-    #         'cmd_vel_topic': LaunchConfiguration('cmd_vel_topic'),
-    #         'execute_topic': LaunchConfiguration('execute_topic'),
-    #         'map_frame': map_frame,
-    #         'robot_base_frame': robot_base_frame,
-    #         'lookahead_distance': LaunchConfiguration('lookahead_distance'),
-    #         'linear_velocity': LaunchConfiguration('linear_velocity'),
-    #         'max_angular_velocity': LaunchConfiguration('max_angular_velocity'),
-    #         'goal_tolerance': LaunchConfiguration('goal_tolerance'),
-    #         'goal_yaw_tolerance': LaunchConfiguration('goal_yaw_tolerance'),
-    #         'max_path_deviation': LaunchConfiguration('max_path_deviation'),
-    #         'slowdown_distance': LaunchConfiguration('slowdown_distance'),
-    #         'min_linear_velocity': LaunchConfiguration('min_linear_velocity'),
-    #         'max_linear_velocity': LaunchConfiguration('max_linear_velocity'),
-    #         'control_frequency': LaunchConfiguration('control_frequency'),
-    #         'holonomic': LaunchConfiguration('holonomic'),
-    #         'max_linear_acceleration': LaunchConfiguration('max_linear_acceleration'),
-    #         'max_angular_acceleration': LaunchConfiguration('max_angular_acceleration'),
-    #     }],
-    # )
-
     local_planner = Node(
         package="erasers_g1_machida_navigation",
         executable="dwa_local_planner",

@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch.conditions import IfCondition
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
-import os
 
 
 def generate_launch_description():
     ld = LaunchDescription()
 
-
-    # default value
+    # default values
     default_g1_cartographer_prefix = get_package_share_directory('erasers_g1_cartographer')
     default_cartographer_config_dir = os.path.join(default_g1_cartographer_prefix, 'config')
     default_configuration_basename = 'g1_2d.lua'
-    default_map_path = os.path.join(os.environ['HOME'], 'colcon_ws', 'map')
+    default_map_path = os.path.join(os.path.expanduser('~'), 'colcon_ws', 'map')
     default_map_name = 'map'
     default_save_late = 5000
-    pointcloud_to_laserscan_config = os.path.join(default_g1_cartographer_prefix, 'config', 'pointcloud_to_laserscan.yaml')
-
+    pointcloud_to_laserscan_config = os.path.join(
+        default_g1_cartographer_prefix, 'config', 'pointcloud_to_laserscan.yaml'
+    )
 
     # configurations
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -32,12 +33,15 @@ def generate_launch_description():
     save_late = LaunchConfiguration('save_late')
     autostart = LaunchConfiguration('autostart')
     use_navigation = LaunchConfiguration('use_navigation')
+    use_livox_tf = LaunchConfiguration('use_livox_tf')
+    use_pointcloud_to_laserscan = LaunchConfiguration('use_pointcloud_to_laserscan')
+    use_auto_map_saver = LaunchConfiguration('use_auto_map_saver')
 
-
-    # declare argument
+    # declare arguments
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time', default_value='false',
-        description='Use simulation (Gazebo) clock if true'
+        description='Use simulation (Gazebo) clock if true',
+        choices=['true', 'false']
     )
     declare_resolution = DeclareLaunchArgument(
         'resolution', default_value='0.05',
@@ -60,13 +64,29 @@ def generate_launch_description():
         description='Delay in milliseconds before saving the map'
     )
     declare_autostart = DeclareLaunchArgument(
-        'autostart',
-        default_value='true',
-        description='Autostart'
+        'autostart', default_value='true',
+        description='Autostart',
+        choices=['true', 'false']
     )
     declare_use_navigation = DeclareLaunchArgument(
         'use_navigation', default_value='false',
-        description='Whether to start navigation'
+        description='Whether to start navigation',
+        choices=['true', 'false']
+    )
+    declare_use_livox_tf = DeclareLaunchArgument(
+        'use_livox_tf', default_value='false',
+        description='Publish static transform from mid360_link to livox_frame',
+        choices=['true', 'false']
+    )
+    declare_use_pointcloud_to_laserscan = DeclareLaunchArgument(
+        'use_pointcloud_to_laserscan', default_value='false',
+        description='Start internal pointcloud_to_laserscan node',
+        choices=['true', 'false']
+    )
+    declare_use_auto_map_saver = DeclareLaunchArgument(
+        'use_auto_map_saver', default_value='false',
+        description='Start auto_map_saver node',
+        choices=['true', 'false']
     )
 
     ld.add_action(declare_use_sim_time)
@@ -77,7 +97,9 @@ def generate_launch_description():
     ld.add_action(declare_save_late)
     ld.add_action(declare_autostart)
     ld.add_action(declare_use_navigation)
-
+    ld.add_action(declare_use_livox_tf)
+    ld.add_action(declare_use_pointcloud_to_laserscan)
+    ld.add_action(declare_use_auto_map_saver)
 
     # nodes
     livox_tf_publisher = Node(
@@ -87,7 +109,9 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', 'mid360_link', 'livox_frame'],
         output='screen',
         emulate_tty=True,
+        condition=IfCondition(use_livox_tf)
     )
+
     cartographer_node = Node(
         package='cartographer_ros',
         executable='cartographer_node',
@@ -107,6 +131,7 @@ def generate_launch_description():
             ('odom', '/odom'),
         ]
     )
+
     cartographer_occupancy_grid_node = Node(
         package='cartographer_ros',
         executable='cartographer_occupancy_grid_node',
@@ -121,17 +146,18 @@ def generate_launch_description():
         remappings=[('/map', '/map2d')]
     )
 
-    # Pointcloud to Laserscan
     pointcloud_to_laserscan = Node(
         package='pointcloud_to_laserscan',
         executable='pointcloud_to_laserscan_node',
         name='pointcloud_to_laserscan',
         output='screen',
+        emulate_tty=True,
         parameters=[pointcloud_to_laserscan_config, {'use_sim_time': use_sim_time}],
         remappings=[
             ('cloud_in', '/livox/lidar'),
             ('scan', '/scan')
-        ]
+        ],
+        condition=IfCondition(use_pointcloud_to_laserscan)
     )
 
     auto_map_saver = Node(
@@ -145,14 +171,14 @@ def generate_launch_description():
             'map_name': map_name,
             'save_late': save_late,
         }],
+        condition=IfCondition(use_auto_map_saver)
     )
 
-    #ld.add_action(livox_tf_publisher)
-    #ld.add_action(pointcloud_to_laserscan)
+    ld.add_action(livox_tf_publisher)
+    ld.add_action(pointcloud_to_laserscan)
     ld.add_action(cartographer_node)
     ld.add_action(cartographer_occupancy_grid_node)
-    #ld.add_action(auto_map_saver)
-
+    ld.add_action(auto_map_saver)
 
     # launchers
     navigation = IncludeLaunchDescription(
@@ -173,5 +199,5 @@ def generate_launch_description():
 
     ld.add_action(navigation)
 
-
     return ld
+

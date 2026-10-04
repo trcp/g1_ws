@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.substitutions import LaunchConfiguration
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.actions import Node
+import os
 
 from ament_index_python.packages import get_package_share_directory
-import os
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
     ld = LaunchDescription()
 
+    # configurations
+    default_user_config_path = os.path.join(
+        get_package_share_directory('erasers_g1_bringup'),
+        'config',
+        'MID360_config.json'
+    )
+    default_lvx_file_path = os.path.join(os.path.expanduser('~'), 'livox_test.lvx')
 
     # launch configurations
     xfer_format = LaunchConfiguration('xfer_format')
@@ -23,7 +29,6 @@ def generate_launch_description():
     lvx_file_path = LaunchConfiguration('lvx_file_path')
     cmdline_bd_code = LaunchConfiguration('cmdline_bd_code')
     user_config_path = LaunchConfiguration('user_config_path')
-
 
     # launch arguments
     declare_xfer_format = DeclareLaunchArgument(
@@ -51,7 +56,7 @@ def generate_launch_description():
         description='Frame ID for the point cloud')
 
     declare_lvx_file_path = DeclareLaunchArgument(
-        'lvx_file_path', default_value='%s/livox_test.lvx'%os.environ['HOME'],
+        'lvx_file_path', default_value=default_lvx_file_path,
         description='Path to the lvx file')
 
     declare_cmdline_bd_code = DeclareLaunchArgument(
@@ -59,7 +64,7 @@ def generate_launch_description():
         description='Command line input BD code')
 
     declare_user_config_path = DeclareLaunchArgument(
-        'user_config_path', default_value=os.path.join(get_package_share_directory('erasers_g1_bringup'), 'config', 'MID360_config.json'),
+        'user_config_path', default_value=default_user_config_path,
         description='Path to the user config json file')
 
     ld.add_action(declare_xfer_format)

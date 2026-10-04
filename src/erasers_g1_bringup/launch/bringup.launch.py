@@ -60,6 +60,7 @@ def generate_launch_description():
     default_open_jtalk_dict_dir = os.path.join(
         default_voicevox_root, 'dict', 'open_jtalk_dic_utf_8-1.11')
 
+    default_use_person_pose = os.environ.get('USE_PERSON_POSE', 'false').lower().strip('\'"')
 
     # launch configurations
     use_head_camera = LaunchConfiguration('use_head_camera')
@@ -73,7 +74,8 @@ def generate_launch_description():
     dx_path = LaunchConfiguration('dx_path')
     device = LaunchConfiguration('device')
     mic_network_interface = LaunchConfiguration('mic_network_interface')
-
+    use_person_pose = LaunchConfiguration('use_person_pose')
+    person_sensor_fusion = LaunchConfiguration('person_sensor_fusion')
 
     # launch arguments
     declare_use_head_camera = DeclareLaunchArgument(
@@ -136,6 +138,18 @@ def generate_launch_description():
         default_value='',
         description='マイクの UDP 受信用 NIC。録音開始時に使用する',
     )
+    declare_use_person_pose = DeclareLaunchArgument(
+        'use_person_pose',
+        default_value=default_use_person_pose,
+        description='人物姿勢推定（nakalab_ultralytics）を起動する',
+        choices=['true', 'false'],
+    )
+    declare_person_sensor_fusion = DeclareLaunchArgument(
+        'person_sensor_fusion',
+        default_value='pointcloud',
+        description='3D 人物位置算出のソース',
+        choices=['depth', 'pointcloud'],
+    )
     ld.add_action(declare_use_head_camera)
     ld.add_action(declare_use_amazing_hand)
     ld.add_action(declare_use_emc)
@@ -147,6 +161,8 @@ def generate_launch_description():
     ld.add_action(declare_dx_path)
     ld.add_action(declare_device)
     ld.add_action(declare_mic_network_interface)
+    ld.add_action(declare_use_person_pose)
+    ld.add_action(declare_person_sensor_fusion)
 
 
     # include launch
@@ -328,6 +344,34 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
     )
+    person_pose_remappings = [
+        ('/color_image', '/head_camera/d455/color/image_raw'),
+        ('/depth_image', '/head_camera/d455/aligned_depth_to_color/image_raw'),
+        ('/color_camera_info', '/head_camera/d455/color/camera_info'),
+        ('/depth_camera_info', '/head_camera/d455/aligned_depth_to_color/camera_info'),
+        ('/pointcloud', '/utlidar/cloud_livox_mid360'),
+    ]
+    person_pose = Node(
+        package='nakalab_ultralytics_ros2',
+        executable='person_pose',
+        condition=IfCondition(use_person_pose),
+        output='screen',
+        emulate_tty=True,
+        remappings=person_pose_remappings,
+        parameters=[{'run_detect': True}],
+    )
+    person_pose_3d = Node(
+        package='nakalab_ultralytics_cpp',
+        executable='person_pose_3d',
+        condition=IfCondition(use_person_pose),
+        output='screen',
+        emulate_tty=True,
+        remappings=person_pose_remappings,
+        parameters=[{
+            'ref_frame': 'map',
+            'sensor_fusion': person_sensor_fusion,
+        }],
+    )
     ld.add_action(head_camera)
     ld.add_action(head_servo)
     ld.add_action(hand)
@@ -343,6 +387,7 @@ def generate_launch_description():
     ld.add_action(odom)
     ld.add_action(scan)
     ld.add_action(whisper_node)
-
+    ld.add_action(person_pose)
+    ld.add_action(person_pose_3d)
 
     return ld

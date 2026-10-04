@@ -18,13 +18,6 @@ def generate_launch_description():
     # =========================
     # Paths
     # =========================
-    g1_cartographer_prefix = get_package_share_directory('erasers_g1_cartographer')
-    pointcloud_to_laserscan_config = os.path.join(
-        g1_cartographer_prefix,
-        'config',
-        'pointcloud_to_laserscan.yaml'
-    )
-
     nav2_param = os.path.join(
         get_package_share_directory('erasers_g1_navigation'),
         'params',
@@ -41,7 +34,7 @@ def generate_launch_description():
     use_localization = LaunchConfiguration('use_localization')
 
     default_map_yaml_file = os.path.join(
-        os.environ['HOME'],
+        os.path.expanduser('~'),
         'colcon_ws',
         'map',
         'map.yaml'

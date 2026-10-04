@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-
-from ament_index_python.packages import get_package_share_directory
 import os
 
-
-MAP_DIR = os.environ.get('HOME', '/home/roboworks') + '/g1_ws/map'
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
     ld = LaunchDescription()
 
-
-    default_localization_param_dir = os.path.join(get_package_share_directory('erasers_g1_navigation'), 'params', 'nav2_ndt_g1.yaml')
+    default_localization_param_dir = os.path.join(
+        get_package_share_directory('erasers_g1_navigation'), 'params', 'nav2_ndt_g1.yaml'
+    )
+    default_map_dir = os.path.join(os.path.expanduser('~'), 'colcon_ws', 'map')
+    default_pcd_map_path = os.path.join(default_map_dir, 'map.pcd')
 
 
     enable_reinitialization_supervisor = LaunchConfiguration('enable_reinitialization_supervisor')
@@ -75,7 +75,7 @@ def generate_launch_description():
         description='Initial pose orientation quaternion W.'
     )
     declare_pcd_map_path = DeclareLaunchArgument(
-        'pcd_map_path', default_value=MAP_DIR+'/map220.pcd',
+        'pcd_map_path', default_value=default_pcd_map_path,
         description='Full path to the PCD map file.'
     )
     declare_localization_param_dir = DeclareLaunchArgument(

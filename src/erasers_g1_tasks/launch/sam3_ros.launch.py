@@ -12,7 +12,7 @@ def generate_launch_description():
     ld = LaunchDescription()
     
     default_params_file = os.path.join(get_package_share_directory('sam3_ros'), 'params', 'demo.yaml')
-    default_model_path = os.path.join('/tmp/sam3.pt')
+    default_model_path = '/tmp/sam3.pt'
 
     params_file = LaunchConfiguration('params_file')
     model_path = LaunchConfiguration('model_path')
@@ -47,7 +47,6 @@ def generate_launch_description():
             params_file,
             {'model_path': model_path},
             {'auto_execute': False},
-            #{'qos.reliability': 'BEST_EFFORT'},
         ],
         namespace='sam3',
         output='screen'

@@ -3,8 +3,8 @@
     <Domain Id="any">
         <General>
             <Interfaces>
-                <NetworkInterface name="enp2s0" priority="default" multicast="default" />
-                <!--NetworkInterface name="lo" priority="default" multicast="default" /-->
+                <!--NetworkInterface name="enp2s0" priority="default" multicast="default" /-->
+                <NetworkInterface name="lo" priority="default" multicast="default" />
             </Interfaces>
         <AllowMulticast>spdp</AllowMulticast>
         </General>

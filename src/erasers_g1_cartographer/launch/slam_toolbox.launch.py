@@ -24,9 +24,7 @@ def generate_launch_description():
     ld = LaunchDescription()
 
     # configurations
-    default_g1_cartographer_prefix = get_package_share_directory('erasers_g1_bringup')
-    pointcloud_to_laserscan_config = os.path.join(default_g1_cartographer_prefix, 'params', 'ptl.yaml')
-    default_map_path = os.path.join(os.environ['HOME'], 'colcon_ws', 'map')
+    default_map_path = os.path.join(os.path.expanduser('~'), 'colcon_ws', 'map')
     default_map_name = 'map'
     default_save_late = 5000
 

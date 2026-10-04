@@ -43,21 +43,23 @@ def generate_launch_description():
     lightweight_openpose_ros2 = Node(
         package='lightweight_openpose_ros2',
         executable='lightweight_openpose_ros2',
+        output='screen',
         emulate_tty=True,
         parameters=[
-            {'device': device},
-            #{'qos.reliability': 'BEST_EFFORT'},
-            #{'checkpoint_path': checkpoint_path}
+            {
+                'device': device,
+                'checkpoint_path': checkpoint_path,
+            }
         ],
         remappings=remappings
     )
     lor_transformer = Node(
         package='lor_transformer',
         executable='lor_transformer',
+        output='screen',
         emulate_tty=True,
         parameters=[
             {'target_frame': 'd455_link'},
-            #{'qos.reliability': 'BEST_EFFORT'},
         ],
         remappings=remappings
     )
