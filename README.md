@@ -44,7 +44,20 @@ ssh unitree@192.168.123.164
     ```
 1. コンテナ中の ROS2 パッケージをビルドします．
     ```bash
-    docker compose run --name colcon_build --rm erasers_g1 bash -ic \
-        "colcon build --symlink-install --packages-up-to erasers_g1_ros --cmake-clean-cache \
-        --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble"
+    docker compose run --name colcon_build --rm erasers_g1 bash -ic '
+    colcon build \
+      --symlink-install \
+      --packages-up-to erasers_g1_ros \
+      --parallel-workers 1 \
+      --executor sequential \
+      --cmake-args \
+        -DROS_EDITION="ROS2" \
+        -DHUMBLE_ROS=humble \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_BUILD_PARALLEL_LEVEL=1 \
+        -DCMAKE_CXX_FLAGS="-g0 -O1 --param ggc-min-expand=20 --param ggc-min-heapsize=32768" \
+        -DCMAKE_C_FLAGS="-g0 -O1 --param ggc-min-expand=20 --param ggc-min-heapsize=32768" \
+        -DCMAKE_EXE_LINKER_FLAGS="-Wl,--no-keep-memory -Wl,--reduce-memory-overheads" \
+        -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--no-keep-memory -Wl,--reduce-memory-overheads"
+    '
     ```
