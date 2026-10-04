@@ -409,19 +409,45 @@ void RobotControllerNode::transition_to(
     joint_owned = upper_body_arbiter_.jointStateOwnsControl();
     arm_action_owned = upper_body_arbiter_.state().owner == UpperBodyOwner::ARM_ACTION;
   }
-  if ((joint_owned || arm_action_owned) &&
-    !safety_pose)
+  if (arm_action_owned && !safety_pose)
   {
     response->success = false;
     response->fsm_id = -1;
     response->api_status_code = 0;
-    response->message = joint_owned ?
-      "LOCAL_REJECT: UPPER_BODY_JOINT_STATE_OWNS_CONTROL" :
-      "LOCAL_REJECT: UPPER_BODY_ARM_ACTION_OWNS_CONTROL";
+    response->message = "LOCAL_REJECT: UPPER_BODY_ARM_ACTION_OWNS_CONTROL";
     return;
   }
-  if (joint_owned || arm_action_owned) {
-    upper_body_fault("SAFETY_POSE_REQUEST");
+  if (safety_pose) {
+    if (joint_owned || arm_action_owned) {
+      upper_body_fault("SAFETY_POSE_REQUEST");
+    }
+  } else if (joint_owned) {
+    // FSM 遷移前に事前に上半身制御を安全に false (disable) に解放
+    std::string disable_msg;
+    request_upper_body_disable(disable_msg);
+    const auto deadline = steady_now_() + std::chrono::milliseconds(1200);
+    while (steady_now_() < deadline) {
+      {
+        std::lock_guard<std::mutex> lock(upper_body_mutex_);
+        if (upper_body_arbiter_.state().phase != UpperBodyPhase::RELEASING) {
+          break;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    // タイムアウトした場合は直ちに abort して安全遮断
+    {
+      std::lock_guard<std::mutex> lock(upper_body_mutex_);
+      if (upper_body_arbiter_.jointStateOwnsControl()) {
+        upper_body_session_.abort();
+        upper_body_arbiter_.completeRelease();
+        lowcmd_sink_->close();
+      }
+    }
+    RCLCPP_INFO(
+      get_logger(),
+      "Upper-body joint control safely disabled prior to FSM transition: %s",
+      disable_msg.c_str());
   }
 
   std::unique_lock<std::mutex> transition_lock(transition_mutex_, std::try_to_lock);

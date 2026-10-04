@@ -46,6 +46,7 @@ private:
   rclcpp::Subscription<unitree_hg::msg::LowState>::SharedPtr low_state_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_latch_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr transition_sub_;
   rclcpp::Service<Enable>::SharedPtr enable_service_;
   rclcpp::Client<Enable>::SharedPtr enable_client_;
   rclcpp::TimerBase::SharedPtr pending_timer_;

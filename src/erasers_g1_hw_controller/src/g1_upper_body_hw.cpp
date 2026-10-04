@@ -61,6 +61,14 @@ hardware_interface::CallbackReturn G1UpperBodyHW::on_init(
         ++generation_;
       }
     });
+  transition_sub_ = node_->create_subscription<std_msgs::msg::Bool>(
+    "/robot_controller/transition_active", rclcpp::QoS(1).reliable().transient_local(),
+    [this](std_msgs::msg::Bool::ConstSharedPtr message) {
+      if (message->data) {
+        control_enabled_ = false;
+        ++generation_;
+      }
+    });
   pending_timer_ = node_->create_wall_timer(std::chrono::milliseconds(100), [this]() {
     if (pending_ && Clock::now() >= pending_->deadline) {
       enable_client_->remove_pending_request(pending_->request_id);
