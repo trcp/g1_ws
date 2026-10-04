@@ -409,7 +409,7 @@ RUN pip3 install -r python/install_requirements.txt &&\
 # ==========
 # GLIM build
 # ==========
-FROM gai313/ubuntu:22.04.amd64.cuda12.8.cudnn9.toolkit AS glim-amd64
+FROM gai313/ros2:humble.amd64.cuda12.8.cudnn9.toolkit AS glim-amd64
 FROM gai313/ubuntu:22.04.arm64 AS glim-arm64
 FROM g1-base AS glim-jetson
 
@@ -418,7 +418,9 @@ ARG CUDA_ARCHITECTURES=87
 USER root
 
 # Install build dependencies for GLIM and submodules
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y \
+    --no-install-recommends \
+    --allow-downgrades \
     build-essential \
     cmake \
     git \
@@ -432,7 +434,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libomp-dev \
     libpng-dev \
     libspdlog-dev \
-    && rm -rf /var/lib/apt/lists/*
+    libopencv-dev=4.5.4+dfsg-9ubuntu4 &&\
+    apt-mark hold libopencv-dev rsync &&\
+    rm -rf /var/lib/apt/lists/*
 
 ENV CUDA_HOME=/usr/local/cuda
 ENV CUDAToolkit_ROOT=/usr/local/cuda
