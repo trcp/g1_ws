@@ -1,6 +1,6 @@
 import smach
 from rclpy.node import Node
-from erasers_g1_api.robot_control import G1Control, Grasp, Collision
+from erasers_g1_api.robot_control import ArmControl
 from erasers_g1_api.tts import TTS
 
 import traceback
@@ -10,7 +10,7 @@ import math
     outcomes=['success', 'failure'],
     input_keys=['object_poses_dict_list']
 )
-def object_grasping(userdata, node: Node, arm_control: Grasp, tts_say: TTS.say, approach: str = 'side'):
+def object_grasping(userdata, node: Node, arm_control: ArmControl, tts_say: TTS.say, approach: str = 'side'):
     """
     認識した物体のリストから最初の物体を両腕で把持するステート。
 
@@ -20,7 +20,7 @@ def object_grasping(userdata, node: Node, arm_control: Grasp, tts_say: TTS.say, 
         状態間で共有されるデータ。
     node : Node
         ROS 2ノード。
-    arm_control : Grasp
+    arm_control : ArmControl
         腕の制御インスタンス。
     tts_say : TTS.say
         発話関数。
@@ -41,6 +41,11 @@ def object_grasping(userdata, node: Node, arm_control: Grasp, tts_say: TTS.say, 
         物体リストが空、あるいは把持に失敗した場合。
     """
     try:
+        # 自動把持戦略は ArmControl の責務に含まれない。
+        grasp = getattr(arm_control, "grasp", None)
+        if not callable(grasp):
+            node.get_logger().error("自動把持戦略が指定されていません")
+            return 'failure'
         if not userdata.object_poses_dict_list:
             node.get_logger().warn("No objects to grasp.")
             return 'failure'
@@ -59,7 +64,7 @@ def object_grasping(userdata, node: Node, arm_control: Grasp, tts_say: TTS.say, 
         
         # 把持の実行（新メソッド grasp() は自動的に最適な腕を選択します）
         node.get_logger().info(f"Initiating dynamic grasp for '{name}'")
-        success = arm_control.grasp(target_name=name)
+        success = grasp(target_name=name)
 
         if success:
             tts_say("Grasping finished.")

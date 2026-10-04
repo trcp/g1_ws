@@ -1,0 +1,20 @@
+robot_manager:
+  ros__parameters:
+    lowstate_topic: /lowstate
+    bms_topic: /lf/bmsstate
+    joint_states_topic: /joint_states
+    imu_topic: /imu
+    battery_topic: /battery_states
+    diagnostics_topic: /diagnostics
+    imu_frame_id: imu_in_torso
+    joint_state_frame_id: ""
+    publish_joint_states: true
+    publish_imu: true
+    publish_battery: true
+    publish_diagnostics: true
+    joint_publish_rate_hz: 30.0
+    imu_publish_rate_hz: 200.0
+    diagnostics_publish_rate_hz: 1.0
+    lowstate_stale_timeout_sec: 0.2
+    bms_stale_timeout_sec: 2.0
+    invalid_joint_sample_policy: drop

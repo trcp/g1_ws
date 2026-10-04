@@ -1,0 +1,17 @@
+# Request-level command selectors
+int8 ZERO_TORQUE=0
+int8 DAMP=1
+int8 LOCKED_STAND=2
+int8 LOCKED_SEAT=3
+int8 START=4
+int8 LIE=5
+# 旧 G1 の running / squat を既存番号を変更せず追加する。
+int8 RUNNING=6
+int8 SQUAT=7
+
+int8 mode
+---
+bool success
+int32 fsm_id
+int32 api_status_code
+string message

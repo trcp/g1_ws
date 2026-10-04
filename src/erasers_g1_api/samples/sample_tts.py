@@ -1,42 +1,27 @@
 #!/usr/bin/env python3
+"""G1 標準 TTS と VOICEVOX（話者 26）で短い発話を行う。"""
 
-'''
-G1 から任意のテキストを発話させるサンプルコード．
-G1 のデフォルト TTS 機能を使うため，英語のみの発話をサポートします．
-
-ros2 run erasers_g1_api sample_tts
-
-'''
-
-# ROS
-from rclpy.node import Node
 import rclpy
+from rclpy.node import Node
 
-# TTS
-from erasers_g1_api.tts import TTS
+from erasers_g1_api.tts import VuiTTS, VoicevoxTTS
 
 
 def main():
-    # init rclpy
+    """再生完了を待ち、終了時に ROS ノードを片付ける。"""
     rclpy.init()
-
-    # create node
-    node = Node('sample_tts')
-
-    # init TTS
-    tts = TTS(node)
-
-    # create say func
-    say = tts.say
-
-    # let's speaking!
-    say('Hello! I am erasers G1!')
-    say('Do you like a potato?')
-
-    # 日本語を書くと Japanese... Japanese... と意図しない発話をする．
-    say('こんにちは')
+    node = Node("sample_tts")
+    try:
+        vui = VuiTTS(node)
+        voicevox = VoicevoxTTS(node)  # 既定の speaker_id は 26。
+        if not vui.say("Hello. I am G1."):
+            node.get_logger().error("G1 標準 TTS の発話に失敗しました")
+        if not voicevox.say("こんにちは。ジーワンです。"):
+            node.get_logger().error("VOICEVOX の発話に失敗しました")
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 
-# execute from python
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

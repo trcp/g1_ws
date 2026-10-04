@@ -1,0 +1,4 @@
+robot_controller:
+  ros__parameters:
+    # Arm Action の運用対象。関節制御の許可集合は 500 / 501 / 801。
+    allow_fsm_ids: [500, 801]

@@ -1,0 +1,7 @@
+<library path="dual_arm_constraint_sampler">
+  <class name="erasers_g1_moveit/DualArmConstraintSampler"
+         type="erasers_g1_moveit::DualArmConstraintSamplerAllocator"
+         base_class_type="constraint_samplers::ConstraintSamplerAllocator">
+    <description>共通の腰状態と更新済み座標変換を使う双腕サンプラ</description>
+  </class>
+</library>

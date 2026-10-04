@@ -15,7 +15,7 @@ x-gpu: &gpu
 
 
 # ==================
-# KATANA Services
+# G1 / KATANA Services
 # ==================
 services:
   katana:
@@ -58,18 +58,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: main
       args:
         # DO NOT EDIT
-        - OS=22.04
-        - ROS=humble
         - USERNAME=${USER}
         - GROUPNAME=${USER}
         - PASSWORD
         # Arch settings
-        - TARGET_ARCH=cuda
-        - CUDA=13.0.0
-        - GLIM_INSTALL_MODE=cuda-source
+        - ARCH=amd64
+        - CTRANSLATE_ARCH=amd64
+        - TARGET=katana
+        - WORKSPACE_TYPE=desktop
   
   erasers_g1:
     image: erasers_g1:g1
@@ -129,13 +127,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: main
+      target: base
       args:
         # DO NOT EDIT
         - L4T_VERSION=36.4
-        - SOC=t234
         - USERNAME=${USER}
         - GROUPNAME=${USER}
         # Arch settings
-        - TARGET_ARCH=jetson
-        - GLIM_INSTALL_MODE=cuda-source
+        - ARCH=arm64
+        - CTRANSLATE_ARCH=jetson
+        - TARGET=g1
+        - WORKSPACE_TYPE=base

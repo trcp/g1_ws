@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>erasers_g1_moveit</name>
+  <version>0.0.0</version>
+  <description>TODO: Package description</description>
+  <maintainer email="nakatogawagai@gmail.com">roboworks</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <depend>moveit_ros</depend>
+  <depend>moveit_core</depend>
+  <depend>pluginlib</depend>
+  <depend>rviz_common</depend>
+  <depend>moveit_ros_visualization</depend>
+  <depend>qtbase5-dev</depend>
+  <depend>moveit_planners_ompl</depend>
+  <depend>moveit_simple_controller_manager</depend>
+  <depend>pick_ik</depend>
+
+  <depend>erasers_g1_hw_controller</depend>
+  <exec_depend>erasers_g1_common</exec_depend>
+  <exec_depend>erasers_g1_description</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>rclpy</test_depend>
+  <test_depend>moveit_msgs</test_depend>
+  <test_depend>control_msgs</test_depend>
+  <test_depend>rosgraph_msgs</test_depend>
+  <test_depend>sensor_msgs</test_depend>
+  <test_depend>geometry_msgs</test_depend>
+  <test_depend>shape_msgs</test_depend>
+  <test_depend>tf2_msgs</test_depend>
+  <test_depend>visualization_msgs</test_depend>
+  <test_depend>std_msgs</test_depend>
+  <test_depend>trajectory_msgs</test_depend>
+  <test_depend>rcl_interfaces</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

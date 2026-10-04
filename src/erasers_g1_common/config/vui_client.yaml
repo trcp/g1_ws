@@ -1,0 +1,8 @@
+vui_client:
+  ros__parameters:
+    audio_app_name: erasers_g1_audio
+    playback_completion_quiet_sec: 2.0
+    # NIC は起動引数で明示する。R1 固有の機器名は流用しない。
+    mic_network_interface: ""
+    mic_remote_api_policy: disabled
+    noise_canceling: false

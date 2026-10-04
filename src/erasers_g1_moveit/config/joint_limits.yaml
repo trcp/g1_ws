@@ -1,0 +1,108 @@
+# G1 23 DOF の上半身計画上限。
+# robot_controller の UpperBodyPolicy と一致させ、実行時の速度制限による遅れを抑える。
+# 腕: 2.0 rad/s、1.50 rad/s²。腰: 2.0 rad/s、0.30 rad/s²。
+# RViz と API の既定スケーリング 1.0 でこの上限を使用する。
+# 位置・努力上限と URDF の機械仕様は維持する。
+
+joint_limits:
+  # -- 腰部 --
+  waist_yaw_joint:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 0.30
+    has_jerk_limits: false
+    has_effort_limits: true
+    max_effort: 88.0
+
+  # -- 左腕 --
+  left_shoulder_pitch_joint:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 1.50
+    has_jerk_limits: false
+    has_effort_limits: true
+    max_effort: 25.0
+
+  left_shoulder_roll_joint:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 1.50
+    has_jerk_limits: false
+    has_effort_limits: true
+    max_effort: 25.0
+
+  left_shoulder_yaw_joint:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 1.50
+    has_jerk_limits: false
+    has_effort_limits: true
+    max_effort: 25.0
+
+  left_elbow_joint:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 1.50
+    has_jerk_limits: false
+    has_effort_limits: true
+    max_effort: 25.0
+
+  left_wrist_roll_joint:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 1.50
+    has_jerk_limits: false
+    has_effort_limits: true
+    max_effort: 12.0
+
+  # -- 右腕 --
+  right_shoulder_pitch_joint:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 1.50
+    has_jerk_limits: false
+    has_effort_limits: true
+    max_effort: 25.0
+
+  right_shoulder_roll_joint:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 1.50
+    has_jerk_limits: false
+    has_effort_limits: true
+    max_effort: 25.0
+
+  right_shoulder_yaw_joint:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 1.50
+    has_jerk_limits: false
+    has_effort_limits: true
+    max_effort: 25.0
+
+  right_elbow_joint:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 1.50
+    has_jerk_limits: false
+    has_effort_limits: true
+    max_effort: 25.0
+
+  right_wrist_roll_joint:
+    has_velocity_limits: true
+    max_velocity: 2.0
+    has_acceleration_limits: true
+    max_acceleration: 1.50
+    has_jerk_limits: false
+    has_effort_limits: true
+    max_effort: 12.0

@@ -1,0 +1,9 @@
+# 加速度は実機の定格ではなく、仮想検証用の設計値。
+# 速度上限は URDF と joint_limits.yaml に定義した仕様値を使用する。
+joint_limits:
+  xl330_joint:
+    has_acceleration_limits: true
+    max_acceleration: 0.5
+  d455_joint:
+    has_acceleration_limits: true
+    max_acceleration: 0.5

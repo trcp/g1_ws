@@ -1,0 +1,16 @@
+# 双腕は単腕サブグループの IK を使用する。
+arm_left: &id001
+  kinematics_solver: pick_ik/PickIkPlugin
+  kinematics_solver_timeout: 0.05
+  mode: global
+  stop_optimization_on_valid_solution: true
+  position_scale: 1.0
+  rotation_scale: 0.0
+  position_threshold: 0.005
+  orientation_threshold: 0.1
+  cost_threshold: 0.001
+  minimal_displacement_weight: 0.0
+  gd_step_size: 0.0001
+arm_left_with_waist: *id001
+arm_right: *id001
+arm_right_with_waist: *id001

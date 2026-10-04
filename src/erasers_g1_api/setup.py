@@ -46,6 +46,9 @@ setup(
     entry_points={
         'console_scripts': [
             'sample_tts = samples.sample_tts:main',
+            'sample_whisper_recongnition = samples.sample_whisper_recongnition:main',
+            'whisper_node = nodes.whisper_node:main',
+            'emergency_stop_announcer = nodes.emergency_stop_announcer:main',
             'sample_head_control = samples.sample_head_control:main',
             'sample_hand_control = samples.sample_hand_control:main',
             'sample_amazing_hand_control = samples.sample_amazing_hand_control:main',

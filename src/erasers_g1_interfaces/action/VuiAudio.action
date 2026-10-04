@@ -1,0 +1,60 @@
+# Audio source type
+uint8 SOURCE_PCM16_MONO_16K=0
+uint8 SOURCE_WAV_BYTES=1
+uint8 SOURCE_WAV_FILE=2
+
+# Goal
+uint8 source_type 2
+
+# SOURCE_PCM16_MONO_16K:
+#   audio_data must contain raw PCM S16LE / mono / 16000 Hz bytes.
+#
+# SOURCE_WAV_BYTES:
+#   audio_data must contain a complete uncompressed integer PCM WAV file.
+#   The server converts supported mono/stereo 8/16/24/32-bit PCM WAV input to
+#   raw PCM S16LE / mono / 16000 Hz before sending it to Unitree.
+#
+# SOURCE_WAV_FILE:
+#   file_path must resolve to an absolute path visible inside the vui_client container.
+#   Relative paths are rejected.
+#   Shell-side command substitution such as $(ros2 pkg prefix ...)/... is allowed only
+#   when the value passed to this action field is already expanded to an absolute path.
+#   The node must not implement literal $(...) expansion or ~ expansion internally.
+#   The same server-side WAV conversion as SOURCE_WAV_BYTES is applied.
+# Compressed formats such as MP3, AAC, OGG, and FLAC are rejected.
+uint8[] audio_data
+string file_path
+
+# Metadata for SOURCE_PCM16_MONO_16K.
+# These values must be 16000 / 1 / 2 in the initial implementation.
+uint32 sample_rate 16000
+uint8 channels 1
+uint8 sample_width_bytes 2
+
+# Empty app_name uses node parameter default.
+# Empty stream_id is replaced by an internally generated stream id.
+string app_name
+string stream_id
+
+# If true, call Unitree STOP_PLAY after all chunks have been sent.
+bool stop_after_play true
+
+---
+# Result
+# success=true: 今回の request 後に PLAYING を観測し、最後の STOPPED が playback_completion_quiet_sec の間維持された場合のみ。
+bool success
+string message
+# bytes_sent: Unitree API に受理された PCM byte 数。
+uint32 bytes_sent
+uint32 total_bytes
+uint32 chunks_sent
+
+---
+# Feedback
+float32 time
+# done=true: 全 byte 転送完了時ではなく、最後の chunk 後の stable STOPPED が確認された時のみ。
+bool done
+# bytes_sent: Unitree API に受理された PCM byte 数。
+uint32 bytes_sent
+uint32 total_bytes
+uint32 chunks_sent

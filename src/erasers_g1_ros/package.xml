@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>erasers_g1_ros</name>
+  <version>0.0.0</version>
+  <description>erasers_g1_ros meta package.</description>
+  <maintainer email="nakartogawa.drone@gmail.com">GAI-313</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rosbag2_storage_mcap</depend>
+  <depend>rosidl_generator_dds_idl</depend>
+  <!--depend>unitree_ros2_example</depend-->
+  <depend>nakalab_realsense</depend>
+  <depend>amazing_hand_nodes</depend>
+  <depend>erasers_g1_common</depend>
+  <depend>erasers_g1_api</depend>
+  <depend>erasers_g1_hw_controller</depend>
+  <depend>erasers_g1_description</depend>
+  <depend>erasers_g1_bringup</depend>
+  <depend>erasers_g1_cartographer</depend>
+  <depend>erasers_g1_navigation</depend>
+  <depend>erasers_g1_moveit</depend>
+  <!--depend>g1_slam</depend-->
+  <depend>erasers_g1_head_servo_controller</depend>
+  <depend>erasers_g1_tasks</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

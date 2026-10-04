@@ -1,0 +1,9 @@
+<library path="erasers_g1_hw_controller">
+  <class name="erasers_g1_hw_controller/G1UpperBodyHW"
+         type="erasers_g1_hw_controller::G1UpperBodyHW"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Hardware interface for Unitree G1 upper body control via topics.
+    </description>
+  </class>
+</library>

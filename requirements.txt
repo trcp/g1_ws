@@ -1,9 +1,15 @@
-setuptools==58.2.0
-pyserial
+# ROS
+setuptools<=68.2.2
+numpy==1.26.4
 rustypot
 transform3d
-faster-whisper
 
+# Recongnition
 git+https://github.com/openai/CLIP.git
 ultralytics
-numpy==1.26.4
+faster-whisper
+pycocotools>=2.0.0
+
+# VLM
+google-genai
+langchain-google-genai

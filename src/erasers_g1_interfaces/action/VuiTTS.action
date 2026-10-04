@@ -1,0 +1,17 @@
+# 定数
+int8 ENGLISH=1
+int8 CHINESE=0
+
+# ゴール
+int8 speaker_id 1  # 0: CHINESE, 1: ENGLISH (デフォルト値 1)
+string text
+---
+# 結果
+# success=true: 今回の request 後に PLAYING を観測し、最後の STOPPED が playback_completion_quiet_sec の間維持された場合のみ。
+bool success
+string message
+---
+# フィードバック
+float32 time
+# done=true: API request 受理時や中間 STOPPED ではなく、安定した再生終了が確認された時のみ。
+bool done

@@ -19,7 +19,7 @@
 
 1. ワークスペースをビルドする
     ```bash
-    colcon build --symlink-install --packages-up-to erasers_g1
+    colcon build --symlink-install --packages-up-to erasers_g1_ros
     ```
 
 1. chrony をインストールする
@@ -46,8 +46,31 @@
 ---
 
 ```bash
-docker compose run --name colcon_build --rm erasers_g1 bash -ic "colcon build --symlink-install --packages-up-to erasers_g1 --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble --cmake-clean-cache"
+docker compose run --name colcon_build --rm g1 bash -ic "colcon build --symlink-install --packages-up-to erasers_g1_ros --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble --cmake-clean-cache"
 ```
 ```bash
-docker compose run --name colcon_build --rm katana bash -ic "colcon build --symlink-install --packages-up-to erasers_g1 --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble --cmake-clean-cache"
+docker compose run --name colcon_build --rm katana bash -ic "colcon build --symlink-install --packages-up-to erasers_g1_ros --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble --cmake-clean-cache"
 ```
+
+## パッケージ名の対応
+
+G1 用パッケージは `erasers_g1_*` に統一しています．`erasers_g1_api`，`amazing_hand_*`，外部依存パッケージの名前は維持しています．
+
+| 旧名 | 現在の名前 |
+| --- | --- |
+| `erasers_g1` | `erasers_g1_ros` |
+| `erasers_g1_common_cpp` | `erasers_g1_common` |
+| `g1_srvs` | `erasers_g1_interfaces` |
+| `g1_bringup` | `erasers_g1_bringup` |
+| `g1_description` | `erasers_g1_description` |
+| `g1_hw_controller` | `erasers_g1_hw_controller` |
+| `g1_moveit` | `erasers_g1_moveit` |
+| `g1_cartographer` | `erasers_g1_cartographer` |
+| `g1_navigation` | `erasers_g1_navigation` |
+| `robot_tasks` | `erasers_g1_tasks` |
+| `head_servo_controller` | `erasers_g1_head_servo_controller` |
+| `person_tracker` | `erasers_g1_person_tracker` |
+| `machida_navigation` | `erasers_g1_machida_navigation` |
+| `obstacle_detection` | `erasers_g1_obstacle_detection` |
+
+`ros2 run`・`ros2 launch` のパッケージ指定，Python の import，独自インターフェースの型名には現在の名前を使用してください．実行コマンド名，トピック・サービス・Action 名，ロボットの関節名は改名によって変更していません．

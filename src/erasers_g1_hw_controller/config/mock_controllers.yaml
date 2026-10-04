@@ -1,0 +1,46 @@
+# モック専用。実機のシリアルドライバは使用しない。
+controller_manager:
+  ros__parameters:
+    update_rate: 120
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+    upper_body_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+    head_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+# 制御周期を整数分周し、関節状態を 30 Hz で配信する。
+joint_state_broadcaster:
+  ros__parameters:
+    update_rate: 30
+
+upper_body_controller:
+  ros__parameters:
+    joints:
+      - waist_yaw_joint
+      - left_shoulder_pitch_joint
+      - left_shoulder_roll_joint
+      - left_shoulder_yaw_joint
+      - left_elbow_joint
+      - left_wrist_roll_joint
+      - right_shoulder_pitch_joint
+      - right_shoulder_roll_joint
+      - right_shoulder_yaw_joint
+      - right_elbow_joint
+      - right_wrist_roll_joint
+    command_interfaces: [position]
+    state_interfaces: [position]
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: true
+    constraints:
+      goal_time: 0.6
+
+head_controller:
+  ros__parameters:
+    joints: [xl330_joint, d455_joint]
+    command_interfaces: [position]
+    state_interfaces: [position]
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false
+    constraints:
+      goal_time: 0.6

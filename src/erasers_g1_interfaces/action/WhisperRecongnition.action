@@ -1,0 +1,17 @@
+# 空文字列は言語を自動検出する。明示指定は en または ja。
+string language ""
+float32 minimum_recording_time 1.0
+float32 max_silence_time 1.5
+float32 maximum_recording_time 30.0
+---
+string result
+string language
+bool success
+string message
+---
+uint8 WAITING_FOR_MIC=0
+uint8 RECORDING=1
+uint8 TRANSCRIBING=2
+uint8 phase
+float32 elapsed_time
+string partial_result

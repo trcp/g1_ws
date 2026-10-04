@@ -1,201 +1,482 @@
-# Build image arguments
-ARG OS=22.04
-ARG CUDA=13.0.0
+# Basic environment values
+ARG ARCH=amd64
+ARG CTRANSLATE_ARCH=amd64
 ARG L4T_VERSION=36.4
-ARG SOC=t234
-ARG TARGET_ARCH=amd64
-ARG ROS=humble
-ARG GLIM_CUDA_VERSION=auto
-ARG GLIM_INSTALL_MODE=auto
+ARG TARGET=g1
+ARG WORKSPACE_TYPE=base
+# voicevox values
+ARG VOICEVOX_VERSION=0.17.0
+ARG VOICEVOX_ONNXRUNTIME_VERSION=1.23.2
+ARG OPEN_JTALK_VERSION=1.11.1
+ARG OPEN_JTALK_DICT_VERSION=1.11
 
 
-# ===============
-# base image list 
-# ===============
-FROM gai313/ros2:${ROS}.amd64 AS ros2-amd64
-FROM gai313/ros2:${ROS}.arm64 AS ros2-arm64
-FROM gai313/ros2:${ROS}.cuda.${CUDA} AS ros2-cuda
-FROM gai313/ros2:humble.jetson.${SOC}.r${L4T_VERSION}.runtime AS ros2-jetson
+# base images
+FROM gai313/ros2:humble.jetson.t234.r36.4.runtime AS g1-36.4
+FROM gai313/ros2:humble.amd64.cuda12.8.cudnn9.toolkit AS katana-amd64
 
 
-# ==========
-# base image
-# ==========
-FROM ros2-${TARGET_ARCH} AS main
-
-ARG ROS=humble
-ARG CUDA=13.0.0
-ARG GLIM_CUDA_VERSION=auto
-ARG GLIM_INSTALL_MODE=auto
-
-# build args
-ARG USERNAME
-ARG GROUPNAME
-ARG UID=1000
-ARG GID=1000
-ARG PASSWORD=123
-
-# Add user
-RUN groupadd -g $GID $GROUPNAME &&\
-    useradd -m -s /bin/bash -u $UID -g $GID -G sudo $USERNAME &&\
-    echo $USERNAME:$PASSWORD | chpasswd
-
-# Build LiVOX SDK
-USER $USERNAME
-WORKDIR /home/${USERNAME}
-RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git
-USER root
-RUN cd Livox-SDK2 && mkdir build && cd build && cmake .. && make -j && sudo make install
-
+# ===========
+# katana base
+# ===========
+FROM katana-${ARCH} AS katana-base
 # install realsense sdk
 USER root
 RUN mkdir -p /etc/apt/keyrings &&\
     curl -sSf https://librealsense.realsenseai.com/Debian/librealsenseai.asc | gpg --dearmor | sudo tee /etc/apt/keyrings/librealsenseai.gpg > /dev/null &&\
     echo "deb [signed-by=/etc/apt/keyrings/librealsenseai.gpg] https://librealsense.realsenseai.com/Debian/apt-repo $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/librealsense.list &&\
     apt update
-
-# install GLIM
-COPY assets/install_glim.sh /tmp/install_glim.sh
-RUN chmod +x /tmp/install_glim.sh && \
-    /tmp/install_glim.sh ${ROS} ${GLIM_INSTALL_MODE} ${CUDA} && \
-    rm /tmp/install_glim.sh
-
-# resolve mapeditor depends
-RUN apt-get update && apt-get install -y \
-    python3-tk \
-    python3-pil.imagetk \
-    ros-${ROS}-navigation2 ros-${ROS}-nav2-bringup &&\
-    rm -rf /var/lib/apt/lists/*
-
-# Fix OpenCV Version
-RUN apt-get update && apt-get install -y --allow-downgrades \
-    libopencv-dev=4.5.4+dfsg-9ubuntu4 \
-    && apt-mark hold libopencv-dev rsync &&\
-    rm -rf /var/lib/apt/lists/*
-
-# install python packages
-# USER $USERNAME
-# RUN pip install --index-url https://pypi.org/simple \
-#     pyserial \
-#     rustypot \
-#     transform3d \
-#     faster-whisper \
-#     "numpy==1.22.4" \
-#     "setuptools==58.2.0"
-
-# Add workspace
+# Add user
+ARG USERNAME
+ARG GROUPNAME
+ARG UID=1000
+ARG GID=1000
+ARG PASSWORD
+RUN groupadd -g $GID $GROUPNAME &&\
+    useradd -m -s /bin/bash -u $UID -g $GID -G sudo $USERNAME &&\
+    echo $USERNAME:$PASSWORD | chpasswd
+# Build LiVOX SDK
 USER $USERNAME
-WORKDIR /home/${USERNAME}/colcon_ws
-COPY robot_tasks.repos ./robot_tasks.repos
-COPY depends.repos depends.repos
-COPY src ./src
-RUN . /opt/ros/${ROS}/setup.bash &&\
-    mkdir thirdparty &&\
-    vcs import thirdparty < depends.repos &&\
-    vcs import thirdparty < robot_tasks.repos
-
-# build MID-360
-USER $USERNAME
-RUN mv thirdparty/livox_ros_driver2/package_ROS2.xml thirdparty/livox_ros_driver2/package.xml
-
-# resolve depends
+WORKDIR /home/${USERNAME}
+RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git
 USER root
-RUN . /opt/ros/${ROS}/setup.bash &&\
-    apt-get update &&\
-    rosdep install -y -i --from-path .\
-    --skip-keys pointcloud_to_2dmap \
-    --skip-keys pcl_localization_ros2 \
-    --skip-keys direct_lidar_inertial_odometry \
-    --skip-keys fast_lio \
-    --skip-keys lightweight_openpose_ros2 \
-    --skip-keys sam3_ros \
-    --skip-keys nakalab_ultralutics_ros2 \
-    --skip-keys glim_ros &&\
-    rm -rf /var/lib/apt/lists/*
-
+RUN cd Livox-SDK2 && mkdir build && cd build && cmake .. && make -j && sudo make install
+# Download depends
+WORKDIR /home/${USERNAME}/colcon_ws
+USER $USERNAME
+COPY depends.repos depends.repos
+RUN vcs import . < depends.repos
 # Optimize pointcloud_to_2dmap for the ROS Humble/PCL toolchain
 RUN sed -i 's/boost::make_shared<pcl::PointCloud<pcl::PointXYZ>>()/pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>()/' \
     ./thirdparty/pointcloud_to_2dmap/src/pointcloud_to_2dmap.cpp && \
     sed -i 's/${CV_INCLUDE_DIRS}/${OpenCV_INCLUDE_DIRS}/g' \
     ./thirdparty/pointcloud_to_2dmap/CMakeLists.txt
-
 # COPY amcl2 code
 COPY assets/emcl2_node.cpp ./thirdparty/emcl2/src/emcl2_node.cpp
 
-# setup lightweight_openpose_ros2
-# WORKDIR /home/${USERNAME}/colcon_ws/thirdparty/lightweight_openpose_ros2
-# RUN pip install --index-url https://pypi.org/simple -r requirements.txt &&\
-#     cd ./lightweight_openpose_ros2/datas/ &&\
-#     wget https://download.01.org/opencv/openvino_training_extensions/models/human_pose_estimation/checkpoint_iter_370000.pth
 
-# # setup sam3_ros
-# WORKDIR /home/${USERNAME}/colcon_ws
-# RUN pip install --index-url https://pypi.org/simple -U ultralytics &&\
-#     pip install --index-url https://pypi.org/simple git+https://github.com/openai/CLIP.git
-
-# # setup robotics ER
-# RUN pip install --index-url https://pypi.org/simple -q google-genai &&\
-#     pip install --index-url https://pypi.org/simple "numpy==1.26.4"
+# =============
+# g1 base image
+# =============
+FROM g1-${L4T_VERSION} AS g1-base
+# Fix OpenCV Version
+RUN apt-get update && apt-get install -y --allow-downgrades \
+    libopencv-dev=4.5.4+dfsg-9ubuntu4 \
+    && apt-mark hold libopencv-dev rsync &&\
+    rm -rf /var/lib/apt/lists/*
+# install realsense sdk
+USER root
+RUN mkdir -p /etc/apt/keyrings &&\
+    curl -sSf https://librealsense.realsenseai.com/Debian/librealsenseai.asc | gpg --dearmor | sudo tee /etc/apt/keyrings/librealsenseai.gpg > /dev/null &&\
+    echo "deb [signed-by=/etc/apt/keyrings/librealsenseai.gpg] https://librealsense.realsenseai.com/Debian/apt-repo $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/librealsense.list &&\
+    apt update
+# Add user
+ARG USERNAME
+ARG GROUPNAME
+ARG UID=1000
+ARG GID=1000
+ARG PASSWORD
+RUN groupadd -g $GID $GROUPNAME &&\
+    useradd -m -s /bin/bash -u $UID -g $GID -G sudo $USERNAME &&\
+    echo $USERNAME:$PASSWORD | chpasswd
+# Build LiVOX SDK
 USER $USERNAME
-COPY ./requirements.txt ./requirements.txt
-RUN pip install --index-url https://pypi.org/simple -r requirements.txt
+WORKDIR /home/${USERNAME}
+RUN git clone https://github.com/Livox-SDK/Livox-SDK2.git
+USER root
+RUN cd Livox-SDK2 && mkdir build && cd build && cmake .. && make -j && sudo make install
+# Download depends
+WORKDIR /home/${USERNAME}/colcon_ws
+USER $USERNAME
+COPY depends.repos depends.repos
+RUN vcs import . < depends.repos
+# Optimize pointcloud_to_2dmap for the ROS Humble/PCL toolchain
+RUN sed -i 's/boost::make_shared<pcl::PointCloud<pcl::PointXYZ>>()/pcl::make_shared<pcl::PointCloud<pcl::PointXYZ>>()/' \
+    ./thirdparty/pointcloud_to_2dmap/src/pointcloud_to_2dmap.cpp && \
+    sed -i 's/${CV_INCLUDE_DIRS}/${OpenCV_INCLUDE_DIRS}/g' \
+    ./thirdparty/pointcloud_to_2dmap/CMakeLists.txt
+# COPY amcl2 code
+COPY assets/emcl2_node.cpp ./thirdparty/emcl2/src/emcl2_node.cpp
 
-# build workspace
-ENV ROS_EDITION=ROS2
-ENV HUMBLE_ROS=humble
+
+# ====================
+# Model Download
+# ====================
+FROM gai313/ubuntu:22.04.amd64 AS modeldownloader-amd64
+FROM gai313/ubuntu:22.04.arm64 AS modeldownloader-arm64
+FROM modeldownloader-${ARCH} AS modeldownloader
+
+# Download openpose weighgt
+RUN mkdir -p /tmp/lightweight_openpose && wget -O /tmp/lightweight_openpose/lightweight_openpose.pth https://download.01.org/opencv/openvino_training_extensions/models/human_pose_estimation/checkpoint_iter_370000.pth
+# Download Whisper model
+ARG WHISPER_MODEL=faster-whisper-medium
+RUN git clone https://huggingface.co/Systran/${WHISPER_MODEL} /tmp/whisper
+# Download Depth Model
+RUN set -eux; \
+    mkdir -p /tmp/hitnet; \
+    curl \
+        --fail \
+        --location \
+        --retry 5 \
+        --retry-delay 2 \
+        --retry-all-errors \
+        "https://s3.ap-northeast-2.wasabisys.com/pinto-model-zoo/142_HITNET/resources.tar.gz" \
+        -o /tmp/hitnet_resources.tar.gz; \
+    tar \
+        -xzf /tmp/hitnet_resources.tar.gz \
+        -C /tmp/hitnet; \
+    rm -f /tmp/hitnet_resources.tar.gz
+
+
+# ====================
+# Voicevox Wheel Build
+# ====================
+FROM gai313/ubuntu:22.04.amd64 AS voicevox-amd64
+FROM gai313/ubuntu:22.04.arm64 AS voicevox-arm64
+FROM voicevox-${ARCH} AS voicevox
+ARG VOICEVOX_VERSION
+
+# install build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        pkg-config \
+        libssl-dev \
+        ca-certificates \
+        curl \
+        git \
+        python3-dev \
+        python3-pip && \
+    rm -rf /var/lib/apt/lists/*
+# install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf \
+    https://sh.rustup.rs | sh -s -- -y
+
+ENV CARGO_HOME=/root/.cargo
+ENV RUSTUP_HOME=/root/.rustup
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# install Python packages
+RUN pip install --upgrade pip &&\
+    pip install \
+    "poetry>=2" \
+    "maturin==1.10.2"
+# clone voicevox
+RUN git clone \
+    --branch "${VOICEVOX_VERSION}" \
+    --depth 1 \
+    https://github.com/VOICEVOX/voicevox_core.git
+
+WORKDIR /voicevox_core
+# set version
+RUN cargo install cargo-edit \
+    --version '^0.11' \
+    --locked &&\
+    cargo set-version "${VOICEVOX_VERSION}" \
+    --exclude voicevox_core_python_api \
+    --exclude xtask &&\
+    sed -i \
+    "s/version = \"0\.0\.0\"/version = \"${VOICEVOX_VERSION}\"/" \
+    crates/voicevox_core_python_api/pyproject.toml
+# install wheel
+RUN rm -rf target/wheels &&\
+    cd crates/voicevox_core_python_api &&\
+    poetry install --with dev &&\
+    cd ../../ &&\
+    maturin build \
+    --manifest-path crates/voicevox_core_python_api/Cargo.toml \
+    --release \
+    --locked
+
+
+# =====================
+# Voicevox VVM Download
+# =====================
+# vvm download environment base images
+FROM gai313/ubuntu:22.04.amd64 AS vvm-amd64
+FROM gai313/ubuntu:22.04.arm64 AS vvm-arm64
+FROM vvm-${ARCH} AS vvm
+ARG VOICEVOX_VERSION
+
+# install build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        curl \
+        git &&\
+    rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    mkdir -p /vvm; \
+    VVM_BASE_URL="https://github.com/VOICEVOX/voicevox_vvm/releases/download/${VOICEVOX_VERSION}"; \
+    \
+    for ID in $(seq 0 21); do \
+        FILE="${ID}.vvm"; \
+        echo "============================================================"; \
+        echo "Downloading ${FILE}"; \
+        echo "============================================================"; \
+        \
+        curl \
+            --fail \
+            --location \
+            --show-error \
+            --silent \
+            --retry 5 \
+            --retry-delay 3 \
+            --retry-all-errors \
+            --connect-timeout 30 \
+            "${VVM_BASE_URL}/${FILE}" \
+            --output "/vvm/${FILE}"; \
+    done
+RUN set -eux; \
+    VVM_BASE_URL="https://github.com/VOICEVOX/voicevox_vvm/releases/download/0.17.0"; \
+    \
+    curl \
+        --fail \
+        --location \
+        --show-error \
+        --silent \
+        --retry 5 \
+        --retry-delay 3 \
+        --retry-all-errors \
+        "${VVM_BASE_URL}/TERMS.txt" \
+        --output "/vvm/TERMS.txt"; \
+    \
+    curl \
+        --fail \
+        --location \
+        --show-error \
+        --silent \
+        --retry 5 \
+        --retry-delay 3 \
+        --retry-all-errors \
+        "${VVM_BASE_URL}/README.txt"
+RUN set -eux; \
+    for ID in $(seq 0 21); do \
+        FILE="/vvm/${ID}.vvm"; \
+        \
+        if [ ! -s "${FILE}" ]; then \
+            echo "ERROR: VVM file is missing or empty: ${FILE}" >&2; \
+            exit 1; \
+        fi; \
+    done; \
+    \
+    echo "All VOICEVOX VVM files were downloaded successfully."; \
+    ls -lh "/vvm"
+
+
+# =============================
+# Voicevox OnnxRuntime Download
+# =============================
+# runtime dependency download environment
+FROM gai313/ubuntu:22.04.amd64 AS vv_onnxruntime-amd64
+FROM gai313/ubuntu:22.04.arm64 AS vv_onnxruntime-arm64
+FROM vv_onnxruntime-${ARCH} AS vv_onnxruntime
+ARG VOICEVOX_ONNXRUNTIME_VERSION
+ARG OPEN_JTALK_VERSION
+ARG OPEN_JTALK_DICT_VERSION
+
+# install download / extract dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        tar \
+        gzip && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    mkdir -p /onnxruntime; \
+    \
+    case "$(dpkg --print-architecture)" in \
+        amd64) \
+            ORT_ARCH="x64"; \
+            ;; \
+        arm64) \
+            ORT_ARCH="arm64"; \
+            ;; \
+        *) \
+            echo "ERROR: Unsupported architecture for VOICEVOX ONNX Runtime: $(dpkg --print-architecture)" >&2; \
+            exit 1; \
+            ;; \
+    esac; \
+    \
+    ORT_FILE="voicevox_onnxruntime-linux-${ORT_ARCH}-${VOICEVOX_ONNXRUNTIME_VERSION}.tgz"; \
+    ORT_URL="https://github.com/VOICEVOX/onnxruntime-builder/releases/download/voicevox_onnxruntime-${VOICEVOX_ONNXRUNTIME_VERSION}/${ORT_FILE}"; \
+    \
+    curl \
+        --fail \
+        --location \
+        --show-error \
+        --silent \
+        --retry 5 \
+        --retry-delay 3 \
+        --retry-all-errors \
+        --connect-timeout 30 \
+        "${ORT_URL}" \
+        --output "/tmp/${ORT_FILE}"; \
+    \
+    tar \
+        --extract \
+        --gzip \
+        --file "/tmp/${ORT_FILE}" \
+        --directory /onnxruntime \
+        --strip-components=1; \
+    \
+    rm -f "/tmp/${ORT_FILE}"; \
+    \
+    test -s \
+        "/onnxruntime/lib/libvoicevox_onnxruntime.so.${VOICEVOX_ONNXRUNTIME_VERSION}"; \
+    \
+    echo "VOICEVOX ONNX Runtime successfully installed."; \
+    find /onnxruntime -maxdepth 2 -type f -o -type l
+RUN set -eux; \
+    mkdir -p /dict; \
+    \
+    DICT_FILE="open_jtalk_dic_utf_8-${OPEN_JTALK_DICT_VERSION}.tar.gz"; \
+    DICT_URL="https://github.com/r9y9/open_jtalk/releases/download/v${OPEN_JTALK_VERSION}/${DICT_FILE}"; \
+    \
+    curl \
+        --fail \
+        --location \
+        --show-error \
+        --silent \
+        --retry 5 \
+        --retry-delay 3 \
+        --retry-all-errors \
+        --connect-timeout 30 \
+        "${DICT_URL}" \
+        --output "/tmp/${DICT_FILE}"; \
+    \
+    tar \
+        --extract \
+        --gzip \
+        --file "/tmp/${DICT_FILE}" \
+        --directory /dict; \
+    \
+    rm -f "/tmp/${DICT_FILE}"; \
+    \
+    test -s \
+        "/dict/open_jtalk_dic_utf_8-${OPEN_JTALK_DICT_VERSION}/char.bin"; \
+    test -s \
+        "/dict/open_jtalk_dic_utf_8-${OPEN_JTALK_DICT_VERSION}/sys.dic"; \
+    \
+    echo "Open JTalk dictionary successfully installed."; \
+    ls -lh \
+        "/dict/open_jtalk_dic_utf_8-${OPEN_JTALK_DICT_VERSION}/"
+
+
+
+# =================
+# CTranslate2 Build
+# =================
+FROM gai313/ubuntu:22.04.amd64.cuda12.8.cudnn9.toolkit AS ctranslate2-amd64
+FROM gai313/ubuntu:22.04.arm64 AS ctranslate2-arm64
+FROM g1-base AS ctranslate2-jetson
+
+FROM ctranslate2-${CTRANSLATE_ARCH} AS ctranslate2
+
+# install build tools
+RUN apt-get update &&\
+    apt-get install -y \
+        cmake \
+        libprotobuf-dev protobuf-compiler \
+        libcurl4-openssl-dev \
+        libssl-dev \
+        zlib1g-dev \
+        python3-dev python3-pip python3-setuptools \
+        build-essential \
+    &&\
+    rm -rf /var/lib/apt/lists/*
+RUN git clone --recursive https://github.com/OpenNMT/CTranslate2.git
+WORKDIR CTranslate2
+RUN set -eux; \
+    CMAKE_FLAGS="-DWITH_MKL=OFF -DOPENMP_RUNTIME=NONE"; \
+    if [ -d /usr/local/cuda ]; then \
+        echo "CUDA directory detected; forcing CUDA and cuDNN support for CTranslate2."; \
+        CMAKE_FLAGS="${CMAKE_FLAGS} -DWITH_CUDA=ON -DWITH_CUDNN=ON"; \
+    else \
+        echo "CUDA not detected; building CPU-only CTranslate2."; \
+        CMAKE_FLAGS="${CMAKE_FLAGS} -DWITH_CUDA=OFF -DWITH_CUDNN=OFF"; \
+    fi; \
+    cmake -Bbuild_folder ${CMAKE_FLAGS}; \
+    cmake --build build_folder --parallel $(nproc)
+RUN cd build_folder && make install
+RUN pip3 install -r python/install_requirements.txt &&\
+    cd python && CTRANSLATE2_ROOT=/usr/local python3 setup.py bdist_wheel
+
+
+# =========================
+# eR@sers G1 Workspace base
+# =========================
+FROM ${TARGET}-base AS base
+
+# resolve depends
+USER $USERNAME
+COPY src ./src
+USER root
+RUN . /opt/ros/humble/setup.bash &&\
+    apt-get update &&\
+    rosdep update --rosdistro=$ROS_DISTRO &&\
+    rosdep install -y -i --from-path . \
+        --skip-keys pointcloud_to_2dmap \
+        --skip-keys glim_ros \
+        --skip-keys rviz2 \
+        --skip-keys joint_state_publisher_gui \
+        --skip-keys unitree_sdk2 \
+        --skip-keys unitree_ros2 &&\
+    rm -rf /var/lib/apt/lists/*
+
+
+# ============================
+# eR@sers G1 Workspace Desktop
+# ============================
+FROM ${TARGET}-base AS desktop
+# resolve depends
+USER $USERNAME
+COPY src ./src
+USER root
+RUN . /opt/ros/humble/setup.bash &&\
+    apt-get update &&\
+    rosdep update --rosdistro=$ROS_DISTRO &&\
+    rosdep install -y -i --from-path . \
+        --skip-keys pointcloud_to_2dmap \
+        --skip-keys glim_ros \
+        --skip-keys unitree_sdk2 \
+        --skip-keys unitree_ros2 &&\
+    rm -rf /var/lib/apt/lists/*
 USER $USERNAME
 
-CMD ["bash"]
 
-# WORKDIR /home/${USERNAME}/colcon_ws
-# RUN . /opt/ros/${ROS}/setup.bash &&\
-#     find /usr -name "libopencv_core.so*" &&\
-#     colcon build --symlink-install --packages-up-to erasers_g1 \
-#     --cmake-args -DROS_EDITION="ROS2" -DHUMBLE_ROS=humble
-
-
-# =================================
-# Robot Tasks
-# ROboCup@Home タスク実行用イメージ
-# =================================
-# FROM main AS robot_tasks
-
-# # Clone dependencies
-# USER $USERNAME
-# COPY ./robot_tasks.repos ./robot_tasks.repos
-# RUN vcs import src < ./robot_tasks.repos
-
-# # setup lightweight_openpose_ros2
-# WORKDIR /home/${USERNAME}/colcon_ws/src/lightweight_openpose_ros2
-# RUN pip install --index-url https://pypi.org/simple -r requirements.txt &&\
-#     cd ./lightweight_openpose_ros2/datas/ &&\
-#     wget https://download.01.org/opencv/openvino_training_extensions/models/human_pose_estimation/checkpoint_iter_370000.pth
-
-# # setup sam3_ros
-# WORKDIR /home/${USERNAME}/colcon_ws
-# RUN pip install --index-url https://pypi.org/simple -U ultralytics &&\
-#     pip install --index-url https://pypi.org/simple git+https://github.com/openai/CLIP.git &&\
-#     pip install --index-url https://pypi.org/simple "numpy==1.22.4"
-
-# # setup robotics ER
-# RUN pip install --index-url https://pypi.org/simple -q google-genai
-
-# # resolve depends
-# USER root
-# RUN . /opt/ros/${ROS}/setup.bash &&\
-#     apt-get update &&\
-#     rosdep install -y -i --from-path .\
-#     --skip-keys pointcloud_to_2dmap \
-#     --skip-keys pcl_localization_ros2 \
-#     --skip-keys direct_lidar_inertial_odometry \
-#     --skip-keys fast_lio \
-#     --skip-keys lightweight_openpose_ros2 \
-#     --skip-keys sam3_ros &&\
-#     rm -rf /var/lib/apt/lists/*
-
-# # build workspace
-# USER $USERNAME
-# COPY assets/sam3.pt /tmp/sam3.pt
-# # WORKDIR /home/${USERNAME}/colcon_ws
-# # RUN . /opt/ros/${ROS}/setup.bash &&\
-# #     colcon build --symlink-install --packages-up-to robot_tasks
+# ==========================
+# Merge eR@sers G1 Workspace
+# ==========================
+FROM ${WORKSPACE_TYPE} AS g1_ws
+# install Python requirements
+USER $USERNAME
+RUN mkdir -p voicevox/vvm voicevox/onnxruntime voicevox/dict
+# COPY materials
+COPY ./requirements.txt ./requirements.txt 
+COPY --from=voicevox /voicevox_core/target/wheels/*.whl ./voicevox
+COPY --from=vvm /vvm/ ./voicevox/vvm/
+COPY --from=vv_onnxruntime /onnxruntime/ ./voicevox/onnxruntime/
+COPY --from=vv_onnxruntime /dict/ ./voicevox/dict/
+COPY --from=ctranslate2 /usr/local/lib/libctranslate2* /usr/local/lib/
+COPY --from=ctranslate2 /usr/local/include/ctranslate2/ /usr/local/include/ctranslate2/
+COPY --from=ctranslate2 /CTranslate2/python /tmp/ctranslate2/python
+COPY --from=modeldownloader /tmp/hitnet /tmp/hitnet
+COPY --from=modeldownloader /tmp/whisper /tmp/whisper
+COPY --from=modeldownloader /tmp/lightweight_openpose/lightweight_openpose.pth /tmp/lightweight_openpose/lightweight_openpose.pth
+COPY ./onnxruntime/build/Linux/Release/libonnxruntime*.so* /usr/local/lib/
+COPY ./onnxruntime/include/onnxruntime /usr/local/include/onnxruntime
+COPY ./onnxruntime/build /tmp/onnxruntime
+# Install onnxruntime
+USER root
+RUN ldconfig
+# Install requirements Python packages
+USER $USERNAME
+RUN pip install voicevox/*.whl &&\
+    pip install -r requirements.txt &&\
+    pip uninstall -y onnxruntime && \
+    pip install --no-deps /tmp/onnxruntime/Linux/Release/dist/*.whl && \
+    pip install --force-reinstall --no-deps /tmp/ctranslate2/python/dist/*.whl
+CMD ["/bin/bash"]

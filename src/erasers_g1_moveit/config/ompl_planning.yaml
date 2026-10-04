@@ -1,0 +1,58 @@
+# ROS 2 Humble の OMPL パイプライン設定。
+request_adapters: default_planner_request_adapters/ResolveConstraintFrames default_planner_request_adapters/FixWorkspaceBounds
+  default_planner_request_adapters/FixStartStateBounds default_planner_request_adapters/FixStartStateCollision
+  default_planner_request_adapters/AddTimeOptimalParameterization
+planner_configs:
+  RRTConnectkConfigDefault:
+    type: geometric::RRTConnect
+    range: 0.0
+  RRTkConfigDefault:
+    type: geometric::RRT
+    range: 0.0
+    goal_bias: 0.05
+  RRTstarkConfigDefault:
+    type: geometric::RRTstar
+    range: 0.0
+arm_left:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+  - RRTConnectkConfigDefault
+  - RRTkConfigDefault
+  - RRTstarkConfigDefault
+arm_right:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+  - RRTConnectkConfigDefault
+  - RRTkConfigDefault
+  - RRTstarkConfigDefault
+planning_plugin: ompl_interface/OMPLPlanner
+arm_left_with_waist:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+  - RRTConnectkConfigDefault
+  - RRTkConfigDefault
+  - RRTstarkConfigDefault
+arm_right_with_waist:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+  - RRTConnectkConfigDefault
+  - RRTkConfigDefault
+  - RRTstarkConfigDefault
+arm_both:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+  - RRTConnectkConfigDefault
+  - RRTkConfigDefault
+  - RRTstarkConfigDefault
+arm_both_with_waist:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+  - RRTConnectkConfigDefault
+  - RRTkConfigDefault
+  - RRTstarkConfigDefault
+head:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+  - RRTConnectkConfigDefault
+  - RRTkConfigDefault
+  - RRTstarkConfigDefault
