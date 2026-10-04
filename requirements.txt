@@ -2,6 +2,7 @@
 setuptools<=68.2.2
 numpy==1.26.4
 rustypot
+pyserial
 transform3d
 
 # Recongnition

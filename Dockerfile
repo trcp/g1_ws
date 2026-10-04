@@ -551,16 +551,9 @@ COPY --from=modeldownloader /tmp/lightweight_openpose/lightweight_openpose.pth /
 COPY ./onnxruntime/build/Linux/Release/libonnxruntime*.so* /usr/local/lib/
 COPY ./onnxruntime/include/onnxruntime /usr/local/include/onnxruntime
 COPY ./onnxruntime/build /tmp/onnxruntime
-# GLIM artifacts
-COPY --from=glim /usr/local/lib/libgtsam* /usr/local/lib/
-COPY --from=glim /usr/local/lib/libiridescence* /usr/local/lib/
-COPY --from=glim /usr/local/lib/libgtsam_points* /usr/local/lib/
-COPY --from=glim /usr/local/lib/libglim* /usr/local/lib/
-COPY --from=glim /usr/local/include/gtsam /usr/local/include/gtsam
-COPY --from=glim /usr/local/include/iridescence /usr/local/include/iridescence
-COPY --from=glim /usr/local/include/gtsam_points /usr/local/include/gtsam_points
-COPY --from=glim /usr/local/include/glim /usr/local/include/glim
-COPY --from=glim /usr/local/lib/cmake/ /usr/local/lib/cmake/
+# GLIM artifacts (GTSAM, iridescence, gtsam_points, GLIM core & plugins)
+COPY --from=glim /usr/local/lib/ /usr/local/lib/
+COPY --from=glim /usr/local/include/ /usr/local/include/
 COPY --from=glim /usr/local/share/glim /usr/local/share/glim
 # Install onnxruntime & update ldconfig
 USER root

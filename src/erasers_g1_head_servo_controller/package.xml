@@ -16,6 +16,7 @@
   <depend>sensor_msgs</depend>
   <depend>erasers_g1_interfaces</depend>
   <depend>dynamixel_sdk</depend>
+  <exec_depend>python3-serial</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

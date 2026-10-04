@@ -4,15 +4,12 @@ from launch.actions import DeclareLaunchArgument
 from launch.actions import IncludeLaunchDescription
 from launch.actions import LogInfo
 from launch.conditions import IfCondition
-from launch.conditions import UnlessCondition
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command
 from launch.substitutions import LaunchConfiguration
-from launch.substitutions import PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
-
 from ament_index_python.packages import get_package_share_directory
 import os
 
@@ -43,9 +40,11 @@ def generate_launch_description():
         erasers_g1_description_pkg_share_dir, 'launch', 'display.launch.py')
     default_rosbridge_launch = os.path.join(
         rosbridge_server_pkg_share_dir, 'launch', 'rosbridge_websocket_launch.xml')
-    default_use_emc = os.environ.get('USE_EMC', 'false')
-    default_ah_path = os.environ.get('AH_PATH', '/dev/ttyACM0')
-    default_dx_path = os.environ.get('DX_PATH', '/dev/ttyUSB0')
+    default_use_emc = os.environ.get('USE_EMC', 'false').lower().strip('\'"')
+    default_use_head_camera = os.environ.get('USE_HEAD_CAMERA', 'false').lower().strip('\'"')
+    default_use_amazing_hand = os.environ.get('USE_AMAZING_HAND', 'false').lower().strip('\'"')
+    default_ah_path = os.environ.get('AH_PATH', '/dev/ttyACM0').strip('\'"')
+    default_dx_path = os.environ.get('DX_PATH', '/dev/ttyUSB0').strip('\'"')
     default_voicevox_onnxruntime_path = os.path.join(
         default_voicevox_root, 'onnxruntime', 'lib', '')
     default_voicevox_model_path = os.path.join(default_voicevox_root, 'vvm', '8.vvm')
@@ -54,13 +53,8 @@ def generate_launch_description():
 
 
     # launch configurations
-    use_camera = LaunchConfiguration('use_camera')
     use_head_camera = LaunchConfiguration('use_head_camera')
-    use_hand = LaunchConfiguration('use_hand')
-    use_robot_control = LaunchConfiguration('use_robot_control')
-    use_voicevox = LaunchConfiguration('use_voicevox')
-    use_rosbridge = LaunchConfiguration('use_rosbridge')
-    use_rviz = LaunchConfiguration('use_rviz')
+    use_amazing_hand = LaunchConfiguration('use_amazing_hand')
     use_emc = LaunchConfiguration('use_emc')
     robot_model = LaunchConfiguration('robot_model')
     camera_params = LaunchConfiguration('camera_params')
@@ -69,53 +63,19 @@ def generate_launch_description():
     dx_path = LaunchConfiguration('dx_path')
     device = LaunchConfiguration('device')
     mic_network_interface = LaunchConfiguration('mic_network_interface')
-    voicevox_onnxruntime_path = LaunchConfiguration('voicevox_onnxruntime_path')
-    voicevox_model_path = LaunchConfiguration('voicevox_model_path')
-    open_jtalk_dict_dir = LaunchConfiguration('open_jtalk_dict_dir')
 
 
     # launch arguments
-    # use_camera は互換名。use_head_camera の明示指定を優先する。
-    declare_use_camera = DeclareLaunchArgument(
-        'use_camera',
-        default_value='false',
-        description='旧互換名。頭部カメラとサーボを有効にする',
-        choices=['true', 'false'],
-    )
     declare_use_head_camera = DeclareLaunchArgument(
         'use_head_camera',
-        default_value=use_camera,
-        description='頭部カメラとサーボを有効にする。既定は false',
+        default_value=default_use_head_camera,
+        description='頭部カメラとサーボを有効にする',
         choices=['true', 'false'],
     )
-    declare_use_hand = DeclareLaunchArgument(
-        'use_hand',
-        default_value='false',
+    declare_use_amazing_hand = DeclareLaunchArgument(
+        'use_amazing_hand',
+        default_value=default_use_amazing_hand,
         description='amazing_hand を有効にする',
-        choices=['true', 'false'],
-    )
-    declare_use_robot_control = DeclareLaunchArgument(
-        'use_robot_control',
-        default_value='true',
-        description='歩行・姿勢制御と緊急停止ノードを有効にする',
-        choices=['true', 'false'],
-    )
-    declare_use_voicevox = DeclareLaunchArgument(
-        'use_voicevox',
-        default_value='true',
-        description='VOICEVOX の音声合成サービス /speak を起動する',
-        choices=['true', 'false'],
-    )
-    declare_use_rosbridge = DeclareLaunchArgument(
-        'use_rosbridge',
-        default_value='true',
-        description='既存の rosbridge を起動する',
-        choices=['true', 'false'],
-    )
-    declare_use_rviz = DeclareLaunchArgument(
-        'use_rviz',
-        default_value='false',
-        description='RViz を起動する',
         choices=['true', 'false'],
     )
     declare_use_emc = DeclareLaunchArgument(
@@ -160,33 +120,8 @@ def generate_launch_description():
         default_value='',
         description='マイクの UDP 受信用 NIC。録音開始時に使用する',
     )
-    declare_voicevox_onnxruntime_path = DeclareLaunchArgument(
-        'voicevox_onnxruntime_path',
-        default_value=default_voicevox_onnxruntime_path,
-        description='VOICEVOX 専用 ONNX Runtime のディレクトリ。末尾 / が必要',
-    )
-    declare_voicevox_model_path = DeclareLaunchArgument(
-        'voicevox_model_path',
-        default_value=default_voicevox_model_path,
-        description='VOICEVOX 音声モデル',
-    )
-    declare_open_jtalk_dict_dir = DeclareLaunchArgument(
-        'open_jtalk_dict_dir',
-        default_value=default_open_jtalk_dict_dir,
-        description='Open JTalk 辞書',
-    )
-    declare_start_message = DeclareLaunchArgument(
-        'start_message',
-        default_value='G1 bringup',
-        description='旧互換引数。起動時の自動発話は行わない',
-    )
-    ld.add_action(declare_use_camera)
     ld.add_action(declare_use_head_camera)
-    ld.add_action(declare_use_hand)
-    ld.add_action(declare_use_robot_control)
-    ld.add_action(declare_use_voicevox)
-    ld.add_action(declare_use_rosbridge)
-    ld.add_action(declare_use_rviz)
+    ld.add_action(declare_use_amazing_hand)
     ld.add_action(declare_use_emc)
     ld.add_action(declare_robot_model)
     ld.add_action(declare_camera_params)
@@ -195,40 +130,27 @@ def generate_launch_description():
     ld.add_action(declare_dx_path)
     ld.add_action(declare_device)
     ld.add_action(declare_mic_network_interface)
-    ld.add_action(declare_voicevox_onnxruntime_path)
-    ld.add_action(declare_voicevox_model_path)
-    ld.add_action(declare_open_jtalk_dict_dir)
-    ld.add_action(declare_start_message)
 
 
     # include launch
     include_display = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(default_display_launch),
         launch_arguments={
-            'use_rviz': use_rviz,
+            'use_rviz': 'false',
             'robot_description': robot_model,
         }.items(),
     )
     # rosbridge の既存 XML Launch を読み込むため、対応するローダーを維持する。
     include_rosbridge = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(default_rosbridge_launch),
-        condition=IfCondition(use_rosbridge),
     )
     ld.add_action(include_display)
     ld.add_action(include_rosbridge)
 
 
     # actions
-    skip_head_camera = LogInfo(
-        msg='頭部カメラとサーボをスキップ: use_head_camera=false',
-        condition=UnlessCondition(use_head_camera),
-    )
-    skip_hand = LogInfo(
-        msg='ハンドをスキップ: use_hand=false',
-        condition=UnlessCondition(use_hand),
-    )
-    ld.add_action(skip_head_camera)
-    ld.add_action(skip_hand)
+    log_start_action = LogInfo(msg='Starting erasers_g1 bringup system...')
+    ld.add_action(log_start_action)
 
 
     # nodes
@@ -257,7 +179,7 @@ def generate_launch_description():
         package='amazing_hand_nodes',
         executable='amazing_hand_node',
         parameters=[{'serial_port': ah_path}],
-        condition=IfCondition(use_hand),
+        condition=IfCondition(use_amazing_hand),
         output='screen',
         emulate_tty=True,
     )
@@ -288,11 +210,10 @@ def generate_launch_description():
         executable='voicevox_ros2',
         name='voicevox_ros2',
         parameters=[{
-            'voicevox_onnxruntime_path': voicevox_onnxruntime_path,
-            'voicevox_model_path': voicevox_model_path,
-            'open_jtalk_dict_dir': open_jtalk_dict_dir,
+            'voicevox_onnxruntime_path': default_voicevox_onnxruntime_path,
+            'voicevox_model_path': default_voicevox_model_path,
+            'open_jtalk_dict_dir': default_open_jtalk_dict_dir,
         }],
-        condition=IfCondition(use_voicevox),
         output='screen',
         emulate_tty=True,
     )
@@ -304,14 +225,12 @@ def generate_launch_description():
             {'robot_description': ParameterValue(
                 Command(['xacro ', robot_model]), value_type=str)},
         ],
-        condition=IfCondition(use_robot_control),
         output='screen',
         emulate_tty=True,
     )
     loco_service_client = Node(
         package='erasers_g1_common',
         executable='loco_service_client',
-        condition=IfCondition(use_robot_control),
         output='screen',
         emulate_tty=True,
     )
@@ -319,7 +238,6 @@ def generate_launch_description():
         package='erasers_g1_common',
         executable='emergency_stop',
         parameters=[{'emc_pose': 'safety'}],
-        condition=IfCondition(use_robot_control),
         output='screen',
         emulate_tty=True,
     )
@@ -327,18 +245,14 @@ def generate_launch_description():
         package='erasers_g1_api',
         executable='emergency_stop_announcer',
         parameters=[{'repeat_interval_sec': 10.0}],
-        condition=IfCondition(use_robot_control),
         output='screen',
         emulate_tty=True,
     )
-    # Joy は駆動系と緊急停止の両方が有効な場合だけ起動する。
     emc_joy = Node(
         package='joy',
         executable='joy_node',
         namespace='emc',
-        condition=IfCondition(PythonExpression([
-            "'", use_robot_control, "' == 'true' and '", use_emc, "' == 'true'",
-        ])),
+        condition=IfCondition(use_emc),
         output='screen',
         emulate_tty=True,
     )
