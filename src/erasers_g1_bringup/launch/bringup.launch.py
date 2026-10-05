@@ -290,6 +290,17 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
     )
+    robot_service_interface_client = Node(
+        package='erasers_g1_common',
+        executable='robot_service_interface_client',
+        parameters=[
+            os.path.join(
+                erasers_g1_common_pkg_share_dir,
+                'config', 'robot_service_interface_client.yaml'
+            )
+        ],
+        emulate_tty=True
+    )
     loco_service_client = Node(
         package='erasers_g1_common',
         executable='loco_service_client',
@@ -380,6 +391,7 @@ def generate_launch_description():
     ld.add_action(mic_server)
     ld.add_action(voicevox)
     ld.add_action(robot_controller)
+    ld.add_action(robot_service_interface_client)
     ld.add_action(loco_service_client)
     ld.add_action(emergency_stop)
     ld.add_action(emergency_stop_announcer)

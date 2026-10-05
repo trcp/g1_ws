@@ -240,6 +240,7 @@ install(
 
 add_library(erasers_g1_runtime SHARED
   src/unitree_api_client.cpp
+  src/robot_state_direct_client.cpp
   src/audio_playback_monitor.cpp
   src/wav_audio_converter.cpp
   src/mic_udp_receiver.cpp
@@ -273,8 +274,42 @@ target_link_libraries(vui_client erasers_g1_runtime)
 target_link_libraries(joint_state_publisher erasers_g1_runtime)
 target_link_libraries(audio_client erasers_g1_runtime)
 ament_target_dependencies(audio_client rclcpp_action)
-install(TARGETS robot_controller robot_manager vui_client DESTINATION lib/${PROJECT_NAME})
-install(TARGETS erasers_g1_runtime EXPORT export_g1_runtime
+
+add_library(robot_service_interface_client_lib SHARED
+  src/robot_service_interface_client.cpp
+)
+target_include_directories(robot_service_interface_client_lib PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(robot_service_interface_client_lib
+  erasers_g1_runtime
+)
+ament_target_dependencies(robot_service_interface_client_lib
+  rclcpp
+  erasers_g1_interfaces
+  std_srvs
+)
+
+add_executable(robot_service_interface_client
+  src/robot_service_interface_client_main.cpp
+)
+target_include_directories(robot_service_interface_client PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(robot_service_interface_client
+  robot_service_interface_client_lib
+  erasers_g1_runtime
+)
+ament_target_dependencies(robot_service_interface_client
+  rclcpp
+  erasers_g1_interfaces
+  std_srvs
+)
+
+install(TARGETS robot_controller robot_manager vui_client robot_service_interface_client DESTINATION lib/${PROJECT_NAME})
+install(TARGETS erasers_g1_runtime robot_service_interface_client_lib EXPORT export_g1_runtime
   LIBRARY DESTINATION lib ARCHIVE DESTINATION lib RUNTIME DESTINATION bin)
 install(DIRECTORY audio config DESTINATION share/${PROJECT_NAME})
 ament_export_targets(export_g1_runtime HAS_LIBRARY_TARGET)
@@ -293,6 +328,16 @@ if(BUILD_TESTING)
     set_tests_properties(${test_name} PROPERTIES RUN_SERIAL TRUE
       ENVIRONMENT "ROS_DOMAIN_ID=173;CYCLONEDDS_URI=file://${CMAKE_CURRENT_SOURCE_DIR}/test/cyclonedds.xml")
   endforeach()
+
+  ament_add_gtest(test_robot_service_interface_client
+    test/test_robot_service_interface_client.cpp
+  )
+  target_link_libraries(test_robot_service_interface_client
+    robot_service_interface_client_lib
+    erasers_g1_runtime
+  )
+  set_tests_properties(test_robot_service_interface_client PROPERTIES RUN_SERIAL TRUE
+    ENVIRONMENT "ROS_DOMAIN_ID=173;CYCLONEDDS_URI=file://${CMAKE_CURRENT_SOURCE_DIR}/test/cyclonedds.xml")
 endif()
 ament_package()
     

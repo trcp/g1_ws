@@ -1,0 +1,7 @@
+# Request
+string name "NONE"
+bool enable
+---
+# Response
+bool success
+string message

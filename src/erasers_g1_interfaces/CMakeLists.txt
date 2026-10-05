@@ -13,6 +13,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(action_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  srv/RobotServiceClient.srv
   srvs/PosePolicy.srv
   srvs/AudioClient.srv
   srvs/MoveServo.srv

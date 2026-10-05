@@ -1,0 +1,13 @@
+robot_service_interface_client:
+  ros__parameters:
+    # Unitree API 通信タイムアウト (秒)
+    api_timeout_sec: 10.0
+
+    # バックグラウンドでの定期サービス一覧リフレッシュ周期 (秒, 0.0 で無効)
+    refresh_period_sec: 30.0
+
+    # 切り替え後の状態検証 (ServiceList API 1003 による非同期遷移の確認)
+    verify_after_switch: true
+    switch_settle_delay_sec: 5.0
+    switch_timeout_sec: 10.0
+    verify_poll_period_sec: 0.5
