@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/CMakeFiles/date-populate"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/CMakeFiles/date-populate.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/CMakeFiles/date-populate-complete.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-build.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-configure.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-download.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-install.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-mkdir.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-patch.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-test.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"date-populate"
+		],
+		"name" : "date-populate"
+	}
+}

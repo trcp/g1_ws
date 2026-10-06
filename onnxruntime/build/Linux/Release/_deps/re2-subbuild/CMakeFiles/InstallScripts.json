@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/tmp/onnxruntime/build/Linux/Release/_deps/re2-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

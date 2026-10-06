@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/CMakeFiles/kleidiai-populate"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/CMakeFiles/kleidiai-populate.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/CMakeFiles/kleidiai-populate-complete.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/kleidiai-populate-prefix/src/kleidiai-populate-stamp/kleidiai-populate-build.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/kleidiai-populate-prefix/src/kleidiai-populate-stamp/kleidiai-populate-configure.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/kleidiai-populate-prefix/src/kleidiai-populate-stamp/kleidiai-populate-download.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/kleidiai-populate-prefix/src/kleidiai-populate-stamp/kleidiai-populate-install.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/kleidiai-populate-prefix/src/kleidiai-populate-stamp/kleidiai-populate-mkdir.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/kleidiai-populate-prefix/src/kleidiai-populate-stamp/kleidiai-populate-patch.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/kleidiai-populate-prefix/src/kleidiai-populate-stamp/kleidiai-populate-test.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/kleidiai-populate-prefix/src/kleidiai-populate-stamp/kleidiai-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"kleidiai-populate"
+		],
+		"name" : "kleidiai-populate"
+	}
+}

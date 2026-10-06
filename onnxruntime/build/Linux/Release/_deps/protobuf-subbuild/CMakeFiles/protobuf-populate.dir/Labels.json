@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/CMakeFiles/protobuf-populate"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/CMakeFiles/protobuf-populate.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/CMakeFiles/protobuf-populate-complete.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-build.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-configure.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-download.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-install.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-mkdir.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-patch.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-test.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"protobuf-populate"
+		],
+		"name" : "protobuf-populate"
+	}
+}

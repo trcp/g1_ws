@@ -1,0 +1,12 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=url
+command=/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/kleidiai-populate-prefix/src/kleidiai-populate-stamp/download-kleidiai-populate.cmake;COMMAND;/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/kleidiai-populate-prefix/src/kleidiai-populate-stamp/verify-kleidiai-populate.cmake;COMMAND;/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/kleidiai-populate-prefix/src/kleidiai-populate-stamp/extract-kleidiai-populate.cmake
+source_dir=/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-src
+work_dir=/tmp/onnxruntime/build/Linux/Release/_deps
+url(s)=https://github.com/ARM-software/kleidiai/archive/refs/tags/v1.4.0.tar.gz
+hash=SHA1=22d3b57b54a61c194ab256ff11b0353a3b220244
+      no_extract=
+

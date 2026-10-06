@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pytorch_cpuinfo-subbuild/CMakeFiles/pytorch_cpuinfo-populate"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pytorch_cpuinfo-subbuild/CMakeFiles/pytorch_cpuinfo-populate.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pytorch_cpuinfo-subbuild/CMakeFiles/pytorch_cpuinfo-populate-complete.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pytorch_cpuinfo-subbuild/pytorch_cpuinfo-populate-prefix/src/pytorch_cpuinfo-populate-stamp/pytorch_cpuinfo-populate-build.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pytorch_cpuinfo-subbuild/pytorch_cpuinfo-populate-prefix/src/pytorch_cpuinfo-populate-stamp/pytorch_cpuinfo-populate-configure.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pytorch_cpuinfo-subbuild/pytorch_cpuinfo-populate-prefix/src/pytorch_cpuinfo-populate-stamp/pytorch_cpuinfo-populate-download.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pytorch_cpuinfo-subbuild/pytorch_cpuinfo-populate-prefix/src/pytorch_cpuinfo-populate-stamp/pytorch_cpuinfo-populate-install.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pytorch_cpuinfo-subbuild/pytorch_cpuinfo-populate-prefix/src/pytorch_cpuinfo-populate-stamp/pytorch_cpuinfo-populate-mkdir.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pytorch_cpuinfo-subbuild/pytorch_cpuinfo-populate-prefix/src/pytorch_cpuinfo-populate-stamp/pytorch_cpuinfo-populate-patch.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pytorch_cpuinfo-subbuild/pytorch_cpuinfo-populate-prefix/src/pytorch_cpuinfo-populate-stamp/pytorch_cpuinfo-populate-test.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pytorch_cpuinfo-subbuild/pytorch_cpuinfo-populate-prefix/src/pytorch_cpuinfo-populate-stamp/pytorch_cpuinfo-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"pytorch_cpuinfo-populate"
+		],
+		"name" : "pytorch_cpuinfo-populate"
+	}
+}

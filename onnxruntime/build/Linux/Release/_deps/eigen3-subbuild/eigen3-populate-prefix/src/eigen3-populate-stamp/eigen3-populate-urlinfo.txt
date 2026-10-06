@@ -1,0 +1,12 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=url
+command=/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/eigen3-subbuild/eigen3-populate-prefix/src/eigen3-populate-stamp/download-eigen3-populate.cmake;COMMAND;/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/eigen3-subbuild/eigen3-populate-prefix/src/eigen3-populate-stamp/verify-eigen3-populate.cmake;COMMAND;/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/eigen3-subbuild/eigen3-populate-prefix/src/eigen3-populate-stamp/extract-eigen3-populate.cmake
+source_dir=/tmp/onnxruntime/build/Linux/Release/_deps/eigen3-src
+work_dir=/tmp/onnxruntime/build/Linux/Release/_deps
+url(s)=https://github.com/eigen-mirror/eigen/archive/1d8b82b0740839c0de7f1242a3585e3390ff5f33/eigen-1d8b82b0740839c0de7f1242a3585e3390ff5f33.zip
+hash=SHA1=05b19b49e6fbb91246be711d801160528c135e34
+      no_extract=
+

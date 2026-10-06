@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/dlpack-subbuild/CMakeFiles/dlpack-populate"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/dlpack-subbuild/CMakeFiles/dlpack-populate.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/dlpack-subbuild/CMakeFiles/dlpack-populate-complete.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/dlpack-subbuild/dlpack-populate-prefix/src/dlpack-populate-stamp/dlpack-populate-build.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/dlpack-subbuild/dlpack-populate-prefix/src/dlpack-populate-stamp/dlpack-populate-configure.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/dlpack-subbuild/dlpack-populate-prefix/src/dlpack-populate-stamp/dlpack-populate-download.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/dlpack-subbuild/dlpack-populate-prefix/src/dlpack-populate-stamp/dlpack-populate-install.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/dlpack-subbuild/dlpack-populate-prefix/src/dlpack-populate-stamp/dlpack-populate-mkdir.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/dlpack-subbuild/dlpack-populate-prefix/src/dlpack-populate-stamp/dlpack-populate-patch.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/dlpack-subbuild/dlpack-populate-prefix/src/dlpack-populate-stamp/dlpack-populate-test.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/dlpack-subbuild/dlpack-populate-prefix/src/dlpack-populate-stamp/dlpack-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"dlpack-populate"
+		],
+		"name" : "dlpack-populate"
+	}
+}

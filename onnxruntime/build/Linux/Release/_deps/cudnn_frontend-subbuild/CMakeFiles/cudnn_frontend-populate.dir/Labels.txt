@@ -1,0 +1,14 @@
+# Target labels
+ cudnn_frontend-populate
+# Source files and their labels
+/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/CMakeFiles/cudnn_frontend-populate
+/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/CMakeFiles/cudnn_frontend-populate.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/CMakeFiles/cudnn_frontend-populate-complete.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/cudnn_frontend-populate-prefix/src/cudnn_frontend-populate-stamp/cudnn_frontend-populate-build.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/cudnn_frontend-populate-prefix/src/cudnn_frontend-populate-stamp/cudnn_frontend-populate-configure.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/cudnn_frontend-populate-prefix/src/cudnn_frontend-populate-stamp/cudnn_frontend-populate-download.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/cudnn_frontend-populate-prefix/src/cudnn_frontend-populate-stamp/cudnn_frontend-populate-install.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/cudnn_frontend-populate-prefix/src/cudnn_frontend-populate-stamp/cudnn_frontend-populate-mkdir.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/cudnn_frontend-populate-prefix/src/cudnn_frontend-populate-stamp/cudnn_frontend-populate-patch.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/cudnn_frontend-populate-prefix/src/cudnn_frontend-populate-stamp/cudnn_frontend-populate-test.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/cudnn_frontend-populate-prefix/src/cudnn_frontend-populate-stamp/cudnn_frontend-populate-update.rule

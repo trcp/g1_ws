@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pybind11_project-subbuild/CMakeFiles/pybind11_project-populate"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pybind11_project-subbuild/CMakeFiles/pybind11_project-populate.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pybind11_project-subbuild/CMakeFiles/pybind11_project-populate-complete.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pybind11_project-subbuild/pybind11_project-populate-prefix/src/pybind11_project-populate-stamp/pybind11_project-populate-build.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pybind11_project-subbuild/pybind11_project-populate-prefix/src/pybind11_project-populate-stamp/pybind11_project-populate-configure.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pybind11_project-subbuild/pybind11_project-populate-prefix/src/pybind11_project-populate-stamp/pybind11_project-populate-download.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pybind11_project-subbuild/pybind11_project-populate-prefix/src/pybind11_project-populate-stamp/pybind11_project-populate-install.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pybind11_project-subbuild/pybind11_project-populate-prefix/src/pybind11_project-populate-stamp/pybind11_project-populate-mkdir.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pybind11_project-subbuild/pybind11_project-populate-prefix/src/pybind11_project-populate-stamp/pybind11_project-populate-patch.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pybind11_project-subbuild/pybind11_project-populate-prefix/src/pybind11_project-populate-stamp/pybind11_project-populate-test.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/pybind11_project-subbuild/pybind11_project-populate-prefix/src/pybind11_project-populate-stamp/pybind11_project-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"pybind11_project-populate"
+		],
+		"name" : "pybind11_project-populate"
+	}
+}

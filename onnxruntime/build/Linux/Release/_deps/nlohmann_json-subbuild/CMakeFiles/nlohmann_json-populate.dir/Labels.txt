@@ -1,0 +1,14 @@
+# Target labels
+ nlohmann_json-populate
+# Source files and their labels
+/tmp/onnxruntime/build/Linux/Release/_deps/nlohmann_json-subbuild/CMakeFiles/nlohmann_json-populate
+/tmp/onnxruntime/build/Linux/Release/_deps/nlohmann_json-subbuild/CMakeFiles/nlohmann_json-populate.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/nlohmann_json-subbuild/CMakeFiles/nlohmann_json-populate-complete.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/nlohmann_json-populate-build.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/nlohmann_json-populate-configure.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/nlohmann_json-populate-download.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/nlohmann_json-populate-install.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/nlohmann_json-populate-mkdir.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/nlohmann_json-populate-patch.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/nlohmann_json-populate-test.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/nlohmann_json-subbuild/nlohmann_json-populate-prefix/src/nlohmann_json-populate-stamp/nlohmann_json-populate-update.rule

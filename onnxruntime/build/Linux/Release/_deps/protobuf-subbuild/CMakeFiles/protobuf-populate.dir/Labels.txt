@@ -1,0 +1,14 @@
+# Target labels
+ protobuf-populate
+# Source files and their labels
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/CMakeFiles/protobuf-populate
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/CMakeFiles/protobuf-populate.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/CMakeFiles/protobuf-populate-complete.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-build.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-configure.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-download.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-install.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-mkdir.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-patch.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-test.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/protobuf-populate-prefix/src/protobuf-populate-stamp/protobuf-populate-update.rule

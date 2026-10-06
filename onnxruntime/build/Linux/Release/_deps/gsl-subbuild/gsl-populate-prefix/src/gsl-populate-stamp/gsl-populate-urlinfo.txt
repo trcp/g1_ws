@@ -1,0 +1,12 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=url
+command=/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/gsl-subbuild/gsl-populate-prefix/src/gsl-populate-stamp/download-gsl-populate.cmake;COMMAND;/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/gsl-subbuild/gsl-populate-prefix/src/gsl-populate-stamp/verify-gsl-populate.cmake;COMMAND;/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/gsl-subbuild/gsl-populate-prefix/src/gsl-populate-stamp/extract-gsl-populate.cmake
+source_dir=/tmp/onnxruntime/build/Linux/Release/_deps/gsl-src
+work_dir=/tmp/onnxruntime/build/Linux/Release/_deps
+url(s)=https://github.com/microsoft/GSL/archive/refs/tags/v4.0.0.zip
+hash=SHA1=cf368104cd22a87b4dd0c80228919bb2df3e2a14
+      no_extract=
+

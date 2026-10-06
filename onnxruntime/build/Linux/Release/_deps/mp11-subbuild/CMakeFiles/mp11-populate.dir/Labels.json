@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/mp11-subbuild/CMakeFiles/mp11-populate"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/mp11-subbuild/CMakeFiles/mp11-populate.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/mp11-subbuild/CMakeFiles/mp11-populate-complete.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/mp11-subbuild/mp11-populate-prefix/src/mp11-populate-stamp/mp11-populate-build.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/mp11-subbuild/mp11-populate-prefix/src/mp11-populate-stamp/mp11-populate-configure.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/mp11-subbuild/mp11-populate-prefix/src/mp11-populate-stamp/mp11-populate-download.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/mp11-subbuild/mp11-populate-prefix/src/mp11-populate-stamp/mp11-populate-install.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/mp11-subbuild/mp11-populate-prefix/src/mp11-populate-stamp/mp11-populate-mkdir.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/mp11-subbuild/mp11-populate-prefix/src/mp11-populate-stamp/mp11-populate-patch.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/mp11-subbuild/mp11-populate-prefix/src/mp11-populate-stamp/mp11-populate-test.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/mp11-subbuild/mp11-populate-prefix/src/mp11-populate-stamp/mp11-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"mp11-populate"
+		],
+		"name" : "mp11-populate"
+	}
+}

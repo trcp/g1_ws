@@ -1,0 +1,12 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=url
+command=/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/safeint-populate-prefix/src/safeint-populate-stamp/download-safeint-populate.cmake;COMMAND;/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/safeint-populate-prefix/src/safeint-populate-stamp/verify-safeint-populate.cmake;COMMAND;/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/safeint-populate-prefix/src/safeint-populate-stamp/extract-safeint-populate.cmake
+source_dir=/tmp/onnxruntime/build/Linux/Release/_deps/safeint-src
+work_dir=/tmp/onnxruntime/build/Linux/Release/_deps
+url(s)=https://github.com/dcleblanc/SafeInt/archive/refs/tags/3.0.28.zip
+hash=SHA1=23f252040ff6cb9f1fd18575b32fa8fb5928daac
+      no_extract=
+

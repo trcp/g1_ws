@@ -1,0 +1,12 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=url
+command=/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/cudnn_frontend-populate-prefix/src/cudnn_frontend-populate-stamp/download-cudnn_frontend-populate.cmake;COMMAND;/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/cudnn_frontend-populate-prefix/src/cudnn_frontend-populate-stamp/verify-cudnn_frontend-populate.cmake;COMMAND;/usr/bin/cmake;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/cudnn_frontend-populate-prefix/src/cudnn_frontend-populate-stamp/extract-cudnn_frontend-populate.cmake
+source_dir=/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-src
+work_dir=/tmp/onnxruntime/build/Linux/Release/_deps
+url(s)=https://github.com/NVIDIA/cudnn-frontend/archive/refs/tags/v1.7.0.zip
+hash=SHA1=d0753d8d5b39947ca0729d7773cb84653a129eb1
+      no_extract=
+

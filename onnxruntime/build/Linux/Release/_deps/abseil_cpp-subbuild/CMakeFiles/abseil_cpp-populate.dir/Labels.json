@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/abseil_cpp-subbuild/CMakeFiles/abseil_cpp-populate"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/abseil_cpp-subbuild/CMakeFiles/abseil_cpp-populate.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/abseil_cpp-subbuild/CMakeFiles/abseil_cpp-populate-complete.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/abseil_cpp-subbuild/abseil_cpp-populate-prefix/src/abseil_cpp-populate-stamp/abseil_cpp-populate-build.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/abseil_cpp-subbuild/abseil_cpp-populate-prefix/src/abseil_cpp-populate-stamp/abseil_cpp-populate-configure.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/abseil_cpp-subbuild/abseil_cpp-populate-prefix/src/abseil_cpp-populate-stamp/abseil_cpp-populate-download.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/abseil_cpp-subbuild/abseil_cpp-populate-prefix/src/abseil_cpp-populate-stamp/abseil_cpp-populate-install.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/abseil_cpp-subbuild/abseil_cpp-populate-prefix/src/abseil_cpp-populate-stamp/abseil_cpp-populate-mkdir.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/abseil_cpp-subbuild/abseil_cpp-populate-prefix/src/abseil_cpp-populate-stamp/abseil_cpp-populate-patch.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/abseil_cpp-subbuild/abseil_cpp-populate-prefix/src/abseil_cpp-populate-stamp/abseil_cpp-populate-test.rule"
+		},
+		{
+			"file" : "/tmp/onnxruntime/build/Linux/Release/_deps/abseil_cpp-subbuild/abseil_cpp-populate-prefix/src/abseil_cpp-populate-stamp/abseil_cpp-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"abseil_cpp-populate"
+		],
+		"name" : "abseil_cpp-populate"
+	}
+}

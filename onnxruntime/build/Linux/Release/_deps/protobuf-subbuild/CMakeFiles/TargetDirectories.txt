@@ -1,0 +1,3 @@
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/CMakeFiles/protobuf-populate.dir
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/CMakeFiles/edit_cache.dir
+/tmp/onnxruntime/build/Linux/Release/_deps/protobuf-subbuild/CMakeFiles/rebuild_cache.dir

@@ -1,0 +1,2 @@
+/usr/bin/ar qc libonnxruntime_util.a CMakeFiles/onnxruntime_util.dir/tmp/onnxruntime/onnxruntime/core/util/math_cpu.cc.o CMakeFiles/onnxruntime_util.dir/tmp/onnxruntime/onnxruntime/core/util/thread_utils.cc.o
+/usr/bin/ranlib libonnxruntime_util.a

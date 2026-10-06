@@ -1,0 +1,14 @@
+# Target labels
+ onnx-populate
+# Source files and their labels
+/tmp/onnxruntime/build/Linux/Release/_deps/onnx-subbuild/CMakeFiles/onnx-populate
+/tmp/onnxruntime/build/Linux/Release/_deps/onnx-subbuild/CMakeFiles/onnx-populate.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/onnx-subbuild/CMakeFiles/onnx-populate-complete.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/onnx-subbuild/onnx-populate-prefix/src/onnx-populate-stamp/onnx-populate-build.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/onnx-subbuild/onnx-populate-prefix/src/onnx-populate-stamp/onnx-populate-configure.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/onnx-subbuild/onnx-populate-prefix/src/onnx-populate-stamp/onnx-populate-download.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/onnx-subbuild/onnx-populate-prefix/src/onnx-populate-stamp/onnx-populate-install.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/onnx-subbuild/onnx-populate-prefix/src/onnx-populate-stamp/onnx-populate-mkdir.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/onnx-subbuild/onnx-populate-prefix/src/onnx-populate-stamp/onnx-populate-patch.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/onnx-subbuild/onnx-populate-prefix/src/onnx-populate-stamp/onnx-populate-test.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/onnx-subbuild/onnx-populate-prefix/src/onnx-populate-stamp/onnx-populate-update.rule

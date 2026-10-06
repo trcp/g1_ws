@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/tmp/onnxruntime/build/Linux/Release/_deps/cudnn_frontend-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

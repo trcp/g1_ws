@@ -1,0 +1,14 @@
+# Target labels
+ safeint-populate
+# Source files and their labels
+/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/CMakeFiles/safeint-populate
+/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/CMakeFiles/safeint-populate.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/CMakeFiles/safeint-populate-complete.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/safeint-populate-prefix/src/safeint-populate-stamp/safeint-populate-build.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/safeint-populate-prefix/src/safeint-populate-stamp/safeint-populate-configure.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/safeint-populate-prefix/src/safeint-populate-stamp/safeint-populate-download.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/safeint-populate-prefix/src/safeint-populate-stamp/safeint-populate-install.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/safeint-populate-prefix/src/safeint-populate-stamp/safeint-populate-mkdir.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/safeint-populate-prefix/src/safeint-populate-stamp/safeint-populate-patch.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/safeint-populate-prefix/src/safeint-populate-stamp/safeint-populate-test.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/safeint-subbuild/safeint-populate-prefix/src/safeint-populate-stamp/safeint-populate-update.rule

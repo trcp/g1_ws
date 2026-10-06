@@ -109,7 +109,7 @@ RUN . /opt/ros/${ROS}/setup.bash &&\
     --skip-keys fast_lio \
     --skip-keys lightweight_openpose_ros2 \
     --skip-keys sam3_ros \
-    --skip-keys nakalab_ultralutics_ros2 \
+    --skip-keys nakalab_ultralytics_ros2 \
     --skip-keys glim_ros &&\
     rm -rf /var/lib/apt/lists/*
 

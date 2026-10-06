@@ -1,0 +1,14 @@
+# Target labels
+ date-populate
+# Source files and their labels
+/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/CMakeFiles/date-populate
+/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/CMakeFiles/date-populate.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/CMakeFiles/date-populate-complete.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-build.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-configure.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-download.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-install.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-mkdir.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-patch.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-test.rule
+/tmp/onnxruntime/build/Linux/Release/_deps/date-subbuild/date-populate-prefix/src/date-populate-stamp/date-populate-update.rule
