@@ -57,7 +57,7 @@ repositories:
         version: master
 
     # ultralytics ros2:
-    thirdparty/nakalab_ultralytics_ros2:
+    src/nakalab_ultralytics_ros2:
         type: git
         url: https://github.com/GAI-313/nakalab_ultralytics_ros2.git
         version: main

@@ -45,6 +45,8 @@ services:
     volumes:
       # mount directories, DO NOT EDIT
       - ./src:$HOME/colcon_ws/src
+      # イメージ内の旧配置を除外し，ホストに永続化した src 側だけをビルドする．
+      - /dev/null:$HOME/colcon_ws/thirdparty/nakalab_ultralytics_ros2/COLCON_IGNORE:ro
       - ./install:$HOME/colcon_ws/install
       - ./build:$HOME/colcon_ws/build
       - ./rosbag:$HOME/colcon_ws/rosbag

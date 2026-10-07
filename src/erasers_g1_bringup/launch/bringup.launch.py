@@ -60,7 +60,10 @@ def generate_launch_description():
     default_open_jtalk_dict_dir = os.path.join(
         default_voicevox_root, 'dict', 'open_jtalk_dic_utf_8-1.11')
 
-    default_use_person_pose = os.environ.get('USE_PERSON_POSE', 'false').lower().strip('\'"')
+    default_use_person_pose = os.environ.get('USE_PERSON_POSE', 'true').lower().strip('\'"')
+    default_use_object_seg_pose = os.environ.get(
+        'USE_OBJECT_SEG_POSE', 'true').lower().strip('\'"')
+
 
     # launch configurations
     use_head_camera = LaunchConfiguration('use_head_camera')
@@ -76,6 +79,9 @@ def generate_launch_description():
     mic_network_interface = LaunchConfiguration('mic_network_interface')
     use_person_pose = LaunchConfiguration('use_person_pose')
     person_sensor_fusion = LaunchConfiguration('person_sensor_fusion')
+    use_object_seg_pose = LaunchConfiguration('use_object_seg_pose')
+    object_device = LaunchConfiguration('object_device')
+
 
     # launch arguments
     declare_use_head_camera = DeclareLaunchArgument(
@@ -150,6 +156,18 @@ def generate_launch_description():
         description='3D 人物位置算出のソース',
         choices=['depth', 'pointcloud'],
     )
+    declare_use_object_seg_pose = DeclareLaunchArgument(
+        'use_object_seg_pose',
+        default_value=default_use_object_seg_pose,
+        description='物体セグメンテーションと 3D 位置推定を起動する',
+        choices=['true', 'false'],
+    )
+    declare_object_device = DeclareLaunchArgument(
+        'object_device',
+        default_value='cpu',
+        description='物体セグメンテーションの推論デバイス',
+        choices=['cpu', 'cuda'],
+    )
     ld.add_action(declare_use_head_camera)
     ld.add_action(declare_use_amazing_hand)
     ld.add_action(declare_use_emc)
@@ -163,6 +181,8 @@ def generate_launch_description():
     ld.add_action(declare_mic_network_interface)
     ld.add_action(declare_use_person_pose)
     ld.add_action(declare_person_sensor_fusion)
+    ld.add_action(declare_use_object_seg_pose)
+    ld.add_action(declare_object_device)
 
 
     # include launch
@@ -386,6 +406,37 @@ def generate_launch_description():
             'sensor_fusion': person_sensor_fusion,
         }],
     )
+    object_seg_pose_remappings = [
+        ('color_image', '/head_camera/d455/color/image_raw'),
+        ('depth_image', '/head_camera/d455/aligned_depth_to_color/image_raw'),
+        ('color_camera_info', '/head_camera/d455/color/camera_info'),
+    ]
+    object_seg_pose = Node(
+        package='nakalab_ultralytics_ros2',
+        executable='object_seg_pose',
+        condition=IfCondition(use_object_seg_pose),
+        output='screen',
+        emulate_tty=True,
+        remappings=object_seg_pose_remappings,
+        parameters=[{
+            'run_detect': True,
+            'model_path': '/tmp/yolo26l-seg.pt',
+            'device': ParameterValue(object_device, value_type=str),
+            'use_sim_time': False,
+        }],
+    )
+    object_seg_pose_3d = Node(
+        package='nakalab_ultralytics_cpp',
+        executable='object_seg_pose_3d',
+        condition=IfCondition(use_object_seg_pose),
+        output='screen',
+        emulate_tty=True,
+        remappings=object_seg_pose_remappings,
+        parameters=[{
+            'ref_frame': 'base_link',
+            'use_sim_time': False,
+        }],
+    )
     ld.add_action(head_camera)
     ld.add_action(head_servo)
     ld.add_action(hand)
@@ -404,5 +455,8 @@ def generate_launch_description():
     ld.add_action(whisper_node)
     ld.add_action(person_pose)
     ld.add_action(person_pose_3d)
+    ld.add_action(object_seg_pose)
+    ld.add_action(object_seg_pose_3d)
+
 
     return ld
