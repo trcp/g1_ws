@@ -5,6 +5,7 @@ services:
     network_mode: "host"
     volumes:
       - ./yolo_human_node.py:/app/yolo_human_node.py
+      - ../object/rgbd_geometry.py:/app/rgbd_geometry.py:ro
       - ./extract_person_features_off.py:/app/extract_person_features_off.py
       - ./extract_person_features.py:/app/extract_person_features.py
       - ~/.cache:/root/.cache
@@ -13,7 +14,9 @@ services:
       - .env
     environment:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      - CYCLONEDDS_URI=file:///tmp/cyclonedds.xml
+      # 未指定時は実機用の有線IF設定。実機なしの検証では
+      # YOLO_CYCLONEDDS_URIを空文字にするとCycloneDDSの自動選択を使う。
+      - CYCLONEDDS_URI=${YOLO_CYCLONEDDS_URI-file:///tmp/cyclonedds.xml}
       - ROS_DOMAIN_ID=0
       - PYTHONUNBUFFERED=1
     # コンテナが落ちても自動再起動

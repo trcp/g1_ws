@@ -17,12 +17,23 @@ YOLO Human Detection Node (Docker用)
 START_ACTIVE = True
 # True にすると cv2.imshow でリアルタイム表示する（Docker側でX11転送が必要）
 ENABLE_IMSHOW = False
+
+RGB_TOPIC = '/head_camera/d455/color/image_raw'
+ALIGNED_DEPTH_TOPIC = '/head_camera/d455/aligned_depth_to_color/image_raw'
+COLOR_CAMERA_INFO_TOPIC = '/head_camera/d455/color/camera_info'
+CAMERA_PARAMETER_SERVICE = '/head_camera/d455/set_parameters'
+ALIGNMENT_CHECK_PERIOD_SEC = 2.0
+ALIGNED_DEPTH_SILENCE_SEC = 3.0
+ALIGNMENT_REQUEST_TIMEOUT_SEC = 5.0
+MAX_ALIGNMENT_ATTEMPTS = 3
 # ============================================================
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
-from sensor_msgs.msg import Image, CompressedImage
+from sensor_msgs.msg import Image, CompressedImage, CameraInfo
+from rcl_interfaces.srv import SetParameters
+from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from std_msgs.msg import String
 from cv_bridge import CvBridge
 import cv2
@@ -34,6 +45,13 @@ import os
 import shutil
 import time
 from pathlib import Path
+
+# リポジトリから直接実行する場合は隣のobject/を追加する。Dockerでは
+# rgbd_geometry.pyを/appへマウントするため、スクリプトと同じ場所から見つかる。
+object_module_dir = Path(__file__).resolve().parent.parent / "object"
+if object_module_dir.is_dir():
+    sys.path.insert(0, str(object_module_dir))
+from rgbd_geometry import FramePairs, camera_from_info, depth_in_meters, stamp_ns
 
 from ultralytics import YOLOE
 
@@ -140,16 +158,14 @@ class YoloHumanNode(Node):
     def __init__(self):
         super().__init__('yolo_human_node')
 
-        # --- カメラトピック（直書き） ---
-        rgb_topic = '/head_camera/d455/color/image_raw'
-        depth_topic = '/head_camera/d455/depth/image_rect_raw'
-
         # --- Load YOLO model ---
         model_path = 'yoloe-26x-seg.pt'
         import torch
         if torch.cuda.is_available():
+            self.inference_device = 0
             self.get_logger().info(f"CUDA is available! Using GPU ({torch.cuda.get_device_name(0)})")
         else:
+            self.inference_device = "cpu"
             self.get_logger().warn("CUDA is NOT available! Falling back to CPU.")
 
         model_path = prepare_yolo_weight(model_path, self.get_logger())
@@ -202,27 +218,42 @@ class YoloHumanNode(Node):
             self.get_logger().info("START_ACTIVE=False: commandトピックで開始してください")
 
         # Data cache
-        self.latest_rgb = None
-        self.latest_depth = None
+        self.frame_pairs = FramePairs()
+        self.camera_info = None
+        self.alignment_future = None
+        self.alignment_requested_at = 0.0
+        self.last_depth_received_at = 0.0
+        self.alignment_attempts = 0
+        self.alignment_client = self.create_client(
+            SetParameters,
+            CAMERA_PARAMETER_SERVICE,
+        )
+        self.alignment_timer = self.create_timer(
+            ALIGNMENT_CHECK_PERIOD_SEC,
+            self.ensure_aligned_depth,
+        )
         self.rgb_received = False
         self.depth_received = False
 
-        # --- QoS: カメラのRELIABLE publisher に合わせる ---
-        # RealSenseのデフォルト: RELIABLE, KEEP_LAST(1)
+        # --- BEST_EFFORTでRELIABLE/BEST_EFFORTの両カメラ配信に対応 ---
         camera_qos = QoSProfile(
-            reliability=QoSReliabilityPolicy.RELIABLE,
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
             history=QoSHistoryPolicy.KEEP_LAST,
             depth=1
         )
 
         # Subscribers
         self.rgb_sub = self.create_subscription(
-            Image, rgb_topic, self.rgb_callback, camera_qos)
+            Image, RGB_TOPIC, self.rgb_callback, camera_qos)
         self.depth_sub = self.create_subscription(
-            Image, depth_topic, self.depth_callback, camera_qos)
+            Image, ALIGNED_DEPTH_TOPIC, self.depth_callback, camera_qos)
 
-        self.get_logger().info(f"Subscribed to RGB: {rgb_topic}")
-        self.get_logger().info(f"Subscribed to Depth: {depth_topic}")
+        self.info_sub = self.create_subscription(
+            CameraInfo, COLOR_CAMERA_INFO_TOPIC,
+            self.camera_info_callback, camera_qos)
+
+        self.get_logger().info(f"Subscribed to RGB: {RGB_TOPIC}")
+        self.get_logger().info(f"Subscribed to Depth: {ALIGNED_DEPTH_TOPIC}")
 
         # Command Subscriber
         self.cmd_sub = self.create_subscription(
@@ -292,28 +323,92 @@ class YoloHumanNode(Node):
             self.get_logger().error("Invalid command format. Expected JSON.")
 
     def rgb_callback(self, msg):
-        self.latest_rgb = msg
+        received_ns = self.get_clock().now().nanoseconds
+        self.frame_pairs.add_rgb(msg, received_ns)
         if not self.rgb_received:
             self.rgb_received = True
             self.get_logger().info("First RGB image received!")
 
     def depth_callback(self, msg):
-        self.latest_depth = msg
+        received_ns = self.get_clock().now().nanoseconds
+        self.frame_pairs.add_depth(msg, received_ns)
+        self.last_depth_received_at = time.monotonic()
         if not self.depth_received:
             self.depth_received = True
             self.get_logger().info("First Depth image received!")
 
-    def _depth_to_meters(self, depth_values):
-        depth = np.asarray(depth_values, dtype=np.float32)
-        depth = np.where(depth > 100.0, depth / 1000.0, depth)
-        return depth
+    def camera_info_callback(self, msg):
+        self.camera_info = msg
+
+    def ensure_aligned_depth(self):
+        """bringupを書き換えず、必要時だけ実行中カメラの整列を有効化。"""
+        now = time.monotonic()
+        if self.alignment_future is not None:
+            if self.alignment_future.done():
+                try:
+                    response = self.alignment_future.result()
+                    succeeded = (
+                        response
+                        and response.results
+                        and all(result.successful for result in response.results)
+                    )
+                    if succeeded:
+                        self.get_logger().info(
+                            'Camera depth alignment enabled; '
+                            'waiting for aligned frames.'
+                        )
+                    else:
+                        reasons = (
+                            [result.reason for result in response.results]
+                            if response
+                            else ['no response']
+                        )
+                        self.get_logger().error(
+                            f'Cannot enable depth alignment: {reasons}'
+                        )
+                except Exception as error:
+                    self.get_logger().error(
+                        f'Depth alignment request failed: {error}'
+                    )
+                self.alignment_future = None
+            elif now - self.alignment_requested_at > ALIGNMENT_REQUEST_TIMEOUT_SEC:
+                self.alignment_client.remove_pending_request(self.alignment_future)
+                self.alignment_future.cancel()
+                self.alignment_future = None
+                self.get_logger().error('Depth alignment parameter request timed out.')
+            return
+        if now - self.last_depth_received_at < ALIGNED_DEPTH_SILENCE_SEC:
+            return
+        if self.alignment_attempts >= MAX_ALIGNMENT_ATTEMPTS:
+            self.get_logger().error(
+                'Aligned depth unavailable. Check camera align_depth.enable; '
+                'raw depth will not be used.',
+                throttle_duration_sec=10.0,
+            )
+            return
+        if not self.alignment_client.service_is_ready():
+            self.get_logger().warn(
+                f'Waiting for camera set_parameters service {CAMERA_PARAMETER_SERVICE}.',
+                throttle_duration_sec=10.0)
+            return
+        request = SetParameters.Request()
+        request.parameters = [Parameter(
+            name='align_depth.enable',
+            value=ParameterValue(
+                type=ParameterType.PARAMETER_BOOL,
+                bool_value=True,
+            ),
+        )]
+        self.alignment_attempts += 1
+        self.alignment_requested_at = now
+        self.alignment_future = self.alignment_client.call_async(request)
 
     def _estimate_depth(self, cv_depth, x1, y1, x2, y2, u_center, v_center):
         h, w = cv_depth.shape[:2]
         u_center = max(0, min(u_center, w - 1))
         v_center = max(0, min(v_center, h - 1))
 
-        center_z = float(self._depth_to_meters(cv_depth[v_center, u_center]))
+        center_z = float(cv_depth[v_center, u_center])
         if np.isfinite(center_z) and 0.1 < center_z < 10.0:
             return center_z, True
 
@@ -331,7 +426,7 @@ class YoloHumanNode(Node):
         if roi.size == 0:
             roi = cv_depth[by1:by2, bx1:bx2]
 
-        roi_m = self._depth_to_meters(roi).reshape(-1)
+        roi_m = roi.reshape(-1)
         valid = roi_m[np.isfinite(roi_m) & (roi_m > 0.1) & (roi_m < 10.0)]
         if valid.size == 0:
             return 999.0, False
@@ -355,27 +450,49 @@ class YoloHumanNode(Node):
         if not self.is_active:
             return
 
-        if self.latest_rgb is None:
-            self.get_logger().warn("Waiting for RGB image...", throttle_duration_sec=2.0)
-            return
-        if self.latest_depth is None:
-            self.get_logger().warn("Waiting for Depth image...", throttle_duration_sec=2.0)
-            return
-
         try:
-            cv_rgb = self.bridge.imgmsg_to_cv2(self.latest_rgb, "bgr8")
-            cv_depth = self.bridge.imgmsg_to_cv2(self.latest_depth, "passthrough")
-        except Exception as e:
-            self.get_logger().error(f"CV Bridge error: {e}")
+            pair = self.frame_pairs.take(self.get_clock().now().nanoseconds)
+            if pair is None:
+                self.get_logger().warn(
+                    'Waiting for fresh synchronized RGB/aligned depth.',
+                    throttle_duration_sec=2.0,
+                )
+                return
+            rgb_msg, depth_msg = pair
+            frame_received_ns = self.frame_pairs.last_pair_received_ns
+            camera_model = camera_from_info(self.camera_info, rgb_msg)
+            if camera_model is None:
+                self.get_logger().warn(
+                    'CameraInfo unavailable: object grasp will use fixed '
+                    'intrinsics.',
+                    throttle_duration_sec=10.0,
+                )
+            cv_rgb = self.bridge.imgmsg_to_cv2(rgb_msg, "bgr8")
+            cv_depth = depth_in_meters(
+                self.bridge.imgmsg_to_cv2(depth_msg, "passthrough"),
+                depth_msg.encoding,
+            )
+        except Exception as error:
+            self.get_logger().error(
+                f'RGBD frame rejected: {error}',
+                throttle_duration_sec=2.0,
+            )
             return
 
-        # Perform inference with bytetrack tracker (GPU指定)
-        results = self.model.track(cv_rgb, device=0, verbose=False,
-                                   persist=True, tracker="bytetrack.yaml")
+        # Trackerが検出を落とした場合だけ通常推論へフォールバックする。
+        results = self.model.track(
+            cv_rgb,
+            device=self.inference_device,
+            verbose=False,
+            persist=True,
+            tracker="bytetrack.yaml",
+        )
 
         # Fallback: if tracker dropped all boxes, try predict directly
         if len(results) > 0 and len(results[0].boxes) == 0:
-            pred_res = self.model.predict(cv_rgb, device=0, verbose=False)
+            pred_res = self.model.predict(
+                cv_rgb, device=self.inference_device, verbose=False
+            )
             if len(pred_res) > 0 and len(pred_res[0].boxes) > 0:
                 results = pred_res
 
@@ -430,7 +547,16 @@ class YoloHumanNode(Node):
                     'valid_depth': valid_depth,
                     'angle_rad': angle_rad,
                     'offset_x': x_offset,
-                    'track_id': track_id
+                    'track_id': track_id,
+                    'rgb_stamp_ns': stamp_ns(rgb_msg),
+                    'depth_stamp_ns': stamp_ns(depth_msg),
+                    'frame_received_ns': frame_received_ns,
+                    'result_stamp_ns': self.get_clock().now().nanoseconds,
+                    'depth_aligned': True,
+                    'image_width': int(rgb_msg.width),
+                    'image_height': int(rgb_msg.height),
+                    'camera_frame': rgb_msg.header.frame_id,
+                    'camera_model': camera_model
                 }
                 if self.save_crops and label == "person":
                     crop_path = self._save_person_crop(

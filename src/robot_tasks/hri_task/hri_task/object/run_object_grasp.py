@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""物体をYOLOで認識し、把持用IKを計算して表示する実行スクリプト。"""
+"""物体をYOLOで認識し、簡易IKの関節目標をMoveItで実行する。"""
 
 from __future__ import annotations
 
@@ -7,12 +7,13 @@ import argparse
 import json
 import math
 import os
+import re
 import time
 
 
 # hri_task の bringup / YOLO コンテナと同じ ROS 設定を使う。
 # 既にコンテナ内で適切な CYCLONEDDS_URI が設定されている場合は上書きしない。
-os.environ["ROS_DOMAIN_ID"] = "0"
+os.environ.setdefault("ROS_DOMAIN_ID", "0")
 os.environ.setdefault("RMW_IMPLEMENTATION", "rmw_cyclonedds_cpp")
 _HOST_CYCLONEDDS_CONFIG = (
     "/home/roboworks/g1_ws/cyclonedds/cyclonedds.katana.xml"
@@ -23,29 +24,18 @@ if "CYCLONEDDS_URI" not in os.environ and os.path.isfile(_HOST_CYCLONEDDS_CONFIG
 import rclpy
 from rclpy.node import Node
 
-from object_grasp import YoloObjectDetector, calculate_object_grasp_plan
-from direct_joint_control import DirectJointController, HOME_POSE
+from erasers_g1_api.robot_control import ArmControl, G1Control
+from object_grasp import (
+    CameraTransform,
+    YoloObjectDetector,
+    calculate_object_grasp_plan,
+    joint_limit_violations,
+    joint_margin_violations,
+)
 
 
 # ============================================================
-# 実験機能の有効・無効
-# ============================================================
-
-# Amazing Hand は未装着のため、現在は必ずダミー動作にする。
-ENABLE_REAL_HAND_CONTROL = False
-
-# 今回使用する実験機能。
-ENABLE_HEAD_TILT_RETRY = True
-ENABLE_CAMERA_ZERO_DOWN_BIAS = True
-ENABLE_GRASP_POSITION_OFFSETS = True
-# 接近時は肩と肘を同時に動かす。
-ENABLE_STAGED_ARM_MOTION = False
-# 上方退避はカメラと干渉するため、現在は使用しない。
-ENABLE_SAFE_LIFT_BEFORE_HOME = False
-
-
-# ============================================================
-# 実験用パラメータ
+# 把持動作の調整値
 # ============================================================
 
 DETECTION_TIMEOUT_SEC = 8.0
@@ -53,87 +43,104 @@ GRASP_STRATEGY = "center"
 
 # d455_joint は正方向が下向き。保存した初期角から絶対値で移動する。
 HEAD_TILT_RETRY_COUNT = 2
-HEAD_TILT_STEP_DOWN_DEG = 7.0
+HEAD_TILT_STEP_DOWN_DEG = 2 #(7)
 HEAD_TILT_SETTLE_TOLERANCE_RAD = 0.02
 HEAD_TILT_SETTLE_TIMEOUT_SEC = 2.0
-
-# サーボ角 0 rad のときも、カメラが実際には少し下を向いている補正。
-# 把持計算の head_tilt は負方向が下向きなので、計算時に減算する。
-CAMERA_ZERO_DOWN_BIAS_DEG = 7.0
-FALLBACK_HEAD_TILT_RAD = 0.0
 
 # ロボット座標系での把持点補正。X=前、Y=左、Z=上。
 GRASP_OFFSET_X_M = 0.0
 GRASP_OFFSET_Y_M = 0.0
-GRASP_OFFSET_Z_M = -0.02
-SAFE_LIFT_OFFSET_Z_M = 0.08
+GRASP_OFFSET_Z_M = 0.03
 
-# 基本姿勢の右手首 -0.13 rad から負方向へ 90 度回した固定値。
-# 正方向では手の甲が内側を向いたため、実機確認に合わせて反転する。
-TOP_GRASP_WRIST_ROLL_RAD = -0.13 - math.pi / 2.0
+# 正面の物体へ横から接近するため、把持点の10cm手前から開始する。
+# 把持後は机から離すため、従来どおり上方向へリフトする。
+SIDE_APPROACH_CLEARANCE_M = 0.10
+POST_GRASP_LIFT_M = 0.10
 
-# 右肘を畳み、手の甲を外側へ向けた上方把持用HOME。
-TOP_GRASP_HOME_POSE = HOME_POSE.copy()
-TOP_GRASP_HOME_POSE["right_elbow_joint"] = -1.0
-TOP_GRASP_HOME_POSE["right_wrist_roll_joint"] = TOP_GRASP_WRIST_ROLL_RAD
+# 直接関節制御で使用していた自然な腕下げ姿勢。MoveItでも同じ関節基準を使う。
+WALK_POSE = {
+    "left_shoulder_pitch_joint": 0.29,
+    "left_shoulder_roll_joint": 0.23,
+    "left_shoulder_yaw_joint": -0.02,
+    "left_elbow_joint": 0.97,
+    "left_wrist_roll_joint": 0.08,
+    "right_shoulder_pitch_joint": 0.29,
+    "right_shoulder_roll_joint": -0.23,
+    "right_shoulder_yaw_joint": 0.03,
+    "right_elbow_joint": 0.97,
+    "right_wrist_roll_joint": -0.13,
+    "waist_yaw_joint": 0.0,
+}
 
-# 動作確認用の待機時間。DirectJointController は待機中も目標姿勢を保持する。
-TOP_HOME_HOLD_SEC = 3.0
-SHOULDER_STAGE_HOLD_SEC = 2.0
-ELBOW_STAGE_HOLD_SEC = 2.0
-GRASP_HOLD_SEC = 3.0
-SAFE_LIFT_HOLD_SEC = 2.0
-ELBOW_FOLD_HOLD_SEC = 1.5
-INITIAL_HOLD_SEC = 3.0
+# 実機で親指が上になることを確認したWALK姿勢の手首角を使う。
+SIDE_GRASP_WRIST_ROLL_RAD = {
+    "left": WALK_POSE["left_wrist_roll_joint"],
+    "right": WALK_POSE["right_wrist_roll_joint"],
+}
+TOP_GRASP_ELBOW_RAD = -0.90
+ARM_NAMES = ("right", "left")
+
 READY_TIMEOUT_SEC = 8.0
+# MoveItモデルの速度・加速度上限に掛ける倍率。0より大きく1以下。
+ARM_VELOCITY_SCALE = 0.5
+ARM_ACCELERATION_SCALE = 0.5
+MOTION_PAUSE_SEC = 1.0
+ROBOT_BASE_FRAME = "base_link"
+CAMERA_TF_TIMEOUT_SEC = 3.0
+
+MOVEIT_JOINTS = frozenset(WALK_POSE)
+OBJECT_LIST = ("apple", "bottle", "orange", "banana")
+VOICE_TARGET_ATTEMPTS = 3
+
+
+class GraspArmControl(ArmControl):
+    """この把持スクリプトのMoveIt要求だけに減速設定を適用する。"""
+
+    def _send_move_group_goal(self, goal_msg, wait):
+        for scale in (ARM_VELOCITY_SCALE, ARM_ACCELERATION_SCALE):
+            if not math.isfinite(scale) or not 0.0 < scale <= 1.0:
+                raise ValueError("Arm speed scales must be finite and in (0, 1].")
+        goal_msg.request.max_velocity_scaling_factor = ARM_VELOCITY_SCALE
+        goal_msg.request.max_acceleration_scaling_factor = ARM_ACCELERATION_SCALE
+        return super()._send_move_group_goal(goal_msg, wait)
+
+def pause_after_motion(node) -> bool:
+    """動作間に待機し、その間も関節フィードバックを受信する。"""
+
+    node.get_logger().info(f"Pausing for {MOTION_PAUSE_SEC:.1f} seconds after motion.")
+    deadline = time.monotonic() + MOTION_PAUSE_SEC
+    while rclpy.ok():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            return True
+        rclpy.spin_once(node, timeout_sec=min(0.1, remaining))
+    return False
 
 
 class OptionalHandController:
-    """実ハンド未装着時は、同じ動作順序をログだけで再現する。"""
+    """Amazing Handの有無を吸収する。既定は実機を開閉するreal。"""
 
-    def __init__(self, node) -> None:
+    def __init__(self, node, arm: ArmControl, mode: str = "real") -> None:
         self.node = node
-        self.client = None
-        self.hand_command_type = None
-
-        if not ENABLE_REAL_HAND_CONTROL:
-            self.node.get_logger().info(
-                "Real hand control is disabled; using dummy hand commands."
-            )
-            return
-
-        try:
-            from amazing_hand_interfaces.srv import HandCommand
-
-            client = node.create_client(HandCommand, "/hand_command")
-            if client.wait_for_service(timeout_sec=1.0):
-                self.client = client
-                self.hand_command_type = HandCommand
-            else:
-                self.node.get_logger().warn(
-                    "/hand_command is unavailable; falling back to dummy mode."
-                )
-        except Exception as error:
-            self.node.get_logger().warn(
-                f"Hand control is unavailable; falling back to dummy mode: {error}"
-            )
+        self.arm = arm
+        self.mode = mode
+        self.node.get_logger().info(f"Amazing Hand mode: {mode}")
 
     def command(self, command: str, hand: str = "right") -> bool:
-        if self.client is None or self.hand_command_type is None:
-            print(f"[DUMMY HAND] {command} {hand} hand")
+        if self.mode == "disabled":
             return True
+        if self.mode == "dummy":
+            print(f"[DUMMY HAND] {command} {hand} hand")
+            return pause_after_motion(self.node)
 
-        request = self.hand_command_type.Request()
-        request.command = command
-        request.hand = hand
-        future = self.client.call_async(request)
-        rclpy.spin_until_future_complete(self.node, future, timeout_sec=3.0)
-        if not future.done() or future.result() is None:
+        try:
+            success = bool(self.arm.hand_control(command=command, hand=hand))
+        except Exception as error:
             self.node.get_logger().warn(
-                f"Hand command timed out: command={command}, hand={hand}"
+                f"Hand command failed: command={command}, hand={hand}: {error}"
             )
             return False
-        return bool(future.result().success)
+        return success and pause_after_motion(self.node)
 
 
 def parse_args() -> argparse.Namespace:
@@ -142,9 +149,84 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--target",
-        help="YOLOへ渡す物体名。省略すると実行時に入力する。例: bottle",
+        help="YOLOへ渡す物体名。省略すると音声認識で尋ねる。例: bottle",
+    )
+    parser.add_argument(
+        "--hand-mode",
+        choices=("dummy", "real", "disabled"),
+        default="real",
+        help="Amazing Hand: dummy=ログのみ、real=実機（既定）、disabled=処理なし",
+    )
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="YOLO検出とIK計算だけを行い、腕・頭・ハンドを動かさない",
     )
     return parser.parse_args()
+
+
+def recognize_target_name(node) -> str | None:
+    """HRI Taskと同じTTS/SpeechToTextで、候補から1つを聞き取る。"""
+
+    # --target指定時はWhisper/SMACHなどの音声依存を読み込まない。
+    import smach
+    from erasers_g1_api.tts import TTS
+    from erasers_g1_api.state_skills.recongnition import SpeechToText
+    from g1_srvs.srv import AudioClient
+    from std_srvs.srv import SetBool
+
+    for service_type, service_name in (
+        (AudioClient, "/play_audio"), (SetBool, "/mic_rec")
+    ):
+        client = node.create_client(service_type, service_name)
+        try:
+            if not client.wait_for_service(timeout_sec=READY_TIMEOUT_SEC):
+                node.get_logger().error(f"Voice service unavailable: {service_name}")
+                return None
+        finally:
+            node.destroy_client(client)
+
+    tts = TTS(node)
+    speech = SpeechToText(
+        node=node,
+        tts=tts,
+        start_msg=(
+            "Please say the name of the object you would like me to pick up "
+            "after the beep. You can choose "
+            + ", ".join(OBJECT_LIST) + "."
+        ),
+        success_msg="Please wait.",
+        timeout_msg="Please say apple, bottle, orange, or banana after the beep.",
+        lang="en",
+        max_challenge=VOICE_TARGET_ATTEMPTS,
+    )
+    userdata = smach.UserData()
+    userdata.num_challenge = 0
+    # API側の綴りに合わせる。
+    userdata.success_keywards = list(OBJECT_LIST)
+    for _ in range(VOICE_TARGET_ATTEMPTS):
+        if not rclpy.ok():
+            return None
+        userdata.stt_text = ""
+        outcome = speech.execute(userdata)
+        if outcome == "failure":
+            return None
+        if outcome != "success":
+            continue
+        matches = [
+            name for name in OBJECT_LIST
+            if re.search(r"\b" + re.escape(name) + r"s?\b", userdata.stt_text.lower())
+        ]
+        if len(matches) == 1:
+            target = matches[0]
+            node.get_logger().info(f"Voice target: {target}")
+            tts.say(f"I will grasp the {target}.")
+            return target
+        node.get_logger().warn(f"Expected one object, heard: {userdata.stt_text}")
+        # 次の試行で候補一覧を含む質問を再度読み上げる。
+        userdata.num_challenge = 0
+
+    return None
 
 
 def print_grasp_plan(plan) -> None:
@@ -152,6 +234,7 @@ def print_grasp_plan(plan) -> None:
 
     print("\n========== OBJECT GRASP PLAN ==========")
     print(f"object       : {plan.object_name}")
+    print(f"arm          : {plan.arm}")
     print(f"strategy     : {plan.grasp_strategy}")
     print(f"confidence   : {plan.confidence:.3f}")
     print(f"bbox         : {plan.bbox}")
@@ -159,6 +242,9 @@ def print_grasp_plan(plan) -> None:
     print(f"depth        : {plan.depth_m:.3f} m")
     print(f"camera xyz   : {plan.camera_xyz}")
     print(f"robot xyz    : {plan.robot_xyz}")
+    print(f"coordinates  : {plan.coordinate_source}")
+    print(f"IK source    : {plan.kinematics_source}")
+    print(f"shoulder @0  : {plan.shoulder_distance_at_zero_m:.3f} m")
     print(f"arm distance : {plan.arm_distance_m:.3f} m")
     print(f"reachable    : {plan.reachable}")
     print(f"reason       : {plan.reason or '-'}")
@@ -172,27 +258,24 @@ def print_grasp_plan(plan) -> None:
 
 
 def wait_for_arm_ready(node, arm, timeout: float = READY_TIMEOUT_SEC):
-    """関節フィードバックと腕制御subscriberを確認して初期姿勢を返す。"""
+    """MoveIt対象関節のフィードバックを待ち、初期姿勢を返す。"""
 
-    required_joints = set(HOME_POSE)
+    required_joints = set(MOVEIT_JOINTS)
     start_time = time.time()
 
     while rclpy.ok() and time.time() - start_time < timeout:
         rclpy.spin_once(node, timeout_sec=0.1)
-        available_joints = set(arm.current_joints)
-        command_subscribers = node.count_subscribers("/upper_joints_control")
-        if required_joints.issubset(available_joints) and command_subscribers > 0:
+        current_joints = arm.get_current_joints_pose()
+        if required_joints.issubset(current_joints):
             return {
-                joint_name: arm.current_joints[joint_name]
-                for joint_name in HOME_POSE
+                joint_name: float(current_joints[joint_name])
+                for joint_name in MOVEIT_JOINTS
             }
 
-    missing_joints = sorted(required_joints - set(arm.current_joints))
-    command_subscribers = node.count_subscribers("/upper_joints_control")
+    current_joints = arm.get_current_joints_pose()
+    missing_joints = sorted(required_joints - set(current_joints))
     node.get_logger().error(
-        "Arm is not ready: "
-        f"missing_joints={missing_joints}, "
-        f"upper_joints_control_subscribers={command_subscribers}"
+        f"Arm is not ready: missing_joints={missing_joints}"
     )
     return None
 
@@ -203,95 +286,457 @@ def wait_for_head_tilt_feedback(node, arm, timeout: float = 2.0):
     start_time = time.time()
     while rclpy.ok() and time.time() - start_time < timeout:
         rclpy.spin_once(node, timeout_sec=0.1)
-        if "d455_joint" in arm.current_joints:
-            return float(arm.current_joints["d455_joint"])
+        current_joints = arm.get_current_joints_pose()
+        if "d455_joint" in current_joints:
+            return float(current_joints["d455_joint"])
     return None
 
 
-def move_head_tilt_and_wait(node, arm, target_tilt: float) -> bool:
+def move_head_tilt_and_wait(node, robot, arm, target_tilt: float) -> bool:
     """d455_joint を動かし、フィードバックが目標付近へ来るまで待つ。"""
 
-    arm.send_joints({"d455_joint": target_tilt}, hold_sec=0.0)
+    # G1Controlのtiltは負方向が下、d455_jointの実測値は正方向が下。
+    if not robot.move_head(tilt=-target_tilt, pan=0.0):
+        node.get_logger().warn(
+            f"Head tilt command failed: target={target_tilt:.3f}"
+        )
+        return False
+
     start_time = time.time()
+    actual = None
     while rclpy.ok() and time.time() - start_time < HEAD_TILT_SETTLE_TIMEOUT_SEC:
         rclpy.spin_once(node, timeout_sec=0.1)
-        actual = arm.current_joints.get("d455_joint")
-        if actual is not None and abs(float(actual) - target_tilt) <= HEAD_TILT_SETTLE_TOLERANCE_RAD:
-            return True
+        actual = arm.get_current_joints_pose().get("d455_joint")
+        settled = (
+            actual is not None
+            and abs(float(actual) - target_tilt)
+            <= HEAD_TILT_SETTLE_TOLERANCE_RAD
+        )
+        if settled:
+            return pause_after_motion(node)
 
     node.get_logger().warn(
         "Head tilt did not settle: "
         f"target={target_tilt:.3f}, "
-        f"actual={arm.current_joints.get('d455_joint')}"
+        f"actual={actual}"
     )
     return False
 
 
-def calculation_head_tilt(actual_d455_tilt) -> float:
-    """実機ジョイント角を、既存把持計算の負=下向き規則へ変換する。"""
+def create_tf_buffer(node):
+    """plan-onlyでもTFを受信できるバッファとリスナーを作る。"""
 
-    if actual_d455_tilt is None:
-        head_tilt = FALLBACK_HEAD_TILT_RAD
-    else:
-        head_tilt = -float(actual_d455_tilt)
+    from tf2_ros import Buffer, TransformListener
 
-    if ENABLE_CAMERA_ZERO_DOWN_BIAS:
-        head_tilt -= math.radians(CAMERA_ZERO_DOWN_BIAS_DEG)
-    return head_tilt
+    buffer = Buffer()
+    listener = TransformListener(buffer, node)
+    return buffer, listener
 
 
-def grasp_offsets(extra_z_m: float = 0.0) -> tuple[float, float, float]:
-    """機能無効時は補正なし、機能有効時は設定したXYZ補正を返す。"""
+def wait_for_camera_transform(node, tf_buffer, camera_frame: str):
+    """最新のカメラ光学座標系をbase_linkへ変換するTFを待つ。
 
-    if not ENABLE_GRASP_POSITION_OFFSETS:
-        return 0.0, 0.0, extra_z_m
-    return (
-        GRASP_OFFSET_X_M,
-        GRASP_OFFSET_Y_M,
-        GRASP_OFFSET_Z_M + extra_z_m,
+    このTFにはd455_jointの実測角、URDFの固定取付角0.1 rad、RealSenseの
+    光学座標軸変換が含まれる。別のチルト補正は加えない。
+    """
+
+    if not camera_frame:
+        node.get_logger().error("Detection did not provide a camera frame.")
+        return None
+
+    from rclpy.time import Time
+
+    deadline = time.monotonic() + CAMERA_TF_TIMEOUT_SEC
+    last_error = None
+    while rclpy.ok() and time.monotonic() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.1)
+        try:
+            message = tf_buffer.lookup_transform(
+                ROBOT_BASE_FRAME,
+                camera_frame,
+                Time(),
+            )
+            translation = message.transform.translation
+            rotation = message.transform.rotation
+            transform = CameraTransform(
+                target_frame=ROBOT_BASE_FRAME,
+                source_frame=camera_frame,
+                translation=(
+                    float(translation.x),
+                    float(translation.y),
+                    float(translation.z),
+                ),
+                rotation_xyzw=(
+                    float(rotation.x),
+                    float(rotation.y),
+                    float(rotation.z),
+                    float(rotation.w),
+                ),
+            )
+            node.get_logger().info(
+                "Camera TF: "
+                f"{ROBOT_BASE_FRAME}<-{camera_frame}, "
+                f"translation={transform.translation}, "
+                f"rotation_xyzw={transform.rotation_xyzw}"
+            )
+            return transform
+        except Exception as error:
+            last_error = error
+
+    node.get_logger().error(
+        "Camera TF is unavailable; object-directed motion is disabled. "
+        f"Required transform: {ROBOT_BASE_FRAME}<-{camera_frame}. "
+        f"Last error: {last_error}"
+    )
+    return None
+
+
+def build_grasp_plan(
+    detection,
+    camera_transform,
+    arm_name: str,
+    extra_x_m: float = 0.0,
+    extra_z_m: float = 0.0,
+):
+    """共通の補正値へX/Zの段階別補正を加え、把持計画を作る。"""
+
+    return calculate_object_grasp_plan(
+        detection,
+        arm=arm_name,
+        grasp_strategy=GRASP_STRATEGY,
+        offset_x_m=GRASP_OFFSET_X_M + extra_x_m,
+        offset_y_m=GRASP_OFFSET_Y_M,
+        offset_z_m=GRASP_OFFSET_Z_M + extra_z_m,
+        wrist_roll=SIDE_GRASP_WRIST_ROLL_RAD[arm_name],
+        camera_transform=camera_transform,
     )
 
 
-def send_grasp_posture(arm, joints: dict[str, float]) -> None:
-    """設定に応じて、同時または肩→肘の順で把持姿勢へ移動する。"""
+def build_grasp_sequence(detection, camera_transform, arm_name: str) -> dict:
+    """手前待機、横把持、把持後リフトの3つの目標を作る。"""
 
-    if not ENABLE_STAGED_ARM_MOTION:
-        arm.send_joints(joints, hold_sec=GRASP_HOLD_SEC)
-        return
-
-    shoulder_stage = {
-        name: value
-        for name, value in joints.items()
-        if name != "right_elbow_joint"
+    return {
+        "pre-grasp": build_grasp_plan(
+            detection,
+            camera_transform,
+            arm_name,
+            extra_x_m=-SIDE_APPROACH_CLEARANCE_M,
+        ),
+        "grasp": build_grasp_plan(
+            detection,
+            camera_transform,
+            arm_name,
+        ),
+        "lift": build_grasp_plan(
+            detection,
+            camera_transform,
+            arm_name,
+            extra_z_m=POST_GRASP_LIFT_M,
+        ),
     }
-    arm.send_joints(shoulder_stage, hold_sec=SHOULDER_STAGE_HOLD_SEC)
-    arm.send_joints(
-        {"right_elbow_joint": joints["right_elbow_joint"]},
-        hold_sec=ELBOW_STAGE_HOLD_SEC,
+
+
+def build_arm_candidates(detection, camera_transform) -> dict:
+    """左右それぞれの把持シーケンスを同じ検出結果から作る。"""
+
+    return {
+        arm_name: build_grasp_sequence(
+            detection,
+            camera_transform,
+            arm_name,
+        )
+        for arm_name in ARM_NAMES
+    }
+
+
+def print_grasp_sequence(plans: dict, arm_name: str | None = None) -> None:
+    """各段階の目標座標と関節角を、実行順に表示する。"""
+
+    if arm_name:
+        print(f"\n######## {arm_name.upper()} ARM CANDIDATE ########")
+    for stage, plan in plans.items():
+        print(f"\n--- {stage.upper()} ---")
+        print_grasp_plan(plan)
+
+
+def sequence_distance_score(plans: dict) -> tuple[float, float, float]:
+    """候補の距離をログ表示するための診断値を返す。"""
+
+    return (
+        max(plan.shoulder_distance_at_zero_m for plan in plans.values()),
+        max(plan.arm_distance_m for plan in plans.values()),
+        abs(plans["grasp"].joints["waist_yaw_joint"]),
     )
+
+
+def select_grasp_arm_candidate(
+    node,
+    candidates: dict,
+) -> tuple[str | None, dict | None]:
+    """簡易IKを左右とも検査し、右腕優先で実行候補を返す。"""
+
+    for arm_name, plans in candidates.items():
+        print_grasp_sequence(plans, arm_name)
+
+    executable = {}
+    for arm_name in ARM_NAMES:  # ARM_NAMES = ("right", "left")
+        plans = candidates.get(arm_name)
+        if plans is None:
+            continue
+        required_joints = selected_arm_joint_names(arm_name)
+        errors = []
+        for stage, plan in plans.items():
+            missing = sorted(required_joints - set(plan.joints))
+            if missing:
+                errors.append(f"{stage}: missing joints {missing}")
+                continue
+            joints = {
+                name: float(plan.joints[name]) for name in required_joints
+            }
+            if not all(math.isfinite(value) for value in joints.values()):
+                errors.append(f"{stage}: non-finite joint value")
+                continue
+            hard_limit_errors = joint_limit_violations(joints)
+            if hard_limit_errors:
+                errors.append(
+                    f"{stage}: " + "; ".join(hard_limit_errors)
+                )
+
+        if errors:
+            node.get_logger().warn(
+                f"{arm_name} arm simplified joint targets cannot be sent: "
+                + " | ".join(errors)
+            )
+            continue
+
+        executable[arm_name] = plans
+
+    # 基本は右腕。右の3姿勢が簡易モデルで到達可能なら左の距離に関係なく右を使う。
+    # 右が到達不可で左が到達可能な場合だけ左へ切り替える。
+    selection_order = [
+        arm_name
+        for arm_name in ARM_NAMES
+        if arm_name in executable
+        and all(plan.reachable for plan in executable[arm_name].values())
+    ]
+    if not selection_order:
+        # 旧git版と同様、両腕とも距離近似だけが範囲外なら、境界へ丸めた右腕の
+        # 関節値を優先する。URDFのハードリミット外は上の検査で除外済み。
+        selection_order = [
+            arm_name for arm_name in ARM_NAMES if arm_name in executable
+        ]
+
+    if selection_order:
+        arm_name = selection_order[0]
+        plans = executable[arm_name]
+        if arm_name == "left":
+            node.get_logger().warn(
+                "The right-arm simplified sequence is not executable; "
+                "using the left arm as fallback."
+            )
+
+        shoulder_distance, max_distance, waist_rotation = sequence_distance_score(plans)
+        node.get_logger().info(
+            f"Selected {arm_name} arm from simplified joint targets: "
+            f"shoulder_distance={shoulder_distance:.3f} m, "
+            f"planar_distance={max_distance:.3f} m, "
+            f"waist={waist_rotation:.3f} rad."
+        )
+        unreachable = [
+            stage for stage, plan in plans.items() if not plan.reachable
+        ]
+        if unreachable:
+            node.get_logger().warn(
+                "Using legacy clamped simplified IK for stages: "
+                + ", ".join(unreachable)
+            )
+        return arm_name, plans
+
+    node.get_logger().error(
+        "Neither arm has a finite simplified joint sequence inside URDF limits."
+    )
+    return None, None
+
+
+def selected_arm_joint_names(arm_name: str) -> frozenset[str]:
+    """左右別MoveItチェーンで必須となる6関節を返す。"""
+
+    if arm_name not in ARM_NAMES:
+        raise ValueError(f"Unknown arm: {arm_name}")
+    return frozenset({
+        "waist_yaw_joint",
+        f"{arm_name}_shoulder_pitch_joint",
+        f"{arm_name}_shoulder_roll_joint",
+        f"{arm_name}_shoulder_yaw_joint",
+        f"{arm_name}_elbow_joint",
+        f"{arm_name}_wrist_roll_joint",
+    })
+
+
+def move_arm_joints(node, arm, joints: dict[str, float]) -> bool:
+    """計算済み関節角を1つのMoveItゴールとして送る。"""
+
+    unsupported = sorted(set(joints) - MOVEIT_JOINTS)
+    if unsupported:
+        node.get_logger().warn(
+            f"Ignoring joints outside MoveIt upper_body: {unsupported}"
+        )
+
+    targets = {
+        name: float(value)
+        for name, value in joints.items()
+        if name in MOVEIT_JOINTS
+    }
+    if not targets:
+        node.get_logger().error("No MoveIt joint target was provided.")
+        return False
+
+    success = bool(
+        arm.joint_control(
+            planning_group="upper_body",
+            wait=True,
+            **targets,
+        )
+    )
+    return success and pause_after_motion(node)
+
+
+def top_grasp_home_pose(initial_joints: dict, arm_name: str) -> dict:
+    """非選択腕を初期角のまま保ち、選択腕だけを把持HOMEへ畳む。"""
+
+    if arm_name not in ARM_NAMES:
+        raise ValueError(f"Unknown arm: {arm_name}")
+    pose = {
+        joint_name: float(initial_joints[joint_name])
+        for joint_name in MOVEIT_JOINTS
+    }
+    pose["waist_yaw_joint"] = 0.0
+    pose[f"{arm_name}_elbow_joint"] = TOP_GRASP_ELBOW_RAD
+    pose[f"{arm_name}_wrist_roll_joint"] = SIDE_GRASP_WRIST_ROLL_RAD[arm_name]
+    return pose
+
+
+def return_to_top_home(node, arm, home_pose: dict, arm_name: str) -> bool:
+    """選択腕の肩と肘を1つのMoveItゴールで把持HOMEへ戻す。"""
+
+    current_joints = arm.get_current_joints_pose()
+    if not MOVEIT_JOINTS.issubset(current_joints):
+        node.get_logger().error("Cannot return home: joint feedback is incomplete.")
+        return False
+
+    print(
+        f"Returning {arm_name} shoulder and elbow together "
+        "to TOP GRASP HOME..."
+    )
+    return move_arm_joints(node, arm, home_pose)
+
+
+def run_plan_only(
+    node,
+    detector,
+    tf_buffer,
+    target_name: str,
+) -> bool:
+    """ロボット制御を初期化せず、認識と座標・IK計算だけを行う。"""
+
+    print("PLAN-ONLY mode: no arm, head, or hand command will be sent.")
+    print("Checking YOLO connection...")
+    if not detector.wait_until_ready(timeout=READY_TIMEOUT_SEC):
+        print(detector.last_failure_reason)
+        return False
+
+    print(f"Searching for: {target_name} (coordinates use TF)")
+    detection = detector.detect(target_name, timeout=DETECTION_TIMEOUT_SEC)
+    if detection is None:
+        print(
+            detector.last_failure_reason
+            or f"Object was not detected: {target_name}"
+        )
+        return False
+
+    camera_transform = wait_for_camera_transform(
+        node, tf_buffer, detection.camera_frame
+    )
+    if camera_transform is None:
+        return False
+
+    candidates = build_arm_candidates(
+        detection,
+        camera_transform,
+    )
+    selected_arm, _ = select_grasp_arm_candidate(node, candidates)
+    if selected_arm is not None:
+        node.get_logger().info(
+            f"PLAN-ONLY selected {selected_arm} arm. Normal mode sends these "
+            "simplified joint targets through MoveIt joint planning."
+        )
+    return selected_arm is not None
+
+
+def stop_detector_safely(node, detector) -> None:
+    """この処理から開始したYOLOだけを停止し、終了処理を継続する。"""
+
+    try:
+        detector.stop()
+    except Exception as error:
+        node.get_logger().warn(f"Failed to stop YOLO: {error}")
 
 
 def main() -> None:
     args = parse_args()
     target_name = args.target
-    if not target_name:
-        target_name = input("把持する物体名を英語で入力してください: ").strip()
-
-    if not target_name:
-        print("物体名が空のため終了します。")
-        return
 
     rclpy.init()
     node = Node("run_object_grasp")
+    if not target_name:
+        try:
+            target_name = recognize_target_name(node)
+        except Exception as error:
+            node.get_logger().error(f"Voice target recognition failed: {error}")
+        finally:
+            if not target_name:
+                node.get_logger().error(
+                    "No voice target selected. No motion command was sent. "
+                    "Check HRI speech services or use --target orange."
+                )
+                node.destroy_node()
+                rclpy.shutdown()
+        if not target_name:
+            return
+
     detector = YoloObjectDetector(node)
-    arm = DirectJointController(node)
-    hand = OptionalHandController(node)
+    if args.plan_only:
+        tf_buffer, tf_listener = create_tf_buffer(node)
+        try:
+            run_plan_only(
+                node,
+                detector,
+                tf_buffer,
+                target_name,
+            )
+        finally:
+            # リスナーを関数終了まで保持する。
+            del tf_listener
+            stop_detector_safely(node, detector)
+            node.destroy_node()
+            rclpy.shutdown()
+        return
+
+    arm = GraspArmControl(node)
+    robot = G1Control(node)
+    hand = OptionalHandController(node, arm, mode=args.hand_mode)
     initial_joints = None
     initial_head_tilt = None
-    grasp_plan = None
-    lift_plan = None
+    grasp_plans = None
+    selected_arm = None
+    selected_home_pose = None
     motion_started = False
+    grasp_attempted = False
+    lift_completed = False
     returned_to_top_home = False
+    home_return_attempted = False
+    upper_body_control_enabled = False
+    hand_closed = False
 
     try:
         print(
@@ -311,28 +756,31 @@ def main() -> None:
             print("Arm startup check failed. No motion command was sent.")
             return
 
+        print("Enabling MoveIt upper-body control...")
+        if not arm.enable_upper_body_control(True):
+            node.get_logger().error("Failed to enable upper-body control.")
+            return
+        upper_body_control_enabled = True
+
         initial_head_tilt = wait_for_head_tilt_feedback(node, arm)
         if initial_head_tilt is None:
             node.get_logger().warn(
                 "d455_joint feedback is unavailable. "
-                "Head tilt retry will be skipped and fallback tilt will be used."
+                "Head tilt retry will be skipped."
             )
 
-        print("Moving from the initial posture to TOP GRASP HOME...")
-        motion_started = True
-        arm.send_joints(TOP_GRASP_HOME_POSE, hold_sec=TOP_HOME_HOLD_SEC)
-
-        # 物体上で開くと指が干渉するため、HOME到達直後に開く。
-        if not hand.command("open", "right"):
-            node.get_logger().warn("Failed to open the right hand.")
+        # カメラ下降・認識中は腕を動かさず、指の干渉を避けるため両手を閉じる。
+        print("Closing both hands before camera search...")
+        hand_closed = hand.command("close", "both")
+        if not hand_closed:
+            node.get_logger().error(
+                "Both hands must be closed before camera search."
+            )
+            return
 
         detection = None
         actual_detection_tilt = initial_head_tilt
-        retry_count = (
-            HEAD_TILT_RETRY_COUNT
-            if ENABLE_HEAD_TILT_RETRY and initial_head_tilt is not None
-            else 0
-        )
+        retry_count = HEAD_TILT_RETRY_COUNT if initial_head_tilt is not None else 0
 
         for attempt in range(retry_count + 1):
             if attempt > 0:
@@ -344,17 +792,19 @@ def main() -> None:
                     f"(retry {attempt}/{retry_count}, "
                     f"target d455={target_head_tilt:.3f} rad)..."
                 )
-                if not move_head_tilt_and_wait(node, arm, target_head_tilt):
+                if not move_head_tilt_and_wait(
+                    node, robot, arm, target_head_tilt
+                ):
                     break
                 actual_detection_tilt = float(
-                    arm.current_joints.get("d455_joint", target_head_tilt)
+                    arm.get_current_joints_pose().get(
+                        "d455_joint", target_head_tilt
+                    )
                 )
 
-            effective_head_tilt = calculation_head_tilt(actual_detection_tilt)
             print(
                 f"Searching for: {target_name} "
-                f"(d455={actual_detection_tilt}, "
-                f"calculation tilt={effective_head_tilt:.3f} rad)"
+                f"(d455={actual_detection_tilt}; coordinates use TF)"
             )
             detection = detector.detect(
                 target_name,
@@ -370,100 +820,187 @@ def main() -> None:
                 break
 
         if detection is None:
-            print(detector.last_failure_reason or f"Object was not detected: {target_name}")
+            print(
+                detector.last_failure_reason
+                or f"Object was not detected: {target_name}"
+            )
             return
 
-        offset_x, offset_y, offset_z = grasp_offsets()
-        grasp_plan = calculate_object_grasp_plan(
+        camera_transform = wait_for_camera_transform(
+            node,
+            arm.tf_buffer,
+            detection.camera_frame,
+        )
+        if camera_transform is None:
+            return
+
+        candidates = build_arm_candidates(
             detection,
-            head_tilt=calculation_head_tilt(actual_detection_tilt),
-            grasp_strategy=GRASP_STRATEGY,
-            offset_x_m=offset_x,
-            offset_y_m=offset_y,
-            offset_z_m=offset_z,
-            right_wrist_roll=TOP_GRASP_WRIST_ROLL_RAD,
+            camera_transform,
         )
-        print_grasp_plan(grasp_plan)
+        selected_arm, grasp_plans = select_grasp_arm_candidate(node, candidates)
+        if selected_arm is None:
+            return
 
-        if not grasp_plan.reachable:
-            print(
-                "警告: 対象は計算上の到達範囲外です。"
-                "既存のbag_graspと同様に、到達限界へ丸めたIKを送信します。"
+        selected_home_pose = top_grasp_home_pose(initial_joints, selected_arm)
+        home_violations = joint_margin_violations(selected_home_pose)
+        if home_violations:
+            node.get_logger().error(
+                f"{selected_arm}-arm HOME violates joint safety margin: "
+                + "; ".join(home_violations)
+            )
+            return
+        print(
+            f"Moving the selected {selected_arm} arm "
+            "from the initial posture to TOP GRASP HOME..."
+        )
+        motion_started = True
+        if not move_arm_joints(node, arm, selected_home_pose):
+            node.get_logger().error(
+                f"Failed to move the {selected_arm} arm to TOP GRASP HOME."
+            )
+            return
+
+        # 左右の簡易関節値計算が終わるまでは閉じたままにし、接近直前だけ開く。
+        hand_closed = False
+        if not hand.command("open", selected_arm):
+            node.get_logger().error(
+                f"Failed to open the {selected_arm} hand before approach."
+            )
+            return
+
+        print(f"Moving the {selected_arm} hand in front of the object...")
+        if not move_arm_joints(node, arm, grasp_plans["pre-grasp"].joints):
+            node.get_logger().error("Failed to execute the pre-grasp posture.")
+            return
+
+        print(f"Advancing the {selected_arm} hand horizontally to the grasp posture...")
+        # Y/Zを保ち、物体手前からX正方向へ横移動する。
+        if not move_arm_joints(node, arm, grasp_plans["grasp"].joints):
+            node.get_logger().error("Failed to execute the grasp posture.")
+            return
+
+        # 応答失敗時も物体を保持している可能性があるため、以降はリフトを必須とする。
+        grasp_attempted = True
+        hand_closed = hand.command("close", selected_arm)
+        if not hand_closed:
+            node.get_logger().warn(
+                f"Failed to confirm that the {selected_arm} hand closed."
             )
 
-        print("Moving shoulder and elbow together to the grasp posture...")
-        send_grasp_posture(arm, grasp_plan.joints)
-
-        if not hand.command("close", "right"):
-            node.get_logger().warn("Failed to close the right hand.")
-
-        if ENABLE_SAFE_LIFT_BEFORE_HOME:
-            lift_x, lift_y, lift_z = grasp_offsets(SAFE_LIFT_OFFSET_Z_M)
-            lift_plan = calculate_object_grasp_plan(
-                detection,
-                head_tilt=calculation_head_tilt(actual_detection_tilt),
-                grasp_strategy=GRASP_STRATEGY,
-                offset_x_m=lift_x,
-                offset_y_m=lift_y,
-                offset_z_m=lift_z,
-                right_wrist_roll=TOP_GRASP_WRIST_ROLL_RAD,
+        print("Lifting the hand above the object before returning HOME...")
+        if not move_arm_joints(node, arm, grasp_plans["lift"].joints):
+            node.get_logger().error(
+                "Lift failed after the grasp attempt. Automatic HOME return "
+                "is disabled to avoid dragging the hand across the table."
             )
-            print("Lifting the hand before folding the arm...")
-            arm.send_joints(lift_plan.joints, hold_sec=SAFE_LIFT_HOLD_SEC)
+            return
+        lift_completed = True
 
-        # カメラ側へ腕を上げず、まず肘を畳んで手を体側へ戻す。
-        print("Folding the elbow before returning the shoulder to HOME...")
-        arm.send_joints(
-            {"right_elbow_joint": TOP_GRASP_HOME_POSE["right_elbow_joint"]},
-            hold_sec=ELBOW_FOLD_HOLD_SEC,
+        home_return_attempted = True
+        returned_to_top_home = return_to_top_home(
+            node,
+            arm,
+            selected_home_pose,
+            selected_arm,
         )
-        arm.send_joints(TOP_GRASP_HOME_POSE, hold_sec=TOP_HOME_HOLD_SEC)
-        returned_to_top_home = True
+        if not returned_to_top_home:
+            node.get_logger().error("Failed to return to TOP GRASP HOME.")
+            return
         print("Grasp posture check finished.")
     finally:
-        try:
-            detector.stop()
-        except Exception as error:
-            node.get_logger().warn(f"Failed to stop YOLO: {error}")
+        stop_detector_safely(node, detector)
 
-        if motion_started and not returned_to_top_home:
-            print("Folding the elbow, then moving the shoulder back to TOP GRASP HOME...")
+        safe_to_return_home = not grasp_attempted or lift_completed
+        if (
+            motion_started
+            and not home_return_attempted
+            and safe_to_return_home
+            and selected_home_pose is not None
+            and selected_arm is not None
+        ):
             try:
-                arm.send_joints(
-                    {
-                        "right_elbow_joint":
-                            TOP_GRASP_HOME_POSE["right_elbow_joint"]
-                    },
-                    hold_sec=ELBOW_FOLD_HOLD_SEC,
-                )
-                arm.send_joints(
-                    TOP_GRASP_HOME_POSE,
-                    hold_sec=TOP_HOME_HOLD_SEC,
+                home_return_attempted = True
+                returned_to_top_home = return_to_top_home(
+                    node,
+                    arm,
+                    selected_home_pose,
+                    selected_arm,
                 )
             except Exception as error:
                 node.get_logger().error(
                     f"Failed to return to TOP GRASP HOME: {error}"
                 )
+        elif motion_started and not home_return_attempted:
+            node.get_logger().error(
+                "Automatic HOME return skipped because the grasp was attempted "
+                "but the lift was not confirmed. Operator recovery is required."
+            )
 
-        if initial_head_tilt is not None:
+        safe_to_restore = not motion_started or returned_to_top_home
+
+        # 腕を初期姿勢へ下げる前に、選択した手の閉状態を必須にする。
+        if (
+            selected_arm is not None
+            and motion_started
+            and returned_to_top_home
+            and not hand_closed
+        ):
+            print(f"Closing the {selected_arm} hand before lowering the arm...")
+            try:
+                hand_closed = hand.command("close", selected_arm)
+            except Exception as error:
+                node.get_logger().error(
+                    f"Failed to close the {selected_arm} hand: {error}"
+                )
+                hand_closed = False
+            if not hand_closed:
+                node.get_logger().error(
+                    "Initial-posture return is disabled because hand closure "
+                    "was not confirmed. Operator recovery is required."
+                )
+
+        if initial_head_tilt is not None and safe_to_restore:
             print("Restoring the initial head tilt...")
             try:
-                move_head_tilt_and_wait(node, arm, initial_head_tilt)
+                move_head_tilt_and_wait(
+                    node, robot, arm, initial_head_tilt
+                )
             except Exception as error:
                 node.get_logger().error(
                     f"Failed to restore the initial head tilt: {error}"
                 )
 
-        if motion_started and initial_joints is not None:
+        if (
+            motion_started
+            and returned_to_top_home
+            and hand_closed
+            and initial_joints is not None
+        ):
             print("Moving from TOP GRASP HOME back to the initial posture...")
             try:
-                arm.send_joints(initial_joints, hold_sec=INITIAL_HOLD_SEC)
+                move_arm_joints(node, arm, initial_joints)
             except Exception as error:
                 node.get_logger().error(
                     f"Failed to return to the initial posture: {error}"
                 )
 
-        arm.active = False
+        safe_to_release_control = safe_to_restore and (
+            not motion_started or hand_closed
+        )
+        if upper_body_control_enabled and safe_to_release_control:
+            try:
+                arm.enable_upper_body_control(False)
+            except Exception as error:
+                node.get_logger().error(
+                    f"Failed to disable upper-body control: {error}"
+                )
+        elif upper_body_control_enabled:
+            node.get_logger().error(
+                "Upper-body control remains enabled because a safe recovery "
+                "posture was not confirmed. Operator recovery is required."
+            )
+
         node.destroy_node()
         rclpy.shutdown()
 
