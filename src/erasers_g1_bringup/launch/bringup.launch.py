@@ -60,7 +60,7 @@ def generate_launch_description():
     default_open_jtalk_dict_dir = os.path.join(
         default_voicevox_root, 'dict', 'open_jtalk_dic_utf_8-1.11')
 
-    default_use_person_pose = os.environ.get('USE_PERSON_POSE', 'false').lower().strip('\'"')
+    default_use_person_pose = os.environ.get('USE_PERSON_POSE', 'true').lower().strip('\'"')
 
     # launch configurations
     use_head_camera = LaunchConfiguration('use_head_camera')
