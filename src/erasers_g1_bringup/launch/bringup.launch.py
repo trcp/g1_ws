@@ -369,7 +369,10 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
         remappings=person_pose_remappings,
-        parameters=[{'run_detect': True}],
+        parameters=[
+            {'run_detect': True},
+            {'model_path':'/tmp/yolo26l-pose.pt'}
+        ],
     )
     person_pose_3d = Node(
         package='nakalab_ultralytics_cpp',
@@ -379,7 +382,7 @@ def generate_launch_description():
         emulate_tty=True,
         remappings=person_pose_remappings,
         parameters=[{
-            'ref_frame': 'map',
+            'ref_frame': 'base_link',
             'sensor_fusion': person_sensor_fusion,
         }],
     )

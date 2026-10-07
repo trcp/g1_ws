@@ -127,6 +127,25 @@ RUN set -eux; \
         -C /tmp/hitnet; \
     rm -f /tmp/hitnet_resources.tar.gz
 
+# Download YOLO26 Models (Pose & Seg)
+RUN set -eux; \
+    for MODEL in yolo26l-pose.pt yolo26l-seg.pt; do \
+        echo "Downloading ${MODEL}..."; \
+        curl \
+            --fail \
+            --location \
+            --show-error \
+            --silent \
+            --retry 5 \
+            --retry-delay 2 \
+            --retry-all-errors \
+            --connect-timeout 30 \
+            "https://huggingface.co/Ultralytics/YOLO26/resolve/main/${MODEL}" \
+            --output "/tmp/${MODEL}"; \
+        test -s "/tmp/${MODEL}"; \
+    done; \
+    ls -lh /tmp/yolo26*.pt
+
 
 # ====================
 # Voicevox Wheel Build
@@ -552,6 +571,8 @@ COPY --from=ctranslate2 /CTranslate2/python /tmp/ctranslate2/python
 COPY --from=modeldownloader /tmp/hitnet /tmp/hitnet
 COPY --from=modeldownloader /tmp/whisper /tmp/whisper
 COPY --from=modeldownloader /tmp/lightweight_openpose/lightweight_openpose.pth /tmp/lightweight_openpose/lightweight_openpose.pth
+COPY --from=modeldownloader /tmp/yolo26l-pose.pt /tmp/yolo26l-pose.pt
+COPY --from=modeldownloader /tmp/yolo26l-seg.pt /tmp/yolo26l-seg.pt
 COPY ./onnxruntime/build/Linux/Release/libonnxruntime*.so* /usr/local/lib/
 COPY ./onnxruntime/include/onnxruntime /usr/local/include/onnxruntime
 COPY ./onnxruntime/build /tmp/onnxruntime
