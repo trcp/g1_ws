@@ -73,7 +73,7 @@ services:
   
   erasers_g1:
     image: erasers_g1:g1
-    container_name: erasers_g1.g1
+    container_name: erasers_g1.g1.v1.0
     <<: *gpu
     runtime: nvidia
     privileged: true

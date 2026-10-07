@@ -27,15 +27,15 @@ find_package(std_srvs REQUIRED)
 find_package(ros_environment REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
-find_package(pinocchio QUIET)
-
-if(NOT pinocchio_FOUND)
-  message(STATUS "Pinocchio not found via find_package, trying standard paths...")
-  set(PINOCCHIO_INCLUDE_DIRS /opt/ros/$ENV{ROS_DISTRO}/include /usr/include/eigen3)
-  set(PINOCCHIO_LIBRARIES pinocchio)
-else()
-  message(STATUS "Found Pinocchio: ${pinocchio_VERSION}")
-endif()
+#find_package(pinocchio QUIET)
+#
+#if(NOT pinocchio_FOUND)
+#  message(STATUS "Pinocchio not found via find_package, trying standard paths...")
+#  set(PINOCCHIO_INCLUDE_DIRS /opt/ros/$ENV{ROS_DISTRO}/include /usr/include/eigen3)
+#  set(PINOCCHIO_LIBRARIES pinocchio)
+#else()
+#  message(STATUS "Found Pinocchio: ${pinocchio_VERSION}")
+#endif()
 
 
 
@@ -129,33 +129,33 @@ ament_target_dependencies(arm_joint_control
     urdf
 )
 
-# arm_endeffector_control
-add_executable(arm_endeffector_control src/arm_endeffector_control.cpp)
-target_include_directories(arm_endeffector_control PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-)
-target_include_directories(arm_endeffector_control PUBLIC
-  ${PINOCCHIO_INCLUDE_DIRS}
-)
-
-target_link_libraries(arm_endeffector_control
-  ${PINOCCHIO_LIBRARIES}
-)
-
-ament_target_dependencies(arm_endeffector_control
-  rclcpp
-  unitree_go
-  unitree_api
-  unitree_hg
-  sensor_msgs
-  urdf
-  std_srvs
-  interactive_markers
-  tf2_geometry_msgs
-  tf2_ros
-  tf2
-)
+# # arm_endeffector_control
+# add_executable(arm_endeffector_control src/arm_endeffector_control.cpp)
+# target_include_directories(arm_endeffector_control PUBLIC
+#   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+#   $<INSTALL_INTERFACE:include>
+# )
+# target_include_directories(arm_endeffector_control PUBLIC
+#   ${PINOCCHIO_INCLUDE_DIRS}
+# )
+# 
+# target_link_libraries(arm_endeffector_control
+#   ${PINOCCHIO_LIBRARIES}
+# )
+# 
+# ament_target_dependencies(arm_endeffector_control
+#   rclcpp
+#   unitree_go
+#   unitree_api
+#   unitree_hg
+#   sensor_msgs
+#   urdf
+#   std_srvs
+#   interactive_markers
+#   tf2_geometry_msgs
+#   tf2_ros
+#   tf2
+# )
 
 
 
@@ -232,7 +232,7 @@ install(TARGETS
   pcd_map_qos_connv
   audio_client
   arm_joint_control
-  arm_endeffector_control
+  #arm_endeffector_control
   emergency_stop
   cartesian_trajectory_planner
   mic_server
