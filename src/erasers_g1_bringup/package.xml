@@ -18,6 +18,8 @@
   <exec_depend>erasers_g1_moveit</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rosgraph_msgs</exec_depend>
+  <exec_depend>nakalab_ultralytics_ros2</exec_depend>
+  <exec_depend>nakalab_ultralytics_cpp</exec_depend>
   <!--depend>livox_ros_driver2</depend-->
   <depend>erasers_g1_description</depend>
   <depend>joint_state_publisher_gui</depend>

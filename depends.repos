@@ -56,8 +56,13 @@ repositories:
         url: https://github.com/Livox-SDK/livox_ros_driver2.git
         version: master
 
+<<<<<<< HEAD
     # nakalab ultralytics ros2:
     thirdparty/nakalab_ultralytics_ros2:
+=======
+    # ultralytics ros2:
+    src/nakalab_ultralytics_ros2:
+>>>>>>> af3ad19f593c3149148c83f22099a546e7d95ad7
         type: git
         url: https://github.com/GAI-313/nakalab_ultralytics_ros2.git
         version: main

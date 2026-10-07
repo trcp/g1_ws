@@ -7,6 +7,7 @@ Panels:
         - /Global Options1
         - /Map1/Topic1
         - /D455_HeadCamera1/Visibility1
+        - /UltralyticsDetection1
       Splitter Ratio: 0.5
     Tree Height: 714
   - Class: rviz_common/Selection
@@ -26,7 +27,7 @@ Panels:
     Experimental: false
     Name: Time
     SyncMode: 0
-    SyncSource: ""
+    SyncSource: LiDAR
 Visualization Manager:
   Class: ""
   Displays:
@@ -215,12 +216,10 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         head_servo_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         imu_in_pelvis:
           Alpha: 1
           Show Axes: false
@@ -237,7 +236,6 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         left_ankle_roll_link:
           Alpha: 1
           Show Axes: false
@@ -247,27 +245,22 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         left_hip_pitch_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         left_hip_roll_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         left_hip_yaw_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         left_knee_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         left_shoulder_pitch_link:
           Alpha: 1
           Show Axes: false
@@ -282,12 +275,10 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         left_wrist_roll_rubber_hand:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         livox_frame:
           Alpha: 1
           Show Axes: false
@@ -296,7 +287,6 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         mid360_link:
           Alpha: 1
           Show Axes: false
@@ -305,12 +295,10 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         pelvis_contour_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         right_amazing_hand:
           Alpha: 1
           Show Axes: false
@@ -319,7 +307,6 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         right_ankle_roll_link:
           Alpha: 1
           Show Axes: false
@@ -329,27 +316,22 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         right_hip_pitch_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         right_hip_roll_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         right_hip_yaw_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         right_knee_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         right_shoulder_pitch_link:
           Alpha: 1
           Show Axes: false
@@ -364,22 +346,18 @@ Visualization Manager:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         right_wrist_roll_rubber_hand:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         torso_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
         xl330_link:
           Alpha: 1
           Show Axes: false
           Show Trail: false
-          Value: true
       Mass Properties:
         Inertia: false
         Mass: false
@@ -525,7 +503,7 @@ Visualization Manager:
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 255
+      Max Intensity: 176
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: LiDAR
@@ -635,6 +613,16 @@ Visualization Manager:
           Value: true
         d435_link:
           Value: true
+        d455_color_frame:
+          Value: true
+        d455_color_optical_frame:
+          Value: true
+        d455_depth_frame:
+          Value: true
+        d455_depth_optical_frame:
+          Value: true
+        d455_link:
+          Value: true
         head_link:
           Value: true
         head_servo_link:
@@ -705,6 +693,8 @@ Visualization Manager:
           Value: true
         torso_link:
           Value: true
+        xl330_link:
+          Value: true
       Marker Scale: 1
       Name: TF
       Show Arrows: true
@@ -739,7 +729,14 @@ Visualization Manager:
                   head_link:
                     {}
                   head_servo_link:
-                    {}
+                    xl330_link:
+                      d455_link:
+                        d455_color_frame:
+                          d455_color_optical_frame:
+                            {}
+                        d455_depth_frame:
+                          d455_depth_optical_frame:
+                            {}
                   imu_in_torso:
                     {}
                   left_shoulder_pitch_link:
@@ -768,7 +765,8 @@ Visualization Manager:
       Enabled: true
       Name: UltralyticsDetection
       Namespaces:
-        {}
+        person_pose_3d_coco_bones: true
+        person_pose_3d_keypoints: true
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -843,7 +841,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.5916718244552612
+      Distance: 7.1458048820495605
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -858,10 +856,10 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.344797283411026
+      Pitch: 0.47479772567749023
       Target Frame: map
       Value: Orbit (rviz_default_plugins)
-      Yaw: 2.440857172012329
+      Yaw: 0.5858654379844666
     Saved: ~
 Window Geometry:
   D455_HeadCamera:
