@@ -60,9 +60,9 @@ def test_groups_and_pick_ik():
     assert set(config) == {'arm_left', 'arm_left_with_waist', 'arm_right', 'arm_right_with_waist'}
     for params in config.values():
         assert params['kinematics_solver'] == 'pick_ik/PickIkPlugin'
-        assert params['rotation_scale'] == 0.05
+        assert params['rotation_scale'] == 0.0
         assert params['position_scale'] == 1.0
-        assert params['position_threshold'] == 0.001
+        assert params['position_threshold'] == 0.005
         assert params['orientation_threshold'] == 0.1
         assert params['mode'] == 'global'
 
@@ -81,7 +81,7 @@ def test_head_action_mapping():
     assert action['joints'] == head['joints']
 
 
-def test_sampler_registration_and_mock_scope(monkeypatch):
+def test_move_group_launch_configuration(monkeypatch):
     from launch import LaunchContext
 
     spec = importlib.util.spec_from_file_location(
@@ -100,87 +100,32 @@ def test_sampler_registration_and_mock_scope(monkeypatch):
         for values in captured[-1]['parameters']:
             parameters.update(values)
         assert captured[-1]['executable'] == 'move_group'
-        assert ('constraint_samplers' in parameters) == mock
-        if mock:
-            assert parameters['constraint_samplers'] == (
-                'erasers_g1_moveit/DualArmConstraintSampler')
-            assert parameters['publish_planning_scene_hz'] == 30.0
+        # カスタム制約サンプラーは完全廃止され標準サンプラを使用する
+        assert 'constraint_samplers' not in parameters
+        assert parameters['use_sim_time'] is True
         for group in ('arm_both', 'arm_both_with_waist'):
-            assert parameters['ompl'][group].get(
-                'enforce_joint_model_state_space', False) == mock
-    plugin = ET.parse(MOVEIT / 'constraint_sampler_plugins.xml').getroot()
-    assert plugin.find('class').get('name') == (
-        'erasers_g1_moveit/DualArmConstraintSampler')
-    assert (MOVEIT.parents[1] / 'lib/libdual_arm_constraint_sampler.so').is_file()
+            assert 'enforce_joint_model_state_space' not in parameters['ompl'][group]
 
 
-def test_api_dual_goal_and_group_mapping():
+def test_api_joint_control_groups():
     from rclpy.clock import Clock
     from types import SimpleNamespace
     module = importlib.import_module('erasers_g1_api.robot_control')
-    cls = next(value for value in vars(module).values()
-               if isinstance(value, type) and 'move_dual_abs' in value.__dict__)
-    arm = object.__new__(cls)
-    arm.node = SimpleNamespace(get_clock=lambda: Clock())
-    setattr(arm, '_' + cls.__name__ + '__srdf_group_states', None)
-    setattr(arm, '_' + cls.__name__ + '__joint_states', {})
-    goals = []
-    arm._send_move_group_goal = lambda goal, wait: goals.append(goal) or True
-
-    def reject_independent_ik(*args, **kwargs):
-        pytest.fail('双腕要求を独立した IK 解へ分解してはいけません')
-
-    arm._solve_ik = reject_independent_ik
-    assert arm.move_dual_abs(lx=0.2, ly=0.2, rx=0.2, ry=-0.2)
-    request = goals[-1].request
-    assert request.group_name == 'arm_both_with_waist'
-    constraint = request.goal_constraints[0]
-    assert not constraint.joint_constraints
-    assert {p.link_name for p in constraint.position_constraints} == {
-        'left_amazing_hand', 'right_amazing_hand'}
-    assert cls._canonical_group('upper_body') == 'arm_both_with_waist'
-    for name, count in GROUPS.items():
-        assert arm.joint_control(planning_group=name)
-        assert len(goals[-1].request.goal_constraints[0].joint_constraints) == count
-
-
-def test_api_ik_filters_reserved_fields(monkeypatch):
-    from concurrent.futures import Future
-    from geometry_msgs.msg import PoseStamped
-    from moveit_msgs.srv import GetPositionIK
-    from types import SimpleNamespace
-
-    module = importlib.import_module('erasers_g1_api.robot_control')
     arm = object.__new__(module.ArmControl)
-    arm.node = object()
-    arm._ArmControl__srdf_group_states = None
-    # 23 軸 URDF にない予約フィールドを含む受信状態を模擬する。
-    received = dict(states()['arm_both_with_waist'])
-    received['left_wrist_pitch_joint'] = 0.7
-    received['waist_roll_joint'] = 0.2
-    arm._ArmControl__joint_states = received
-    requests = []
+    clock = Clock()
+    setattr(arm, '_ArmControl__node', SimpleNamespace(get_clock=lambda: clock))
+    setattr(arm, '_ArmControl__logger',
+            SimpleNamespace(warn=lambda *a: None, info=lambda *a: None))
+    arm.get_current_joint_pose = lambda: {}
+    goals = []
+    setattr(arm, '_ArmControl__send_move_group_goal',
+            lambda goal, wait=True: goals.append(goal) or True)
 
-    def call_ik(request):
-        requests.append(request)
-        response = GetPositionIK.Response()
-        response.error_code.val = 1
-        response.solution.joint_state.name = list(received)
-        response.solution.joint_state.position = list(received.values())
-        future = Future()
-        future.set_result(response)
-        return future
-
-    arm._ArmControl__ik_cli = SimpleNamespace(call_async=call_ik)
-    monkeypatch.setattr(module.rclpy, 'spin_until_future_complete', lambda *a, **kw: None)
-    for group in ('arm_left', 'arm_left_with_waist', 'arm_right', 'arm_right_with_waist'):
-        solved = arm._solve_ik(PoseStamped(), group)
-        request = requests[-1].ik_request
-        assert request.robot_state.is_diff
-        assert request.avoid_collisions
-        assert set(request.robot_state.joint_state.name) == set(states()[group])
-        assert set(solved) == set(states()[group])
-        assert 'waist_roll_joint' not in request.robot_state.joint_state.name
+    for name, joints in states().items():
+        targets = {j: 0.1 for j in joints}
+        assert arm.joint_control(planning_group=name, **targets)
+        assert goals[-1].request.group_name == name
+        assert len(goals[-1].request.goal_constraints[0].joint_constraints) == len(joints)
 
 
 def wait_for(node, predicate, timeout=30.0):
@@ -274,7 +219,8 @@ def test_virtual_execution(sim_time):
             wrapper = Path(temporary) / 'verify_rviz.launch.py'
             wrapper.write_text("""
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import (
+    DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, OpaqueFunction)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from ament_index_python.packages import get_package_share_directory
@@ -477,11 +423,6 @@ def generate_launch_description():
         print('topics', len(positions), 'joint_fields', len(frames), 'tf_frames',
               'sim_time', sim_time, 'rviz', rviz, flush=True)
 
-        parameter_client = node.create_client(GetParameters, '/move_group/get_parameters')
-        values = call(node, parameter_client, GetParameters.Request(
-            names=['constraint_samplers'])).values
-        assert values[0].string_value == 'erasers_g1_moveit/DualArmConstraintSampler'
-        node.destroy_client(parameter_client)
         # 立ち上がりの蓄積分を除外し、実際の受信周期を測る。
         warmup = time.monotonic() + 1.0
         wait_for(node, lambda: time.monotonic() >= warmup)
@@ -780,8 +721,6 @@ def generate_launch_description():
         unreachable.position_constraints[0].constraint_region.primitive_poses[0].position.x = 10.0
         motion('arm_both', unreachable, expect_success=False)
         runtime = log_path.read_text()
-        assert '更新済み FK の双腕サンプラ: arm_both' in runtime
-        assert '更新済み FK の双腕サンプラ: arm_both_with_waist' in runtime
         assert 'dirty robot state' not in runtime.lower()
 
         velocities = {j.get('name'): float(j.find('limit').get('velocity'))

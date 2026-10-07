@@ -895,7 +895,7 @@
   <joint name="left_amazing_hand_joint" type="fixed">
     <parent link="left_wrist_roll_rubber_hand"/>
     <child link="left_amazing_hand"/>
-    <origin rpy="0 0 0" xyz="0.16 0 0"/>
+    <origin rpy="3.141592653589793 0 0" xyz="0.16 0 0"/>
   </joint>
   <link name="right_amazing_hand"/>
   <joint name="right_amazing_hand_joint" type="fixed">

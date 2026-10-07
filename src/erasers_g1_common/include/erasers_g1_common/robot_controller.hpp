@@ -22,6 +22,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/int32.hpp>
+#include <std_msgs/msg/int32_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <unitree_api/msg/request.hpp>
@@ -30,6 +31,7 @@
 #include "erasers_g1_common/arm_action_direct_client.hpp"
 #include "erasers_g1_common/g1_arm_sdk_protocol.hpp"
 #include "erasers_g1_common/g1_loco_client.hpp"
+#include "erasers_g1_common/led_client_interface.hpp"
 #include "erasers_g1_common/upper_body_arbiter.hpp"
 #include "erasers_g1_common/upper_body_control_session.hpp"
 
@@ -60,9 +62,12 @@ public:
     std::shared_ptr<LowCmdSinkInterface> lowcmd_sink = nullptr,
     SteadyNowFunction steady_now = {},
     UpperBodyPolicy upper_body_policy = UpperBodyPolicy{},
-    std::vector<G1JointControlLimit> upper_body_limits = {});
+    std::vector<G1JointControlLimit> upper_body_limits = {},
+    std::shared_ptr<LedClientInterface> led_client = nullptr);
 
   ~RobotControllerNode() override;
+
+  void handle_led_command(const std_msgs::msg::Int32MultiArray::SharedPtr msg);
 
 private:
   void publish_transition_active(bool active);
@@ -112,6 +117,8 @@ private:
     std::vector<double> & positions,
     std::string & reason);
   bool upper_body_preconditions(std::string & reason, bool refresh_fsm);
+  bool is_arm_normal_locked(SteadyTime now_steady) const;
+  bool try_initialize_upper_body_ownership();
 
   void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
   void emergency_stop_callback(const std_msgs::msg::Bool::SharedPtr msg);
@@ -133,7 +140,7 @@ private:
   const double api_timeout_sec_{3.0};
   const double transition_timeout_sec_{15.0};
   const double transition_poll_period_sec_{0.1};
-  const double fsm_state_publish_rate_hz_{1.0};
+  const double fsm_state_publish_rate_hz_{5.0};
   const bool stop_before_transition_{true};
   const double control_rate_hz_{20.0};
   const double api_update_rate_hz_{10.0};
@@ -280,6 +287,8 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr upper_joint_sub_;
   rclcpp::Subscription<unitree_hg::msg::LowState>::SharedPtr upper_lowstate_sub_;
   rclcpp::Subscription<unitree_api::msg::Request>::SharedPtr external_arm_request_sub_;
+  rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr led_sub_;
+  std::shared_ptr<LedClientInterface> led_client_;
   rclcpp::TimerBase::SharedPtr fsm_poll_timer_;
   rclcpp::TimerBase::SharedPtr control_timer_;
   rclcpp::TimerBase::SharedPtr diagnostics_timer_;

@@ -1,3 +1,9 @@
+"""Unitree G1 ロボット制御のための高水準 Python API スイート．
+
+ROS 2 インターフェース（Topic / Service / Action）をラップし，
+上位のタスクスクリプトからロボットを直感的かつ安全に制御する機能を提供します．
+"""
+
 import numpy as np
 
 try:
@@ -5,3374 +11,3021 @@ try:
 except AttributeError:
     pass
 
-#!/usr/bin/env python3
+# rclpy
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
+from rclpy.action.client import ClientGoalHandle
+from rclpy.action import ActionClient
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-import random
 import rclpy
 
-# msgs
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Pose, Twist
-from nav_msgs.msg import Odometry
-from sensor_msgs.msg import JointState
-from shape_msgs.msg import SolidPrimitive
-from amazing_hand_interfaces.srv import HandCommand
-from erasers_g1_interfaces.srv import MoveServo, PosePolicy, RobotPose, ArmAction
-from erasers_g1_api.vui_audio import wait_future
-from nav2_msgs.action import NavigateToPose
-from action_msgs.msg import GoalStatus
-from moveit_msgs.action import MoveGroup, ExecuteTrajectory
+# ROS 2 interfaces
+from erasers_g1_interfaces.srv import RobotServiceClient, RobotPose, MoveServo, ArmAction
 from moveit_msgs.msg import (
-    Constraints,
-    JointConstraint,
-    PositionConstraint,
-    OrientationConstraint,
-    MoveItErrorCodes,
     PlanningScene,
     CollisionObject,
     AttachedCollisionObject,
+    Constraints,
+    JointConstraint,
+    MoveItErrorCodes,
+    PositionConstraint,
+    OrientationConstraint,
     PlanningSceneComponents,
+    AllowedCollisionMatrix,
+    AllowedCollisionEntry,
+    RobotState,
 )
-from moveit_msgs.srv import GetPositionIK, GetPlanningScene
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Pose, Twist
+from moveit_msgs.srv import (
+    ApplyPlanningScene, GetPlanningScene, GetPositionIK, GetPositionFK, GetCartesianPath,
+)
+from action_msgs.msg import GoalStatus
+from shape_msgs.msg import SolidPrimitive
+from nav2_msgs.action import NavigateToPose
+from sensor_msgs.msg import JointState
+from moveit_msgs.action import MoveGroup, ExecuteTrajectory
+from std_msgs.msg import Int32MultiArray
 from std_msgs.msg import Int16MultiArray
+from std_srvs.srv import SetBool
+from std_msgs.msg import Int32
 
-# tf
-from geometry_msgs.msg import TransformStamped
+# API
+from rclpy_util.util import TemporarySubscriber
+
+# General
+from tf_transformations import (
+    quaternion_from_euler,
+    euler_from_quaternion,
+    quaternion_matrix,
+    quaternion_from_matrix,
+)
+from ament_index_python.packages import get_package_share_directory
+from typing import Optional, Union, List, Dict, Any, Tuple
 from tf2_ros import TransformListener, Buffer
-from tf_transformations import euler_from_quaternion, quaternion_from_euler
-
-# general
-import time
+from tf2_ros import TransformException
+import xml.etree.ElementTree as ET
+import numpy as np
+import threading
 import math
 import copy
-import os
-import xml.etree.ElementTree as ET
-from rclpy.action import ActionClient
-from ament_index_python.packages import (
-    PackageNotFoundError,
-    get_package_share_directory,
-)
-
-# ArmControl specific imports
-from std_srvs.srv import SetBool, Trigger
-import tf_transformations
-import threading
-
-# G1Mic specific imports
-import socket
-import struct
-import numpy as np
 import wave
-
-try:
-    import netifaces
-except ImportError:
-    netifaces = None
-
-from scipy.spatial.transform import Rotation as R
+import time
 
 
-# マニピュレーション API の結果型と安全な ROS 待機処理。
-from dataclasses import dataclass, replace
-from enum import Enum
-from functools import wraps
-from pathlib import Path
-from typing import Any, Optional, Union
+def _quaternion_to_yaw(qx: float, qy: float, qz: float, qw: float) -> float:
+    """クォータニオンからヨー角（rad）を算出する内部ヘルパー関数．"""
+    siny_cosp = 2.0 * (qw * qz + qx * qy)
+    cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+    return math.atan2(siny_cosp, cosy_cosp)
 
-from geometry_msgs.msg import Quaternion
-from moveit_msgs.msg import AllowedCollisionEntry
-from moveit_msgs.srv import ApplyPlanningScene, GetPositionFK
-from rclpy.clock import Clock, ClockType
-from rclpy.executors import ExternalShutdownException
-from rclpy._rclpy_pybind11 import InvalidHandle, RCLError
-from tf2_ros import TransformException
+
+def _pose_matrix(pose: Pose) -> np.ndarray:
+    """Pose を同次変換にする．未設定の四元数は単位回転として扱う．"""
+    q = pose.orientation
+    matrix = quaternion_matrix([q.x, q.y, q.z, q.w])
+    matrix[:3, 3] = [pose.position.x, pose.position.y, pose.position.z]
+    return matrix
+
+
+def _matrix_pose(matrix: np.ndarray) -> Pose:
+    """同次変換を Pose にする．"""
+    pose = Pose()
+    pose.position.x, pose.position.y, pose.position.z = map(float, matrix[:3, 3])
+    q = quaternion_from_matrix(matrix)
+    pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = map(float, q)
+    return pose
+
+
+def _object_reference_pose(obj: CollisionObject) -> Pose:
+    """先頭形状の中心を把持・配置の基準とする．複合形状の相対配置は維持する．"""
+    matrix = _pose_matrix(obj.pose)
+    poses = obj.primitive_poses or obj.mesh_poses or obj.plane_poses
+    if poses:
+        matrix = matrix @ _pose_matrix(poses[0])
+    return _matrix_pose(matrix)
+
+
+def _positive_y_path_valid(
+    poses: List[np.ndarray], start: np.ndarray, distance: float,
+    angle_tolerance: float = 0.1, position_tolerance: float = 0.005,
+) -> bool:
+    """順運動学で得た接近経路の方向，逆走，直線性，到達位置を確認する．"""
+    if not poses or not math.isfinite(distance) or distance <= 0.0:
+        return False
+    axis, origin = start[:3, 1], start[:3, 3]
+    cosine = math.cos(angle_tolerance)
+    previous = start
+    previous_progress = 0.0
+    for pose in poses:
+        if not np.isfinite(pose).all() or float(pose[:3, 1] @ axis) < cosine:
+            return False
+        displacement = pose[:3, 3] - origin
+        progress = float(displacement @ axis)
+        if (progress < previous_progress - 1e-5 or progress > distance + position_tolerance
+                or np.linalg.norm(displacement - progress * axis) > position_tolerance):
+            return False
+        step = pose[:3, 3] - previous[:3, 3]
+        length = np.linalg.norm(step)
+        if length > 1e-6:
+            direction = step / length
+            if min(float(direction @ previous[:3, 1]), float(direction @ pose[:3, 1])) < cosine:
+                return False
+        previous, previous_progress = pose, progress
+    return bool(np.linalg.norm(poses[-1][:3, 3] - origin - distance * axis)
+                <= position_tolerance)
+
+
+def _sample_joint_trajectory(trajectory) -> Optional[List[List[float]]]:
+    """位置・速度・加速度に対応する補間を 10 ms 以下で検査用に標本化する．"""
+    points, count = trajectory.points, len(trajectory.joint_names)
+    if count == 0 or len(points) < 2 or len(set(trajectory.joint_names)) != count:
+        return None
+    if any(len(p.positions) != count or len(p.velocities) not in (0, count)
+           or len(p.accelerations) not in (0, count) for p in points):
+        return None
+    if (points[0].time_from_start.sec != 0 or points[0].time_from_start.nanosec != 0
+            or any(not np.isfinite(list(p.positions) + list(p.velocities)
+                                   + list(p.accelerations)).all() for p in points)
+            or len({len(p.velocities) for p in points}) != 1
+            or len({len(p.accelerations) for p in points}) != 1):
+        return None
+    samples = [list(points[0].positions)]
+    for first, last in zip(points, points[1:]):
+        duration = ((last.time_from_start.sec - first.time_from_start.sec)
+                    + (last.time_from_start.nanosec - first.time_from_start.nanosec) * 1e-9)
+        p0, p1 = np.array(first.positions), np.array(last.positions)
+        if duration <= 0 or not math.isfinite(duration) or np.max(np.abs(p1 - p0)) > 0.25:
+            return None
+        steps = max(1, math.ceil(duration / 0.01), math.ceil(np.max(np.abs(p1 - p0)) / 0.01))
+        if len(samples) + steps > 2000:
+            return None
+        if first.velocities and last.velocities:
+            v0, v1 = np.array(first.velocities) * duration, np.array(last.velocities) * duration
+            if first.accelerations and last.accelerations:
+                a0 = np.array(first.accelerations) * duration**2
+                a1 = np.array(last.accelerations) * duration**2
+                delta, velocity, acceleration = p1 - p0 - v0 - a0 / 2, v1 - v0 - a0, a1 - a0
+                coefficients = [p0, v0, a0 / 2, 10 * delta - 4 * velocity + acceleration / 2,
+                                -15 * delta + 7 * velocity - acceleration,
+                                6 * delta - 3 * velocity + acceleration / 2]
+            else:
+                coefficients = [p0, v0, 3 * (p1 - p0) - 2 * v0 - v1,
+                                -2 * (p1 - p0) + v0 + v1]
+        elif first.accelerations or last.accelerations:
+            return None
+        else:
+            coefficients = [p0, p1 - p0]
+        for step in range(1, steps + 1):
+            ratio = step / steps
+            value = sum(c * ratio**power for power, c in enumerate(coefficients))
+            if not np.isfinite(value).all():
+                return None
+            samples.append(value.tolist())
+    return samples
+
 
 class G1Control:
-    def __init__(self, node: Node):
-        """
-        G1Control クラスのコンストラクタ
+    """Unitree G1 の基本状態およびシステム設定を制御する API クラス．
+
+    Parameters
+    ----------
+    node : Node
+        ROS 2 ノードインスタンス．
+    timeout_sec : float, default 5.0
+        通信待機のデフォルトタイムアウト秒数．
+
+    Methods
+    -------
+    robot_pose(mode: int, safety: bool = True) -> bool
+        ロボットの FSM 姿勢遷移を要求する．
+    robot_service_interface_setting(name: str, enable: bool) -> bool
+        指定されたロボット内部サービスの有効化・無効化を切り替える．
+    get_robot_service_interfaces() -> List[str]
+        現在ロボットで有効・登録されているサービス名一覧を取得する．
+    get_current_robot_pose() -> int
+        現在のロボットの FSM_ID を取得する．
+    led(r: int, g: int, b: int) -> bool
+        ロボット頭部の RGB LED の発色を変更する．
+    """
+
+    def __init__(self, node: Node, timeout_sec: float = 5.0) -> None:
+        """API クラスのインスタンスを初期化する．
 
         Parameters
         ----------
         node : Node
-            ROS2 ノードオブジェクト。サービスクライアントの作成と呼び出しに使用する。
+            ROS 2 ノードインスタンス．
+        timeout_sec : float, default 5.0
+            通信待機のデフォルトタイムアウト秒数．
+
+        Raises
+        ------
+        RuntimeError
+            指定時間内に必須サービスサーバーが検出されなかった場合．
         """
-        self.node = node
+        self.__node = node
+        self.__logger = node.get_logger()
+        self.__timeout_sec = timeout_sec
 
-        self.__servo_cli = self.node.create_client(MoveServo, "/move_servo")
-        self.__pose_cli = self.node.create_client(PosePolicy, "/pose_policy")
-        self.__robot_pose_cli = self.node.create_client(RobotPose, "/robot_pose")
-        self.__arm_action_cli = self.node.create_client(ArmAction, "/arm_action")
+        self.__cb_group = MutuallyExclusiveCallbackGroup()
 
-        while not self.__servo_cli.wait_for_service(timeout_sec=5.0):
-            self.node.get_logger().error("Servo Service Servers are not running ...")
-            break
-        while not self.__pose_cli.wait_for_service(timeout_sec=5.0):
-            self.node.get_logger().error("Pose Service Servers are not running ...")
-            break
+        self.__led_pub = self.__node.create_publisher(
+            Int32MultiArray,
+            "/robot_controller/led",
+            10,
+            callback_group=self.__cb_group,
+        )
 
-    def __send_angle_req(self, req: MoveServo.Request):
-        """
-        サーボ角度移動リクエストを送信する内部メソッド
+        self.__robot_pose_cli = self.__node.create_client(
+            RobotPose,
+            "/robot_pose",
+            callback_group=self.__cb_group,
+        )
 
-        Parameters
-        ----------
-        req : MoveServo.Request
-            サーボ移動の要求メッセージ。
+        self.__service_setting_cli = self.__node.create_client(
+            RobotServiceClient,
+            "/robot_service_interface",
+            callback_group=self.__cb_group,
+        )
 
-        Returns
-        -------
-        bool
-            サービス呼び出しが成功した場合は True、失敗した場合は False。
-        """
-        future = self.__servo_cli.call_async(req)
-        rclpy.spin_until_future_complete(self.node, future)
-        response: MoveServo.Response = future.result()
-        return response.success
+        while (
+            not self.__robot_pose_cli.wait_for_service(timeout_sec=self.__timeout_sec)
+            or not self.__service_setting_cli.wait_for_service(timeout_sec=self.__timeout_sec)
+        ):
+            self.__logger.error("Required services (/robot_pose, /robot_service_interface) are not available.")
+            #raise RuntimeError("Failed to connect to required ROS 2 services for G1Control.")
 
-    def __send_pose_req(self, req: PosePolicy.Request):
-        """
-        ポーズポリシー要求を送信する内部メソッド
 
-        Parameters
-        ----------
-        req : PosePolicy.Request
-            ポーズポリシーの要求メッセージ。
+    def __send_robot_pose_req(self, req: RobotPose.Request) -> bool:
+        """RobotPose リクエストを同期送信し成否を判定する内部メソッド．"""
+        future = self.__robot_pose_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
 
-        Returns
-        -------
-        bool
-            サービス呼び出しが成功した場合は True、失敗した場合は False。
-        """
-        future = self.__pose_cli.call_async(req)
-        rclpy.spin_until_future_complete(self.node, future)
-        response: PosePolicy.Response = future.result()
-        return response.success
-
-    def robot_pose(self, mode: int, timeout_sec: float = 25.0) -> bool:
-        """FSM の遷移結果を確認する姿勢サービスを呼ぶ。"""
-        request = RobotPose.Request()
-        request.mode = mode
-        return self.__bounded_control_call(self.__robot_pose_cli, request, timeout_sec)
-
-    def arm_action(self, action_id: int, timeout_sec: float = 40.0) -> bool:
-        """上半身の関節制御を無効化した後に、腕動作とその完了を要求する。"""
-        request = ArmAction.Request()
-        request.mode = action_id
-        return self.__bounded_control_call(self.__arm_action_cli, request, timeout_sec)
-
-    def __bounded_control_call(self, client, request, timeout_sec):
-        if not math.isfinite(timeout_sec) or timeout_sec <= 0:
-            raise ValueError("timeout_sec は正の有限値で指定してください")
-        if not client.wait_for_service(timeout_sec=2.0):
+        if future.done():
+            res = future.result()
+            if res is not None and res.success:
+                return True
+            self.__logger.warn(f"RobotPose request was rejected: {res.message if res else 'None'}")
             return False
-        future = client.call_async(request)
-        if not wait_future(self.node, future, timeout_sec):
-            client.remove_pending_request(future)
-            return False
-        response = future.result()
-        return response is not None and response.success
 
-    def move_head(self, tilt: float = 0.0, pan: float = 0.0):
-        """
-        頭部を傾けて旋回させる。
+        self.__logger.error("Timeout waiting for RobotPose service response.")
+        return False
+
+
+    def __send_service_setting_req(
+        self, req: RobotServiceClient.Request
+    ) -> Optional[RobotServiceClient.Response]:
+        """RobotServiceClient リクエストを同期送信する内部メソッド．"""
+        future = self.__service_setting_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+
+        if future.done():
+            return future.result()
+
+        self.__logger.error("Timeout waiting for RobotServiceClient service response.")
+        return None
+
+
+    def robot_pose(self, mode: int, safety: bool = True) -> bool:
+        """ロボットの姿勢（FSM モード）遷移を要求する．
 
         Parameters
         ----------
-        tilt : float, optional
-            頭部の上下角度(rad)。
-        pan : float, optional
-            頭部の左右角度(rad)。
+        mode : int
+            目標姿勢モード番号（RobotPose.srv の定数を指定）．
+        safety : bool, default True
+            安全ガードを有効にするかどうか．有効時，走行中などの危険な状態からの
+            脱力・着座・横臥への急激な遷移を拒否する．
 
         Returns
         -------
         bool
-            サーボコマンド送信に成功した場合は True、失敗した場合は False。
+            姿勢遷移が正常に受理され完了した場合は True，それ以外は False．
         """
-        req = MoveServo.Request()
-        req.tilt = -tilt
-        req.pan = pan
-        return self.__send_angle_req(req)
+        if safety:
+            current_fsm = self.get_current_robot_pose()
+            # 走行中・移動中 FSM からの急停止・脱力・着座・横臥要求をブロック
+            if current_fsm in (801, 501, 500) and mode in (0, 1, 2, 3, 5):
+                self.__logger.warn(
+                    f"Safety guard rejected transition: cannot transition to mode {mode} "
+                    f"from active motion FSM {current_fsm}."
+                )
+                return False
 
-    def pose_policy(self, pose: str):
-        """
-        ポーズポリシーを設定する。
+        req = RobotPose.Request()
+        req.mode = int(mode)
+        return self.__send_robot_pose_req(req)
+
+
+    def robot_service_interface_setting(self, name: str, enable: bool) -> bool:
+        """指定された Unitree ロボット内部サービスの有効化・無効化を設定する．
 
         Parameters
         ----------
-        pose : str
-            適用するポーズポリシーの識別子。PosePolicy.srv で定義されている
-            対応姿勢は 'damp'、'start'、'squat'、'sit'、'stand_up'、
-            'zero_torque'、'stop_move'、'high_stand'、'low_stand'、
-            'balance_stand'、'shake_hand'、'wave_hand'、
-            'wave_hand_with_turn'、'running'。
+        name : str
+            制御対象のサービス識別名．
+        enable : bool
+            有効化する場合は True，無効化する場合は False．
 
         Returns
         -------
         bool
-            サービス呼び出しが成功した場合は True、失敗した場合は False。
+            設定要求が成功した場合は True，それ以外は False．
         """
-        req = PosePolicy.Request()
-        req.pose = pose
-        return self.__send_pose_req(req)
+        req = RobotServiceClient.Request()
+        req.name = str(name)
+        req.enable = bool(enable)
+        res = self.__send_service_setting_req(req)
+        if res is not None and res.success:
+            return True
+        self.__logger.warn(
+            f"Robot service setting for '{name}' failed: {res.message if res else 'None'}"
+        )
+        return False
 
 
-class G1Navigation:
-    
-    GET_BY_TOPIC = True
+    def get_robot_service_interfaces(self) -> List[str]:
+        """ロボットで利用可能なサービス名の一覧を取得する．
+
+        Returns
+        -------
+        List[str]
+            登録されているサービス名の文字列リスト．取得失敗時は空リスト．
+        """
+        req = RobotServiceClient.Request()
+        req.name = "NONE"
+        req.enable = False
+        res = self.__send_service_setting_req(req)
+        if res is None or not res.success:
+            self.__logger.warn("Failed to retrieve robot service interface list.")
+            return []
+
+        return [s.strip() for s in res.message.splitlines() if s.strip()]
+
+
+    def get_current_robot_pose(self) -> int:
+        """ロボットの現在の FSM_ID を取得する．
+
+        Returns
+        -------
+        int
+            現在の FSM_ID（整数値）．取得できなかった場合は -1．
+        """
+        latest_fsm: Optional[int] = None
+
+        def __cb_fsm(msg: Int32) -> None:
+            nonlocal latest_fsm
+            latest_fsm = msg.data
+
+        transient_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+
+        with TemporarySubscriber(
+            node=self.__node,
+            msg=Int32,
+            topic="/robot_controller/fsm_id",
+            qos_profile=transient_qos,
+            cb=__cb_fsm,
+        ):
+            start_time = time.monotonic()
+            while rclpy.ok() and latest_fsm is None:
+                if time.monotonic() - start_time > self.__timeout_sec:
+                    self.__logger.warn("Timeout waiting for /robot_controller/fsm_id topic.")
+                    break
+                rclpy.spin_once(self.__node, timeout_sec=0.05)
+
+        return latest_fsm if latest_fsm is not None else -1
+
+
+    def led(self, r: int, g: int, b: int) -> bool:
+        """ロボット頭部の RGB LED の発色を変更する．
+
+        Parameters
+        ----------
+        r : int
+            赤色の輝度値（0 〜 255）．
+        g : int
+            緑色の輝度値（0 〜 255）．
+        b : int
+            青色の輝度値（0 〜 255）．
+
+        Returns
+        -------
+        bool
+            送信に成功した場合は True，値が範囲外の場合は False．
+        """
+        for val, name in ((r, "R"), (g, "G"), (b, "B")):
+            if not (0 <= val <= 255):
+                self.__logger.error(f"LED {name} value out of range [0, 255]: {val}")
+                return False
+
+        msg = Int32MultiArray()
+        msg.data = [int(r), int(g), int(b)]
+        self.__led_pub.publish(msg)
+        return True
+
+
+class HeadControl:
+    """頭部カメラのパン・チルトサーボモーターおよび視線追従を制御する API クラス．
+
+    Parameters
+    ----------
+    node : Node
+        ROS 2 ノードインスタンス．
+    timeout_sec : float, default 5.0
+        通信待機のデフォルトタイムアウト秒数．
+    tf_buffer : Buffer, optional
+        TF2 バッファインスタンス．未指定時は新規作成．
+
+    Methods
+    -------
+    move_to_pose(pan: float = 0.0, tilt: float = 0.0, wait: bool = True) -> bool
+        指定した角度へ頭部カメラを回転させる．
+    move_to_vel(pan: float = 0.0, tilt: float = 0.0, time_sec: float = 0.1) -> bool
+        指定した角速度で頭部サーボを駆動する．
+    get_current_pose() -> List[float]
+        現在の頭部サーボ角度 [pan, tilt] を取得する．
+    gaze(target: Union[str, PoseStamped], wait: bool = True) -> bool
+        指定されたリンクまたは目標座標の方向を頭部カメラで注視する．
+    """
 
     def __init__(
         self,
         node: Node,
-        wait_time: int = 10,
-        tf_buffer: Buffer = None,
-        debug_goal_topic: str = "/api_goal",
-    ):
-        """
-        G1Navigation クラスのコンストラクタ
+        use_sim_time: bool=False,
+        timeout_sec: float = 5.0,
+        tf_buffer: Optional[Buffer] = None,
+    ) -> None:
+        """API クラスのインスタンスを初期化する．
 
         Parameters
         ----------
         node : Node
-            ROS2 ノードオブジェクト
-        wait_time : int, optional
-            アクションサーバー接続待機時間(秒)。デフォルトは 10。
+            ROS 2 ノードインスタンス．
+        timeout_sec : float, default 5.0
+            通信待機のデフォルトタイムアウト秒数．
         tf_buffer : Buffer, optional
-            TF2 バッファオブジェクト。None の場合は新規作成。デフォルトは None。
-        debug_goal_topic : str, optional
-            Nav2 に送る最終ゴール PoseStamped を publish するデバッグ用トピック。
-            デフォルトは '/api_goal'。
+            TF2 バッファインスタンス．
+
+        Raises
+        ------
+        RuntimeError
+            指定時間内に /move_servo サービスが検出されなかった場合．
         """
-        self.node = node
-        self.TIMEOUT_SEC = 60.0
-        self.FACE_GOAL_TIMEOUT_SEC = 30.0
-        self.__current_goal_handle = None
-        self.__latest_odom_pose = None
-        self.__odom_lock = threading.Lock()
-        self.__latest_localization_pose = None
-        self.__localization_lock = threading.Lock()
+        self.__node = node
+        self.__logger = node.get_logger()
+        self.__timeout_sec = timeout_sec
 
-        # TF2 Setup
-        self.tf_buffer = tf_buffer or Buffer()
-        self.__tf_listener = TransformListener(self.tf_buffer, self.node)
+        self.__cb_group = MutuallyExclusiveCallbackGroup()
 
-        # Action Client Setup
-        self.__action_client = ActionClient(
-            self.node, NavigateToPose, "/navigate_to_pose"
-        )
-        if not self.__action_client.wait_for_server(timeout_sec=wait_time):
-            self.node.get_logger().fatal("Nav2 action server not available...")
-            # raise RuntimeError("Nav2 action server not available")
-
-        # Initial pose publisher
-        self.__initial_pose_pub = self.node.create_publisher(
-            PoseWithCovarianceStamped, "/initialpose", 10
-        )
-        self.__debug_goal_pub = self.node.create_publisher(
-            PoseStamped, debug_goal_topic, 10
-        )
-        self.__cmd_vel_pub = self.node.create_publisher(Twist, "/cmd_vel", 10)
-        self.__odom_sub = self.node.create_subscription(
-            Odometry, "/odom", self.__odom_callback, 10
-        )
-        localization_qos = QoSProfile(
-            depth=1,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-            history=HistoryPolicy.KEEP_LAST,
-            reliability=ReliabilityPolicy.RELIABLE,
-        )
-        self.__localization_pose_sub = self.node.create_subscription(
-            PoseWithCovarianceStamped,
-            "/localization/pose_with_covariance",
-            self.__localization_pose_callback,
-            localization_qos,
+        self.__servo_cli = self.__node.create_client(
+            MoveServo,
+            "/move_servo",
+            callback_group=self.__cb_group,
         )
 
-    def get_current_pose(self, simple: bool = False):
-        """
-        現在のロボットの位置姿勢を取得する．
+        self.__tf_buffer = tf_buffer or Buffer()
+        self.__tf_listener = TransformListener(self.__tf_buffer, self.__node)
+
+        while not self.__servo_cli.wait_for_service(timeout_sec=self.__timeout_sec):
+            self.__logger.error("Required service /move_servo is not available.")
+            #raise RuntimeError("Failed to connect to /move_servo service for HeadControl.")
+
+
+    def __send_servo_req(self, req: MoveServo.Request) -> bool:
+        """MoveServo リクエストを同期送信する内部メソッド．"""
+        future = self.__servo_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+
+        if future.done():
+            res = future.result()
+            if res is not None and res.success:
+                return True
+            self.__logger.warn("MoveServo request was rejected by service server.")
+            return False
+
+        self.__logger.error("Timeout waiting for MoveServo service response.")
+        return False
+
+
+    def move_to_pose(self, pan: float = 0.0, tilt: float = 0.0, wait: bool = True) -> bool:
+        """指定した角度へ頭部カメラを回転させる．
 
         Parameters
         ----------
-        simple : bool, optional
-            True の場合、[x, y, yaw] の1次元リストとして現在位置を出力する。
-            False の場合、PoseStamped 型で現在位置を出力する。デフォルトは False。
-        use_topic : bool, optional
-            True の場合、/localization/pose_with_covariance の最新値から現在位置を取得する。
-            False の場合、TF の map -> base_link 変換から現在位置を取得する。
-            デフォルトは True。
-
-        Returns
-        -------
-        PoseStamped or list of float
-            simple=False の場合はマップ座標系基準の PoseStamped。
-            simple=True の場合は [x, y, yaw] を格納したリスト。
-        """
-        if self.GET_BY_TOPIC:
-            last_warn_time = 0.0
-            while rclpy.ok():
-                rclpy.spin_once(self.node, timeout_sec=0.05)
-                pose = self.__get_current_localization_pose()
-                if pose is not None:
-                    return self.__format_current_pose(pose, simple)
-
-                now = time.time()
-                if now - last_warn_time >= 2.0:
-                    self.node.get_logger().warn(
-                        "Waiting for /localization/pose_with_covariance ..."
-                    )
-                    last_warn_time = now
-            return None
-
-        last_warn_time = 0.0
-        while rclpy.ok():
-            rclpy.spin_once(self.node, timeout_sec=0.01)
-            try:
-                if not self.tf_buffer.can_transform(
-                    "map", "base_link", rclpy.time.Time()
-                ):
-                    now = time.time()
-                    if now - last_warn_time >= 2.0:
-                        self.node.get_logger().warn(
-                            "Waiting for TF transform map -> base_link ..."
-                        )
-                        last_warn_time = now
-                    continue
-
-                transform = self.tf_buffer.lookup_transform(
-                    "map", "base_link", rclpy.time.Time()
-                )
-                pose = PoseStamped()
-                pose.header = transform.header
-                pose.pose.position.x = transform.transform.translation.x
-                pose.pose.position.y = transform.transform.translation.y
-                pose.pose.position.z = transform.transform.translation.z
-                pose.pose.orientation = transform.transform.rotation
-                return self.__format_current_pose(pose, simple)
-            except Exception as e:
-                self.node.get_logger().warn(f"TF Lookup failed: {str(e)}")
-                continue
-
-        return None
-
-    def __format_current_pose(self, pose: PoseStamped, simple: bool = False):
-        if simple:
-            q = pose.pose.orientation
-            (_, _, yaw) = euler_from_quaternion([q.x, q.y, q.z, q.w])
-            return [
-                pose.pose.position.x,
-                pose.pose.position.y,
-                yaw,
-            ]
-
-        return copy.deepcopy(pose)
-
-    def __get_pose_yaw(self, pose: PoseStamped) -> float:
-        q = pose.pose.orientation
-        (_, _, yaw) = euler_from_quaternion([q.x, q.y, q.z, q.w])
-        return yaw
-
-    def __localization_pose_callback(self, msg: PoseWithCovarianceStamped):
-        pose = PoseStamped()
-        pose.header = copy.deepcopy(msg.header)
-        pose.pose = copy.deepcopy(msg.pose.pose)
-        with self.__localization_lock:
-            self.__latest_localization_pose = pose
-
-    def __get_current_localization_pose(self):
-        with self.__localization_lock:
-            if self.__latest_localization_pose is None:
-                return None
-            return copy.deepcopy(self.__latest_localization_pose)
-
-    def __odom_callback(self, msg: Odometry):
-        position = msg.pose.pose.position
-        orientation = msg.pose.pose.orientation
-        (_, _, yaw) = euler_from_quaternion(
-            [orientation.x, orientation.y, orientation.z, orientation.w]
-        )
-        with self.__odom_lock:
-            self.__latest_odom_pose = (
-                float(position.x),
-                float(position.y),
-                float(yaw),
-            )
-
-    def __get_current_odom_pose(self):
-        with self.__odom_lock:
-            if self.__latest_odom_pose is None:
-                return None
-            return tuple(self.__latest_odom_pose)
-
-    def __wait_for_odom_pose(self, timeout: float = None):
-        timeout_sec = self.TIMEOUT_SEC if timeout is None else timeout
-        start_time = time.time()
-        while rclpy.ok():
-            current_pose = self.__get_current_odom_pose()
-            if current_pose is not None:
-                return current_pose
-
-            if timeout_sec is not None and timeout_sec > 0:
-                if time.time() - start_time > timeout_sec:
-                    return None
-
-            rclpy.spin_once(self.node, timeout_sec=0.05)
-
-        return None
-
-    def __normalize_angle(self, angle: float) -> float:
-        return math.atan2(math.sin(angle), math.cos(angle))
-
-    def __clamp(self, value: float, min_value: float, max_value: float) -> float:
-        return max(min_value, min(max_value, value))
-
-    def __publish_stop_cmd(self, repeat: int = 5):
-        stop_cmd = Twist()
-        for _ in range(max(1, int(repeat))):
-            self.__cmd_vel_pub.publish(stop_cmd)
-            rclpy.spin_once(self.node, timeout_sec=0.0)
-            time.sleep(0.02)
-
-    def __move_to_pose_odom_only(
-        self,
-        goal_pose: PoseStamped,
-        tolerance: float = 0.0,
-        wait: bool = True,
-        timeout: float = None,
-    ) -> bool:
-        if not wait:
-            self.node.get_logger().warn(
-                "use_odom_only=True does not support wait=False."
-            )
-            return False
-
-        if goal_pose.header.frame_id != "odom":
-            self.node.get_logger().warn(
-                "use_odom_only=True treats goal pose as odom frame, "
-                f"but received frame '{goal_pose.header.frame_id}'."
-            )
-
-        goal_x = float(goal_pose.pose.position.x)
-        goal_y = float(goal_pose.pose.position.y)
-        goal_yaw = self.__get_pose_yaw(goal_pose)
-
-        debug_goal = copy.deepcopy(goal_pose)
-        debug_goal.header.frame_id = "odom"
-        debug_goal.header.stamp = self.node.get_clock().now().to_msg()
-        self.__debug_goal_pub.publish(debug_goal)
-
-        return self.__move_to_odom_goal(
-            goal_x=goal_x,
-            goal_y=goal_y,
-            goal_yaw=goal_yaw,
-            tolerance=tolerance,
-            timeout=timeout,
-        )
-
-    def __move_to_odom_goal(
-        self,
-        goal_x: float,
-        goal_y: float,
-        goal_yaw: float,
-        tolerance: float = 0.0,
-        timeout: float = None,
-    ) -> bool:
-        timeout_sec = self.TIMEOUT_SEC if timeout is None else timeout
-        xy_tolerance = max(float(tolerance or 0.0), 0.05)
-        yaw_tolerance = 0.08
-        control_period = 1.0 / 20.0
-        max_linear = 0.25
-        max_angular = 0.6
-        k_linear = 0.8
-        k_angular = 1.5
-        heading_gate = 0.25
-
-        start_time = time.time()
-        if self.__wait_for_odom_pose(timeout=timeout_sec) is None:
-            self.node.get_logger().error("No /odom received for odom-only navigation.")
-            self.__publish_stop_cmd()
-            return False
-
-        self.node.get_logger().info(
-            "Starting odom-only navigation to "
-            f"({goal_x:.3f}, {goal_y:.3f}, {goal_yaw:.3f})"
-        )
-
-        try:
-            while rclpy.ok():
-                loop_start = time.time()
-                if timeout_sec is not None and timeout_sec > 0:
-                    if loop_start - start_time > timeout_sec:
-                        self.node.get_logger().error("TIMEOUT ODOM-ONLY NAVIGATION!")
-                        return False
-
-                current_pose = self.__get_current_odom_pose()
-                if current_pose is None:
-                    rclpy.spin_once(self.node, timeout_sec=0.01)
-                    continue
-
-                current_x, current_y, current_yaw = current_pose
-                dx = goal_x - current_x
-                dy = goal_y - current_y
-                distance = math.hypot(dx, dy)
-                cmd = Twist()
-
-                if distance > xy_tolerance:
-                    target_heading = math.atan2(dy, dx)
-                    heading_error = self.__normalize_angle(target_heading - current_yaw)
-                    cmd.angular.z = self.__clamp(
-                        k_angular * heading_error, -max_angular, max_angular
-                    )
-                    if abs(heading_error) <= heading_gate:
-                        cmd.linear.x = self.__clamp(
-                            k_linear * distance, 0.2, max_linear
-                        )
-                else:
-                    yaw_error = self.__normalize_angle(goal_yaw - current_yaw)
-                    if abs(yaw_error) <= yaw_tolerance:
-                        self.node.get_logger().info(
-                            "Odom-only navigation reached goal: "
-                            f"position_error={distance:.3f} m, "
-                            f"yaw_error={yaw_error:.3f} rad"
-                        )
-                        return True
-
-                    cmd.angular.z = self.__clamp(
-                        k_angular * yaw_error, -max_angular, max_angular
-                    )
-
-                self.__cmd_vel_pub.publish(cmd)
-                rclpy.spin_once(self.node, timeout_sec=0.0)
-
-                sleep_time = control_period - (time.time() - loop_start)
-                if sleep_time > 0.0:
-                    time.sleep(sleep_time)
-
-        except KeyboardInterrupt:
-            self.node.get_logger().warn(
-                "KeyboardInterrupt: Stopping odom-only navigation..."
-            )
-            return False
-        except Exception as e:
-            self.node.get_logger().error(f"Odom-only navigation error: {str(e)}")
-            return False
-        finally:
-            self.__publish_stop_cmd()
-
-        return False
-
-    def __move_rel_by_odom_displacement(
-        self,
-        x: float = 0.0,
-        y: float = 0.0,
-        yaw: float = 0.0,
-        tolerance: float = 0.0,
-        timeout: float = None,
-    ) -> bool:
-        timeout_sec = self.TIMEOUT_SEC if timeout is None else timeout
-        xy_tolerance = max(float(tolerance or 0.0), 0.05)
-        yaw_tolerance = 0.08
-        control_period = 1.0 / 20.0
-        max_linear = 0.25
-        max_angular = 0.6
-        k_linear = 0.8
-        k_angular = 1.5
-        target_x = float(x)
-        target_y = float(y)
-        target_yaw_delta = float(yaw)
-
-        start_pose = self.__wait_for_odom_pose(timeout=timeout_sec)
-        if start_pose is None:
-            self.node.get_logger().error(
-                "Could not get /odom pose for relative odom-only movement"
-            )
-            self.__publish_stop_cmd()
-            return False
-
-        start_x, start_y, start_yaw = start_pose
-        cos_start = math.cos(start_yaw)
-        sin_start = math.sin(start_yaw)
-        start_time = time.time()
-
-        self.node.get_logger().info(
-            "Starting odom-only relative movement by displacement "
-            f"(x={target_x:.3f}, y={target_y:.3f}, yaw={target_yaw_delta:.3f})"
-        )
-
-        try:
-            while rclpy.ok():
-                loop_start = time.time()
-                if timeout_sec is not None and timeout_sec > 0:
-                    if loop_start - start_time > timeout_sec:
-                        self.node.get_logger().error(
-                            "TIMEOUT ODOM-ONLY RELATIVE MOVEMENT!"
-                        )
-                        return False
-
-                current_pose = self.__get_current_odom_pose()
-                if current_pose is None:
-                    rclpy.spin_once(self.node, timeout_sec=0.01)
-                    continue
-
-                current_x, current_y, current_yaw = current_pose
-                odom_dx = current_x - start_x
-                odom_dy = current_y - start_y
-
-                moved_x = cos_start * odom_dx + sin_start * odom_dy
-                moved_y = -sin_start * odom_dx + cos_start * odom_dy
-                remaining_x = target_x - moved_x
-                remaining_y = target_y - moved_y
-                distance = math.hypot(remaining_x, remaining_y)
-                yaw_delta = self.__normalize_angle(current_yaw - start_yaw)
-                yaw_error = self.__normalize_angle(target_yaw_delta - yaw_delta)
-
-                cmd = Twist()
-                if distance > xy_tolerance:
-                    linear_speed = min(max_linear, k_linear * distance)
-                    cmd.linear.x = linear_speed * remaining_x / distance
-                    cmd.linear.x = self.__clamp(cmd.linear.x, 0.2, max_linear)
-                    cmd.linear.y = linear_speed * remaining_y / distance
-                    # cmd.linear.y = self.__clamp(cmd.linear.y, 0.2, max_linear)
-
-                elif (
-                    abs(target_yaw_delta) > yaw_tolerance
-                    and abs(yaw_error) > yaw_tolerance
-                ):
-                    cmd.angular.z = self.__clamp(
-                        k_angular * yaw_error, -max_angular, max_angular
-                    )
-                else:
-                    self.node.get_logger().info(
-                        "Odom-only relative movement reached target displacement: "
-                        f"moved=({moved_x:.3f}, {moved_y:.3f}), "
-                        f"position_error={distance:.3f} m, yaw_delta={yaw_delta:.3f} rad"
-                    )
-                    return True
-
-                self.__cmd_vel_pub.publish(cmd)
-                rclpy.spin_once(self.node, timeout_sec=0.0)
-
-                sleep_time = control_period - (time.time() - loop_start)
-                if sleep_time > 0.0:
-                    time.sleep(sleep_time)
-
-        except KeyboardInterrupt:
-            self.node.get_logger().warn(
-                "KeyboardInterrupt: Stopping odom-only relative movement..."
-            )
-            return False
-        except Exception as e:
-            self.node.get_logger().error(f"Odom-only relative movement error: {str(e)}")
-            return False
-        finally:
-            self.__publish_stop_cmd()
-
-        return False
-
-    def __face_goal_pose(self, goal_pose: PoseStamped) -> bool:
-        current_pose = self.get_current_pose(simple=True)
-        if current_pose is None:
-            self.node.get_logger().warn("Could not get current pose to face goal")
-            return False
-
-        goal_x = goal_pose.pose.position.x
-        goal_y = goal_pose.pose.position.y
-        dx = goal_x - current_pose[0]
-        dy = goal_y - current_pose[1]
-        distance = math.hypot(dx, dy)
-        target_yaw = (
-            math.atan2(dy, dx) if distance > 1e-3 else self.__get_pose_yaw(goal_pose)
-        )
-
-        face_pose = PoseStamped()
-        face_pose.header.frame_id = "map"
-        face_pose.header.stamp = self.node.get_clock().now().to_msg()
-        face_pose.pose.position.x = current_pose[0]
-        face_pose.pose.position.y = current_pose[1]
-        face_pose.pose.position.z = 0.0
-
-        q = quaternion_from_euler(0, 0, target_yaw)
-        face_pose.pose.orientation.x = q[0]
-        face_pose.pose.orientation.y = q[1]
-        face_pose.pose.orientation.z = q[2]
-        face_pose.pose.orientation.w = q[3]
-
-        self.node.get_logger().info(
-            f"Facing original goal pose before stopping (yaw={target_yaw:.3f})."
-        )
-        return self.move_to_pose(
-            face_pose,
-            tolerance=0.0,
-            reference_frame="map",
-            wait=True,
-            timeout=self.FACE_GOAL_TIMEOUT_SEC,
-        )
-
-    def move_to_pose(
-        self,
-        pose,
-        tolerance: float = 0.0,
-        reference_frame: str = "map",
-        wait: bool = True,
-        timeout: float = None,
-        use_odom_only: bool = False,
-        retry_on_feedback_timeout: bool = True,
-        feedback_timeout_sec: float = 5.0,
-    ) -> bool:
-        """
-        与えられた目標姿勢に基づいてロボットを自律移動させる．
-        すべてのナビゲーションの中核となるメソッドであり、KeyboardInterrupt 発生時には即座にアクションをキャンセルする。
-
-        Parameters
-        ----------
-        pose : PoseStamped or Pose
-            目標とする姿勢情報。Pose メッセージの場合、reference_frame の座標系基準として扱われる。
-        tolerance : float, optional
-            目標から指定された距離(m)以内に到達した場合、その時点でナビゲーションを成功として終了する。デフォルトは 0.5。
-        reference_frame : str, optional
-            pose が Pose 型の場合の基準フレーム。デフォルトは 'map'。
-        wait : bool, optional
-            移動完了まで処理をブロックするかどうか。デフォルトは True。
-        timeout : float, optional
-            ナビゲーションのタイムアウト時間(秒)。指定時間を超えた場合はキャンセルして False を返す。
-            デフォルトは None (self.TIMEOUT_SEC を使用)。0 以下の場合はタイムアウトなし。
-        use_odom_only : bool, optional
-            True の場合、erasers_g1_machida_navigation を使わず /odom と /cmd_vel による簡易移動を行う。
-        retry_on_feedback_timeout : bool, optional
-            True の場合、Action goal が accept された後に feedback_timeout_sec 秒以内に feedback が
-            返らなければ、現在の goal を cancel して同じ goal を再送する。デフォルトは False。
-        feedback_timeout_sec : float, optional
-            retry_on_feedback_timeout が True の場合の feedback 待機時間。デフォルトは 5.0 秒。
+        pan : float, default 0.0
+            パン角度（左右，ラジアン）．
+        tilt : float, default 0.0
+            チルト角度（上下，ラジアン）．
+        wait : bool, default True
+            動作完了を待機するかどうか．
 
         Returns
         -------
         bool
-            ナビゲーションが成功（または tolerance 以内に到達）した場合は True、失敗またはキャンセルされた場合は False。
+            移動要求が正常に完了した場合は True，それ以外は False．
         """
-        goal_pose = PoseStamped()
+        req = MoveServo.Request()
+        req.pan = float(pan)
+        req.tilt = -float(tilt)
 
-        if isinstance(pose, PoseStamped):
-            goal_pose = pose
-        elif isinstance(pose, Pose):
-            goal_pose.header.frame_id = reference_frame
-            goal_pose.header.stamp = self.node.get_clock().now().to_msg()
-            goal_pose.pose = pose
-        else:
-            self.node.get_logger().error("pose must be PoseStamped or Pose")
+        ok = self.__send_servo_req(req)
+        if not ok:
             return False
-
-        if use_odom_only:
-            if retry_on_feedback_timeout:
-                self.node.get_logger().warn(
-                    "retry_on_feedback_timeout is ignored when use_odom_only=True."
-                )
-            return self.__move_to_pose_odom_only(
-                goal_pose,
-                tolerance=tolerance,
-                wait=wait,
-                timeout=timeout,
-            )
-
-        # Transform to map frame if not already in map frame
-        if goal_pose.header.frame_id != "map":
-            try:
-                transform = self.tf_buffer.lookup_transform(
-                    "map",
-                    goal_pose.header.frame_id,
-                    rclpy.time.Time(),
-                    rclpy.duration.Duration(seconds=1.0),
-                )
-
-                import tf2_geometry_msgs
-
-                goal_pose = tf2_geometry_msgs.do_transform_pose_stamped(
-                    goal_pose, transform
-                )
-            except Exception as e:
-                self.node.get_logger().error(
-                    f"Failed to transform pose to map frame: {str(e)}"
-                )
-                return False
-
-        goal_msg = NavigateToPose.Goal()
-        goal_msg.pose = goal_pose
-
-        feedback_lock = threading.Lock()
-        last_feedback_time = None
-        goal_accept_time = time.monotonic()
-
-        def feedback_callback(_feedback_msg):
-            nonlocal last_feedback_time
-            with feedback_lock:
-                last_feedback_time = time.monotonic()
-
-        def send_navigation_goal():
-            nonlocal last_feedback_time
-            with feedback_lock:
-                last_feedback_time = None
-            self.__debug_goal_pub.publish(goal_pose)
-            return self.__action_client.send_goal_async(
-                goal_msg,
-                feedback_callback=feedback_callback,
-            )
-
-        def wait_for_goal_accept(goal_future):
-            nonlocal goal_accept_time, last_feedback_time
-            rclpy.spin_until_future_complete(
-                self.node, goal_future, timeout_sec=10.0
-            )
-            if not goal_future.done():
-                self.node.get_logger().error("Send goal timed out")
-                return None
-
-            accepted_goal_handle = goal_future.result()
-            self.__current_goal_handle = accepted_goal_handle
-
-            if accepted_goal_handle is None:
-                self.node.get_logger().error("Goal response is empty")
-                return None
-
-            if not accepted_goal_handle.accepted:
-                self.node.get_logger().error("Goal rejected by server")
-                return None
-
-            with feedback_lock:
-                last_feedback_time = None
-                goal_accept_time = time.monotonic()
-
-            return accepted_goal_handle
-
-        if retry_on_feedback_timeout and not wait:
-            self.node.get_logger().warn(
-                "retry_on_feedback_timeout requires wait=True and is ignored."
-            )
-
-        feedback_retry_enabled = (
-            retry_on_feedback_timeout
-            and wait
-            and feedback_timeout_sec is not None
-            and feedback_timeout_sec > 0.0
-        )
-
-        future = send_navigation_goal()
 
         if not wait:
-            # 非同期モードの場合は送信完了まで少し待機して終了とする
-            try:
-                rclpy.spin_until_future_complete(self.node, future, timeout_sec=0.5)
-            except KeyboardInterrupt:
-                pass
             return True
 
-        # 同期モード (wait=True)
-        try:
-            goal_handle = wait_for_goal_accept(future)
-            if goal_handle is None:
+        start_time = time.monotonic()
+        while rclpy.ok():
+            if time.monotonic() - start_time > self.__timeout_sec:
+                self.__logger.warn("Timeout waiting for head servo to reach target pose.")
                 return False
 
-            result_future = goal_handle.get_result_async()
-
-            nav_success = False
-            timeout_sec = self.TIMEOUT_SEC if timeout is None else timeout
-            start_time = time.time()
-            retry_count = 0
-            while rclpy.ok() and not result_future.done():
-                if timeout_sec is not None and timeout_sec > 0:
-                    if time.time() - start_time > timeout_sec:
-                        self.node.get_logger().error("TIMEOUT NAVIGATION!")
-                        cancel_future = goal_handle.cancel_goal_async()
-                        rclpy.spin_until_future_complete(
-                            self.node, cancel_future, timeout_sec=5.0
-                        )
-                        return False
-
-                rclpy.spin_once(self.node, timeout_sec=0.1)
-
-                if feedback_retry_enabled:
-                    with feedback_lock:
-                        feedback_reference_time = (
-                            last_feedback_time
-                            if last_feedback_time is not None
-                            else goal_accept_time
-                        )
-
-                    if (
-                        time.monotonic() - feedback_reference_time
-                        >= feedback_timeout_sec
-                    ):
-                        retry_count += 1
-                        self.node.get_logger().warn(
-                            "No navigation feedback for "
-                            f"{feedback_timeout_sec:.1f} sec after goal accept. "
-                            f"Canceling and resending goal (retry={retry_count})."
-                        )
-
-                        cancel_future = goal_handle.cancel_goal_async()
-                        rclpy.spin_until_future_complete(
-                            self.node, cancel_future, timeout_sec=2.0
-                        )
-                        if not cancel_future.done():
-                            self.node.get_logger().warn(
-                                "Cancel goal timed out before resend; resending anyway."
-                            )
-
-                        future = send_navigation_goal()
-                        goal_handle = wait_for_goal_accept(future)
-                        if goal_handle is None:
-                            return False
-                        result_future = goal_handle.get_result_async()
-                        continue
-
-                if tolerance is not None and tolerance > 0.0:
-                    current_pose = self.get_current_pose(simple=True)
-                    if current_pose is not None:
-                        goal_x = goal_pose.pose.position.x
-                        goal_y = goal_pose.pose.position.y
-                        dist = math.sqrt(
-                            (current_pose[0] - goal_x) ** 2
-                            + (current_pose[1] - goal_y) ** 2
-                        )
-
-                        if dist <= tolerance:
-                            self.node.get_logger().info(
-                                f"Reached tolerance limit ({dist:.3f} <= {tolerance:.3f}). Canceling Nav2."
-                            )
-                            cancel_future = goal_handle.cancel_goal_async()
-                            rclpy.spin_until_future_complete(
-                                self.node, cancel_future, timeout_sec=5.0
-                            )
-                            self.__current_goal_handle = None
-                            return self.__face_goal_pose(goal_pose)
-
-            if not nav_success:
-                result = result_future.result()
-                if result.status == GoalStatus.STATUS_SUCCEEDED:
-                    nav_success = True
-                else:
-                    self.node.get_logger().warn(
-                        f"Navigation failed with status: {result.status}"
-                    )
-                    nav_success = False
-
-            if nav_success:
+            cur = self.get_current_pose()
+            if abs(cur[0] - pan) < 0.08 and abs(cur[1] - tilt) < 0.08:
                 return True
+            rclpy.spin_once(self.__node, timeout_sec=0.05)
 
-            return False
+        return False
 
-        except KeyboardInterrupt:
-            self.node.get_logger().warn(
-                "KeyboardInterrupt: Canceling navigation goal..."
-            )
-            if self.__current_goal_handle:
-                cancel_future = self.__current_goal_handle.cancel_goal_async()
-                rclpy.spin_until_future_complete(
-                    self.node, cancel_future, timeout_sec=5.0
+
+    def move_to_vel(self, pan: float = 0.0, tilt: float = 0.0, time_sec: float = 0.1) -> bool:
+        """指定した角速度で頭部サーボを駆動する．
+
+        Parameters
+        ----------
+        pan : float, default 0.0
+            パン方向の目標角速度（rad/s）．
+        tilt : float, default 0.0
+            チルト方向の目標角速度（rad/s）．
+        time_sec : float, default 0.1
+            指令反映時間（秒）．
+
+        Returns
+        -------
+        bool
+            移動指令が正常に発行された場合は True，それ以外は False．
+        """
+        cur = self.get_current_pose()
+        target_pan = cur[0] + float(pan) * float(time_sec)
+        target_tilt = cur[1] + float(tilt) * float(time_sec)
+        return self.move_to_pose(pan=target_pan, tilt=target_tilt, wait=False)
+
+
+    def get_current_pose(self) -> List[float]:
+        """現在の頭部サーボ角度 [pan, tilt] を取得する．
+
+        Returns
+        -------
+        List[float]
+            現在の [pan, tilt] 角度（ラジアン）．取得失敗時は [0.0, 0.0]．
+        """
+        angles: Optional[List[float]] = None
+
+        def __cb_joint(msg: JointState) -> None:
+            nonlocal angles
+            pan_val = 0.0
+            tilt_val = 0.0
+            found_pan = False
+            found_tilt = False
+            for name, pos in zip(msg.name, msg.position):
+                if name == "xl330_joint":
+                    pan_val = pos
+                    found_pan = True
+                elif name == "d455_joint":
+                    tilt_val = -pos
+                    found_tilt = True
+            if found_pan or found_tilt:
+                angles = [pan_val, tilt_val]
+
+        with TemporarySubscriber(
+            node=self.__node,
+            msg=JointState,
+            topic="/joint_states",
+            qos_profile=10,
+            cb=__cb_joint,
+        ):
+            start_time = time.monotonic()
+            while rclpy.ok() and angles is None:
+                if time.monotonic() - start_time > self.__timeout_sec:
+                    self.__logger.warn("Timeout waiting for /joint_states for head pose.")
+                    break
+                rclpy.spin_once(self.__node, timeout_sec=0.05)
+
+        return angles if angles is not None else [0.0, 0.0]
+
+
+    def gaze(self, target: Union[str, PoseStamped], wait: bool = True) -> bool:
+        """指定されたリンクまたは目標座標の方向を頭部カメラで注視する．
+
+        Parameters
+        ----------
+        target : Union[str, PoseStamped]
+            注視対象．TF フレーム名（文字列）または PoseStamped 目標位置．
+        wait : bool, default True
+            注視完了を待機するかどうか．
+
+        Returns
+        -------
+        bool
+            注視制御に成功した場合は True，それ以外は False．
+        """
+        ref_frame = "head_servo_link"
+        dx: float = 0.0
+        dy: float = 0.0
+        dz: float = 0.0
+
+        try:
+            if isinstance(target, str):
+                tf_stamped = self.__tf_buffer.lookup_transform(
+                    ref_frame,
+                    target,
+                    rclpy.time.Time(),
+                    timeout=rclpy.duration.Duration(seconds=2.0),
                 )
-                self.node.get_logger().info("Navigation goal canceled.")
-            self.__current_goal_handle = None
+                dx = tf_stamped.transform.translation.x
+                dy = tf_stamped.transform.translation.y
+                dz = tf_stamped.transform.translation.z
+            elif isinstance(target, PoseStamped):
+                target_in_ref = self.__tf_buffer.transform(
+                    target,
+                    ref_frame,
+                    timeout=rclpy.duration.Duration(seconds=2.0),
+                )
+                dx = target_in_ref.pose.position.x
+                dy = target_in_ref.pose.position.y
+                dz = target_in_ref.pose.position.z
+            else:
+                self.__logger.error("Target must be a frame name (str) or PoseStamped.")
+                return False
+        except TransformException as exc:
+            self.__logger.error(f"TF transformation error during gaze: {exc}")
             return False
-        except Exception as e:
-            self.node.get_logger().error(f"Navigation error: {str(e)}")
+
+        dist_xy = math.hypot(dx, dy)
+        if dist_xy < 1e-4 and abs(dz) < 1e-4:
+            self.__logger.warn("Target is at head origin; cannot compute gaze angle.")
             return False
+
+        target_pan = math.atan2(dy, dx)
+        target_tilt = -math.atan2(dz, dist_xy)
+
+        return self.move_to_pose(pan=target_pan, tilt=target_tilt, wait=wait)
+
+
+class ArmCollision:
+    """MoveIt PlanningScene に対する干渉オブジェクトの登録・削除を管理する API クラス．
+
+    Parameters
+    ----------
+    node : Node
+        ROS 2 ノードインスタンス．
+    timeout_sec : float, default 5.0
+        通信待機のデフォルトタイムアウト秒数．
+    apply_scene_cli : Any, optional
+        後方互換性のための非推奨引数（省略時は内部で自動生成）．
+
+    Methods
+    -------
+    get_object(name: str) -> Optional[CollisionObject]
+        指定名のコリジョンオブジェクトを取得する．
+    get_object_pose(name: str) -> Optional[Tuple[float, float, float, float, float, float, str]]
+        指定オブジェクトの 6DoF ポーズ (x, y, z, roll, pitch, yaw, frame_id) を取得する．
+    get_attached_object(name: str) -> Optional[AttachedCollisionObject]
+        指定オブジェクトのアタッチ状態を取得する．
+    allow_collision(name: str, support_name: str) -> bool
+        ACM (AllowedCollisionMatrix) を更新し特定オブジェクト・リンク間の衝突判定を無効化する．
+    add_box(...) -> bool
+        直方体の干渉オブジェクトを登録する．
+    add_cylinder(...) -> bool
+        円柱の干渉オブジェクトを登録する．
+    add_sphere(...) -> bool
+        球体の干渉オブジェクトを登録する．
+    attach(name: str, attach_frame: str = 'left_amazing_hand', touch_links: Optional[List[str]] = None, ...) -> bool
+        指定した干渉オブジェクトを指定リンクへ把持結合（アタッチ）する．
+    detach(name: str, attach_frame: Optional[str] = None) -> bool
+        把持中の干渉オブジェクトを解放（デタッチ）する．
+    remove_collision(name: str) -> bool
+        指定名の干渉オブジェクトを削除する．
+    remove_all_collisions() -> bool / all_remove_collisions() -> bool
+        すべての干渉オブジェクトを削除する．
+    """
+
+    def __init__(
+        self,
+        node: Node,
+        timeout_sec: float = 5.0,
+        apply_scene_cli: Optional[Any] = None,
+    ) -> None:
+        """干渉オブジェクト管理クラスのインスタンスを初期化する．"""
+        self.__node = node
+        self.__logger = node.get_logger()
+        self.__cb_group = MutuallyExclusiveCallbackGroup()
+
+        # 第2引数に apply_scene_cli が位置引数で渡された場合の後方互換対応
+        if not isinstance(timeout_sec, (int, float)):
+            actual_cli = timeout_sec
+            actual_timeout = 5.0 if apply_scene_cli is None else float(apply_scene_cli)
+        else:
+            actual_cli = apply_scene_cli
+            actual_timeout = float(timeout_sec)
+
+        self.__timeout_sec = actual_timeout
+        if actual_cli is not None:
+            self.__apply_scene_cli = actual_cli
+        else:
+            self.__apply_scene_cli = self.__node.create_client(
+                ApplyPlanningScene,
+                "/apply_planning_scene",
+                callback_group=self.__cb_group,
+            )
+
+        self.__scene_pub = self.__node.create_publisher(
+            PlanningScene,
+            "/planning_scene",
+            10,
+            callback_group=self.__cb_group,
+        )
+        self.__get_scene_cli = self.__node.create_client(
+            GetPlanningScene,
+            "/get_planning_scene",
+            callback_group=self.__cb_group,
+        )
+        self.__registered_objects: List[str] = []
+        self.__attached_objects: List[str] = []
+
+
+    def __apply(self, scene: PlanningScene) -> bool:
+        """PlanningScene を非同期送信し反映完了を待機する内部メソッド．"""
+        scene.is_diff = True
+        scene.robot_state.is_diff = True
+
+        if self.__apply_scene_cli.wait_for_service(timeout_sec=self.__timeout_sec):
+            req = ApplyPlanningScene.Request()
+            req.scene = scene
+
+            future = self.__apply_scene_cli.call_async(req)
+            rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+
+            if future.done():
+                res = future.result()
+                if res is not None and res.success:
+                    return True
+                self.__logger.warn("ApplyPlanningScene service rejected scene update.")
+                return False
+
+            future.cancel()
+        self.__logger.error("PlanningScene の更新完了を確認できませんでした．")
+        return False
+
+
+    def get_object(self, name: str) -> Optional[CollisionObject]:
+        """指定された名前のコリジョンオブジェクト全体を取得する．
+
+        Parameters
+        ----------
+        name : str
+            オブジェクト名．
+
+        Returns
+        -------
+        Optional[CollisionObject]
+            見つかった場合は CollisionObject，存在しない場合は None．
+        """
+        if not self.__get_scene_cli.wait_for_service(timeout_sec=self.__timeout_sec):
+            self.__logger.warn("GetPlanningScene service unavailable.")
+            return None
+
+        req = GetPlanningScene.Request()
+        req.components.components = (
+            PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+            | PlanningSceneComponents.WORLD_OBJECT_NAMES
+        )
+        future = self.__get_scene_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+
+        if not future.done() or future.result() is None:
+            return None
+
+        for co in future.result().scene.world.collision_objects:
+            if co.id == str(name):
+                return co
+        return None
+
+
+    def get_object_pose(
+        self, name: str
+    ) -> Optional[Tuple[float, float, float, float, float, float, str]]:
+        """指定されたオブジェクトの 6DoF ポーズ (x, y, z, roll, pitch, yaw, frame_id) を取得する．
+
+        Parameters
+        ----------
+        name : str
+            オブジェクト名．
+
+        Returns
+        -------
+        Optional[Tuple[float, float, float, float, float, float, str]]
+            (x, y, z, roll, pitch, yaw, frame_id) のタプル．見つからない場合は None．
+        """
+        co = self.get_object(name)
+        if co is None:
+            self.__logger.warn(f"Object '{name}' not found in planning scene.")
+            return None
+
+        pose = _object_reference_pose(co)
+        q = pose.orientation
+        roll, pitch, yaw = euler_from_quaternion([q.x, q.y, q.z, q.w])
+        return (pose.position.x, pose.position.y, pose.position.z,
+                roll, pitch, yaw, co.header.frame_id)
+
+
+    def get_attached_object(
+        self, name: str = "", link_name: Optional[str] = None,
+    ) -> Optional[AttachedCollisionObject]:
+        """指定された名前の AttachedCollisionObject を取得する．
+
+        Parameters
+        ----------
+        name : str, default ""
+            オブジェクト名（空文字列の場合は最初に見つかったアタッチオブジェクト）．
+        link_name : Optional[str], default None
+            指定時はこのリンクにアタッチされた物体だけを対象とする．
+
+        Returns
+        -------
+        Optional[AttachedCollisionObject]
+            見つかった場合は AttachedCollisionObject，存在しない場合は None．
+        """
+        if not self.__get_scene_cli.wait_for_service(timeout_sec=self.__timeout_sec):
+            self.__logger.warn("GetPlanningScene service not available.")
+            return None
+
+        req = GetPlanningScene.Request()
+        req.components.components = PlanningSceneComponents.ROBOT_STATE_ATTACHED_OBJECTS
+
+        future = self.__get_scene_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+
+        if not future.done() or future.result() is None:
+            return None
+
+        for aco in future.result().scene.robot_state.attached_collision_objects:
+            if ((not name or aco.object.id == str(name))
+                    and (link_name is None or aco.link_name == link_name)):
+                return aco
+        return None
+
+
+    def get_allowed_collision_matrix(self) -> Optional[AllowedCollisionMatrix]:
+        """一時的な接触許可の保存・復元に使う現在の行列を取得する．"""
+        if not self.__get_scene_cli.wait_for_service(timeout_sec=self.__timeout_sec):
+            return None
+        req = GetPlanningScene.Request()
+        req.components.components = PlanningSceneComponents.ALLOWED_COLLISION_MATRIX
+        future = self.__get_scene_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+        if not future.done() or future.result() is None:
+            return None
+        return copy.deepcopy(future.result().scene.allowed_collision_matrix)
+
+
+    def get_robot_state(self) -> Optional[RobotState]:
+        """MoveIt が認識する関節と把持物体を含む現在状態を取得する．"""
+        if not self.__get_scene_cli.wait_for_service(timeout_sec=self.__timeout_sec):
+            return None
+        req = GetPlanningScene.Request()
+        req.components.components = (
+            PlanningSceneComponents.ROBOT_STATE
+            | PlanningSceneComponents.ROBOT_STATE_ATTACHED_OBJECTS
+        )
+        future = self.__get_scene_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+        if not future.done() or future.result() is None:
+            return None
+        return copy.deepcopy(future.result().scene.robot_state)
+
+
+    def apply_allowed_collision_matrix(self, matrix: AllowedCollisionMatrix) -> bool:
+        """接触許可行列の適用完了を確認する．"""
+        scene = PlanningScene()
+        scene.allowed_collision_matrix = matrix
+        return self.__apply(scene)
+
+
+    @staticmethod
+    def _set_allowed_pair(acm: AllowedCollisionMatrix, name: str, other: str) -> None:
+        """既存の規則と既定値を維持し，指定した組だけを接触許可にする．"""
+        defaults = dict(zip(acm.default_entry_names, acm.default_entry_values))
+
+        def default_value(a: str, b: str) -> bool:
+            values = [defaults[n] for n in (a, b) if n in defaults]
+            return all(values) if values else False
+
+        for item in (name, other):
+            if item not in acm.entry_names:
+                for entry, existing in zip(acm.entry_values, acm.entry_names):
+                    entry.enabled.append(default_value(item, existing))
+                acm.entry_names.append(item)
+                acm.entry_values.append(AllowedCollisionEntry(
+                    enabled=[default_value(item, existing) for existing in acm.entry_names]))
+        i, j = acm.entry_names.index(name), acm.entry_names.index(other)
+        acm.entry_values[i].enabled[j] = True
+        acm.entry_values[j].enabled[i] = True
+
+
+    def allow_collision(self, name: str, support_name: str) -> bool:
+        """指定された2つのオブジェクト（またはオブジェクトとロボットリンク）間の衝突判定を無効化（接触許可）する．
+
+        Parameters
+        ----------
+        name : str
+            オブジェクト名1．
+        support_name : str
+            オブジェクト名2（作業台や把持ハンドリンクなど）．
+
+        Returns
+        -------
+        bool
+            ACM 更新が成功した場合は True，失敗した場合は False．
+        """
+        acm = self.get_allowed_collision_matrix()
+        if acm is None:
+            return False
+        self._set_allowed_pair(acm, name, support_name)
+        return self.apply_allowed_collision_matrix(acm)
+
+
+    def add_box(
+        self,
+        name: str = "box",
+        ref_frame: str = "torso_link",
+        x: float = 0.0,
+        y: float = 0.0,
+        z: float = 0.0,
+        roll: float = 0.0,
+        pitch: float = 0.0,
+        yaw: float = 0.0,
+        scale_x: float = 0.1,
+        scale_y: float = 0.1,
+        scale_z: float = 0.1,
+        ref: Optional[str] = None,
+    ) -> bool:
+        """直方体の干渉オブジェクトを PlanningScene に登録する．"""
+        target_ref = ref if ref is not None else ref_frame
+        obj = CollisionObject()
+        obj.id = str(name)
+        obj.header.frame_id = str(target_ref)
+        obj.operation = CollisionObject.ADD
+
+        primitive = SolidPrimitive()
+        primitive.type = SolidPrimitive.BOX
+        primitive.dimensions = [float(scale_x), float(scale_y), float(scale_z)]
+
+        q = quaternion_from_euler(roll, pitch, yaw)
+        pose = Pose()
+        pose.position.x = float(x)
+        pose.position.y = float(y)
+        pose.position.z = float(z)
+        pose.orientation.x = q[0]
+        pose.orientation.y = q[1]
+        pose.orientation.z = q[2]
+        pose.orientation.w = q[3]
+
+        obj.primitives = [primitive]
+        obj.primitive_poses = [pose]
+
+        scene = PlanningScene()
+        scene.world.collision_objects = [obj]
+
+        ok = self.__apply(scene)
+        if ok and name not in self.__registered_objects:
+            self.__registered_objects.append(name)
+        return ok
+
+
+    def add_cylinder(
+        self,
+        name: str = "cylinder",
+        ref_frame: str = "torso_link",
+        x: float = 0.0,
+        y: float = 0.0,
+        z: float = 0.0,
+        roll: float = 0.0,
+        pitch: float = 0.0,
+        yaw: float = 0.0,
+        radius: float = 0.05,
+        height: float = 0.1,
+        ref: Optional[str] = None,
+    ) -> bool:
+        """円柱の干渉オブジェクトを PlanningScene に登録する．"""
+        target_ref = ref if ref is not None else ref_frame
+        obj = CollisionObject()
+        obj.id = str(name)
+        obj.header.frame_id = str(target_ref)
+        obj.operation = CollisionObject.ADD
+
+        primitive = SolidPrimitive()
+        primitive.type = SolidPrimitive.CYLINDER
+        primitive.dimensions = [float(height), float(radius)]
+
+        q = quaternion_from_euler(roll, pitch, yaw)
+        pose = Pose()
+        pose.position.x = float(x)
+        pose.position.y = float(y)
+        pose.position.z = float(z)
+        pose.orientation.x = q[0]
+        pose.orientation.y = q[1]
+        pose.orientation.z = q[2]
+        pose.orientation.w = q[3]
+
+        obj.primitives = [primitive]
+        obj.primitive_poses = [pose]
+
+        scene = PlanningScene()
+        scene.world.collision_objects = [obj]
+
+        ok = self.__apply(scene)
+        if ok and name not in self.__registered_objects:
+            self.__registered_objects.append(name)
+        return ok
+
+
+    def add_sphere(
+        self,
+        name: str = "sphere",
+        ref_frame: str = "torso_link",
+        x: float = 0.0,
+        y: float = 0.0,
+        z: float = 0.0,
+        roll: float = 0.0,
+        pitch: float = 0.0,
+        yaw: float = 0.0,
+        radius: float = 0.05,
+        ref: Optional[str] = None,
+    ) -> bool:
+        """球体の干渉オブジェクトを PlanningScene に登録する．"""
+        target_ref = ref if ref is not None else ref_frame
+        obj = CollisionObject()
+        obj.id = str(name)
+        obj.header.frame_id = str(target_ref)
+        obj.operation = CollisionObject.ADD
+
+        primitive = SolidPrimitive()
+        primitive.type = SolidPrimitive.SPHERE
+        primitive.dimensions = [float(radius)]
+
+        q = quaternion_from_euler(roll, pitch, yaw)
+        pose = Pose()
+        pose.position.x = float(x)
+        pose.position.y = float(y)
+        pose.position.z = float(z)
+        pose.orientation.x = q[0]
+        pose.orientation.y = q[1]
+        pose.orientation.z = q[2]
+        pose.orientation.w = q[3]
+
+        obj.primitives = [primitive]
+        obj.primitive_poses = [pose]
+
+        scene = PlanningScene()
+        scene.world.collision_objects = [obj]
+
+        ok = self.__apply(scene)
+        if ok and name not in self.__registered_objects:
+            self.__registered_objects.append(name)
+        return ok
+
+
+    def attach(
+        self,
+        name: str,
+        attach_frame: str = "left_amazing_hand",
+        touch_links: Optional[List[str]] = None,
+        collision_object: Optional[CollisionObject] = None,
+        link_name: Optional[str] = None,
+    ) -> bool:
+        """指定した干渉オブジェクトを指定リンクへアタッチ（把持結合）する．
+
+        Parameters
+        ----------
+        name : str
+            アタッチする干渉オブジェクトの識別名．
+        attach_frame : str, default "left_amazing_hand"
+            把持・アタッチ対象のロボットリンク名．
+        touch_links : Optional[List[str]], default None
+            把持対象オブジェクトとの接触を許可するリンク名のリスト．
+            None の場合，attach_frame および手首リンク群が自動設定される．
+        collision_object : Optional[CollisionObject], default None
+            明示的なオブジェクトジオメトリ定義（指定時はワールド外でも形状を保持してアタッチ）．
+        link_name : Optional[str], default None
+            attach_frame の Piper 互換エイリアス．
+
+        Returns
+        -------
+        bool
+            適用に成功した場合は True，失敗した場合は False．
+        """
+        target_frame = str(link_name) if link_name is not None else str(attach_frame)
+
+        if touch_links is None:
+            touch_links = [target_frame]
+            if "left" in target_frame:
+                touch_links.extend([
+                    "left_wrist_roll_rubber_hand",
+                ])
+            elif "right" in target_frame:
+                touch_links.extend([
+                    "right_wrist_roll_rubber_hand",
+                ])
+
+        attached_obj = AttachedCollisionObject()
+        attached_obj.link_name = target_frame
+        if collision_object is not None:
+            attached_obj.object = copy.deepcopy(collision_object)
+            attached_obj.object.id = str(name)
+            attached_obj.object.operation = CollisionObject.ADD
+        else:
+            attached_obj.object.id = str(name)
+            attached_obj.object.operation = CollisionObject.ADD
+        attached_obj.touch_links = list(set(touch_links))
+
+        scene = PlanningScene()
+        scene.is_diff = True
+        scene.robot_state.is_diff = True
+        scene.robot_state.attached_collision_objects = [attached_obj]
+
+        ok = self.__apply(scene)
+        if ok and name not in self.__attached_objects:
+            self.__attached_objects.append(name)
+        return ok
+
+
+    def detach(
+        self,
+        name: str,
+        attach_frame: Optional[str] = None,
+    ) -> bool:
+        """指定した干渉オブジェクトをロボットリンクからデタッチ（解放）する．
+
+        Parameters
+        ----------
+        name : str
+            デタッチする干渉オブジェクトの識別名．
+        attach_frame : Optional[str], default None
+            デタッチ元のリンク名（指定がある場合）．
+
+        Returns
+        -------
+        bool
+            適用に成功した場合は True，失敗した場合は False．
+        """
+        attached_obj = AttachedCollisionObject()
+        if attach_frame is not None:
+            attached_obj.link_name = str(attach_frame)
+        attached_obj.object.id = str(name)
+        attached_obj.object.operation = CollisionObject.REMOVE
+
+        scene = PlanningScene()
+        scene.is_diff = True
+        scene.robot_state.is_diff = True
+        scene.robot_state.attached_collision_objects = [attached_obj]
+
+        ok = self.__apply(scene)
+        if ok and name in self.__attached_objects:
+            self.__attached_objects.remove(name)
+        return ok
+
+
+    def attach_collision(
+        self,
+        name: str,
+        link_name: str = "left_amazing_hand",
+        touch_links: Optional[List[str]] = None,
+        collision_object: Optional[CollisionObject] = None,
+        attach_frame: Optional[str] = None,
+    ) -> bool:
+        """指定した干渉オブジェクトを指定リンクへアタッチ（把持結合）する（attach のエイリアス）．"""
+        target_frame = attach_frame if attach_frame is not None else link_name
+        return self.attach(
+            name,
+            attach_frame=target_frame,
+            touch_links=touch_links,
+            collision_object=collision_object,
+        )
+
+
+    def detach_collision(
+        self,
+        name: str,
+        attach_frame: Optional[str] = None,
+    ) -> bool:
+        """指定した干渉オブジェクトをロボットリンクからデタッチ（解放）する（detach のエイリアス）．"""
+        return self.detach(name, attach_frame=attach_frame)
+
+
+    def all_remove_collisions(self) -> bool:
+        """作成したすべてのコリジョンを削除する（Piper 命名互換．remove_all_collisions と同等）．"""
+        return self.remove_all_collisions()
+
+
+    def remove_collision(self, name: str) -> bool:
+        """指定名の干渉オブジェクトを PlanningScene から削除する．"""
+        obj = CollisionObject()
+        obj.id = str(name)
+        obj.operation = CollisionObject.REMOVE
+
+        attached = AttachedCollisionObject()
+        attached.object = copy.deepcopy(obj)
+
+        scene = PlanningScene()
+        scene.world.collision_objects = [obj]
+        scene.robot_state.attached_collision_objects = [attached]
+
+        ok = self.__apply(scene)
+        if ok:
+            if name in self.__registered_objects:
+                self.__registered_objects.remove(name)
+            if name in self.__attached_objects:
+                self.__attached_objects.remove(name)
+        return ok
+
+
+    def remove_all_collisions(self) -> bool:
+        """登録済みおよびアタッチ済みのすべての干渉オブジェクトを PlanningScene から削除する．"""
+        all_success = True
+        all_names = set(self.__registered_objects + self.__attached_objects)
+
+        # MoveIt が動作している場合は現在の PlanningScene から全オブジェクトを自動検出
+        if self.__get_scene_cli.service_is_ready():
+            req = GetPlanningScene.Request()
+            req.components.components = 1 | 2 | 4 | 8 | 16
+            future = self.__get_scene_cli.call_async(req)
+            rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+            if future.done() and future.result() is not None:
+                scene = future.result().scene
+                for o in scene.world.collision_objects:
+                    all_names.add(o.id)
+                for o in scene.robot_state.attached_collision_objects:
+                    all_names.add(o.object.id)
+
+        for name in list(all_names):
+            if not self.remove_collision(name):
+                all_success = False
+        return all_success
+
+
+class ArmControl:
+    """Unitree G1 の上半身・双腕マニピュレーションを制御する API クラス．
+
+    Parameters
+    ----------
+    node : Node
+        ROS 2 ノードインスタンス．
+    timeout_sec : float, default 10.0
+        通信待機のデフォルトタイムアウト秒数．
+
+    Methods
+    -------
+    move_groupstate(group_name: str = 'arm_both_with_waist', state: str = 'walk') -> bool
+        事前定義された姿勢グループステートへ遷移させる．
+    move_abs(x: float, y: float, z: float, ref_frame: str = 'torso_link', group_name: str = 'arm_left_with_waist', wait: bool = True) -> bool
+        指定座標系における絶対座標へエンドエフェクタを移動させる．
+    move_rel(x: float, y: float, z: float, ref_frame: str = '*_left_amazing_hand', group_name: str = 'arm_left_with_waist', wait: bool = True) -> bool
+        指定グループのエンドエフェクタを相対移動させる．
+    joint_control(rel: bool = False, wait: bool = True, **kwargs: float) -> bool
+        指定された関節を指定角度へ直接駆動する．
+    get_current_joint_pose() -> Dict[str, float]
+        現在の全関節名と関節角度の辞書を取得する．
+    arm_action(mode: int) -> bool
+        Unitree プリセット腕動作を実行する．
+    upper_body_control(enable: bool) -> bool
+        上半身の関節制御権限の有効・無効を切り替える．
+    """
+
+    def __init__(
+        self,
+        node: Node,
+        timeout_sec: float = 10.0,
+        tf_buffer: Optional[Buffer] = None,
+        use_sim_time: Optional[bool] = None,
+    ) -> None:
+        """API クラスのインスタンスを初期化する．
+
+        Parameters
+        ----------
+        node : Node
+            ROS 2 ノードインスタンス．
+        timeout_sec : float, default 10.0
+            通信待機のデフォルトタイムアウト秒数．
+        tf_buffer : Optional[Buffer], optional
+            共有 TF2 バッファインスタンス．省略時は内部で生成．
+        use_sim_time : Optional[bool], optional
+            省略時は node パラメータから自動判定．明示指定時は node の時刻設定も一致させる．
+
+        Raises
+        ------
+        RuntimeError
+            実機環境（use_sim_time=False）において指定時間内に必須サービスが検出されなかった場合．
+        """
+        self.__node = node
+        self.__logger = node.get_logger()
+        self.__timeout_sec = timeout_sec
+
+        if use_sim_time is not None:
+            self.__use_sim_time = bool(use_sim_time)
+            # フラグと TF・サービス要求の時刻を一致させる．
+            if not node.has_parameter("use_sim_time"):
+                node.declare_parameter("use_sim_time", self.__use_sim_time)
+            result = node.set_parameters([
+                rclpy.parameter.Parameter("use_sim_time", value=self.__use_sim_time)
+            ])[0]
+            if not result.successful:
+                raise RuntimeError(f"use_sim_time を設定できません: {result.reason}")
+        else:
+            self.__use_sim_time = False
+            try:
+                if self.__node.has_parameter("use_sim_time"):
+                    self.__use_sim_time = bool(self.__node.get_parameter("use_sim_time").value)
+                else:
+                    self.__use_sim_time = bool(
+                        self.__node.declare_parameter("use_sim_time", False).value
+                    )
+            except Exception:
+                try:
+                    self.__use_sim_time = bool(self.__node.get_parameter("use_sim_time").value)
+                except Exception:
+                    self.__use_sim_time = False
+
+        self.__cb_group = MutuallyExclusiveCallbackGroup()
+
+        self.__arm_action_cli = self.__node.create_client(
+            ArmAction,
+            "/arm_action",
+            callback_group=self.__cb_group,
+        )
+
+        self.__upper_enable_cli = self.__node.create_client(
+            SetBool,
+            "/enable_upper_body_control",
+            callback_group=self.__cb_group,
+        )
+        self.__fallback_upper_enable_cli = self.__node.create_client(
+            SetBool,
+            "/robot_controller/upper_body/enable",
+            callback_group=self.__cb_group,
+        )
+
+        self.__ik_cli = self.__node.create_client(
+            GetPositionIK,
+            "/compute_ik",
+            callback_group=self.__cb_group,
+        )
+
+        self.__fk_cli = self.__node.create_client(
+            GetPositionFK, "/compute_fk", callback_group=self.__cb_group)
+        self.__cartesian_cli = self.__node.create_client(
+            GetCartesianPath, "/compute_cartesian_path", callback_group=self.__cb_group)
+        self.__execute_cli = ActionClient(
+            self.__node, ExecuteTrajectory, "/execute_trajectory", callback_group=self.__cb_group)
+
+        self.__move_group_cli = ActionClient(
+            self.__node,
+            MoveGroup,
+            "/move_action",
+            callback_group=self.__cb_group,
+        )
+
+        self.collision = ArmCollision(
+            self.__node, timeout_sec=self.__timeout_sec
+        )
+
+        self.__tf_buffer = tf_buffer or Buffer()
+        self.__tf_listener = TransformListener(self.__tf_buffer, self.__node) if tf_buffer is None else None
+
+        if self.__use_sim_time:
+            self.__logger.info(
+                "ArmControl initialized with use_sim_time=True: hardware arm services are skipped."
+            )
+        else:
+            start_wait = time.monotonic()
+            while rclpy.ok():
+                arm_ok = self.__arm_action_cli.wait_for_service(timeout_sec=0.1)
+                enable_ok = (
+                    self.__upper_enable_cli.wait_for_service(timeout_sec=0.1)
+                    or self.__fallback_upper_enable_cli.wait_for_service(timeout_sec=0.1)
+                )
+                if arm_ok and enable_ok:
+                    break
+                if time.monotonic() - start_wait > self.__timeout_sec:
+                    self.__logger.error("Required arm services are not available.")
+                    raise RuntimeError("Failed to connect to required arm services.")
+                rclpy.spin_once(self.__node, timeout_sec=0.05)
+
+        self.__srdf_states = self.__load_srdf_group_states()
+
+
+    def __load_srdf_group_states(self) -> Dict[str, Dict[str, Dict[str, float]]]:
+        """SRDF ファイルから group_state の定義を読み込む内部メソッド．"""
+        states: Dict[str, Dict[str, Dict[str, float]]] = {}
+        try:
+            pkg_path = get_package_share_directory("erasers_g1_moveit")
+            srdf_path = f"{pkg_path}/config/g1.srdf"
+            tree = ET.parse(srdf_path)
+            root = tree.getroot()
+            for gs in root.findall("group_state"):
+                name = gs.get("name")
+                group = gs.get("group")
+                if not name or not group:
+                    continue
+                joint_values: Dict[str, float] = {}
+                for j in gs.findall("joint"):
+                    j_name = j.get("name")
+                    j_val = float(j.get("value", 0.0))
+                    if j_name:
+                        joint_values[j_name] = j_val
+                if group not in states:
+                    states[group] = {}
+                states[group][name] = joint_values
+        except Exception as exc:
+            self.__logger.warn(f"Failed to load SRDF group states: {exc}")
+        return states
+
+
+    def __send_arm_action_req(self, req: ArmAction.Request) -> bool:
+        """ArmAction リクエストを同期送信する内部メソッド．"""
+        if not self.__arm_action_cli.service_is_ready():
+            self.__logger.error("ArmAction service (/arm_action) is not available.")
+            return False
+        future = self.__arm_action_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+
+        if future.done():
+            res = future.result()
+            if res is not None and res.success:
+                return True
+            self.__logger.warn(f"ArmAction rejected: {res.message if res else 'None'}")
+            return False
+
+        self.__logger.error("Timeout waiting for ArmAction response.")
+        return False
+
+
+    def __send_upper_enable_req(self, req: SetBool.Request) -> bool:
+        """SetBool リクエストを同期送信する内部メソッド．"""
+        cli = (
+            self.__upper_enable_cli
+            if self.__upper_enable_cli.service_is_ready()
+            else self.__fallback_upper_enable_cli
+        )
+        if not cli.service_is_ready():
+            self.__logger.error("Upper-body enable service is not available.")
+            return False
+        future = cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+
+        if future.done():
+            res = future.result()
+            if res is not None and res.success:
+                return True
+            self.__logger.warn(f"Upper-body enable request failed: {res.message if res else 'None'}")
+            return False
+
+        self.__logger.error("Timeout waiting for upper-body enable response.")
+        return False
+
+
+    def __send_move_group_goal(
+        self,
+        goal: MoveGroup.Goal,
+        wait: bool = True,
+    ) -> bool:
+        """MoveGroup アクションゴールを同期/非同期送信する内部メソッド．"""
+        if not self.__move_group_cli.wait_for_server(timeout_sec=self.__timeout_sec):
+            self.__logger.error("MoveGroup action server (/move_action) is not available.")
+            return False
+
+        future = self.__move_group_cli.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+
+        if not future.done():
+            self.__logger.error("Timeout waiting for MoveGroup goal response.")
+            return False
+
+        goal_handle = future.result()
+        if goal_handle is None or not goal_handle.accepted:
+            self.__logger.warn("MoveGroup goal was rejected by server.")
+            return False
+
+        if not wait:
+            return True
+
+        result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(
+            self.__node, result_future, timeout_sec=self.__timeout_sec * 4.0
+        )
+
+        if not result_future.done():
+            self.__logger.error("Timeout waiting for MoveGroup execution result.")
+            cancel_future = goal_handle.cancel_goal_async()
+            rclpy.spin_until_future_complete(
+                self.__node, cancel_future, timeout_sec=self.__timeout_sec
+            )
+            rclpy.spin_until_future_complete(
+                self.__node, result_future, timeout_sec=self.__timeout_sec
+            )
+            if not result_future.done():
+                self.__logger.error("MoveGroup のキャンセル後の終了を確認できませんでした．")
+            return False
+
+        wrapped_result = result_future.result()
+        if wrapped_result is None or wrapped_result.result is None:
+            self.__logger.error("MoveGroup returned null result wrapper.")
+            return False
+
+        error_code = wrapped_result.result.error_code.val
+        if (wrapped_result.status == GoalStatus.STATUS_SUCCEEDED
+                and error_code == MoveItErrorCodes.SUCCESS):
+            return True
+
+        self.__logger.warn(f"MoveGroup execution finished with MoveIt error code: {error_code}")
+        return False
+
+
+    def _create_move_group_goal(
+        self,
+        group_name: str,
+    ) -> MoveGroup.Goal:
+        """MoveGroup.Goal の共通設定インスタンスを生成する内部メソッド．"""
+        goal = MoveGroup.Goal()
+        goal.request.group_name = group_name
+        goal.request.num_planning_attempts = 10
+        goal.request.allowed_planning_time = 10.0
+        goal.request.max_velocity_scaling_factor = 0.5
+        goal.request.max_acceleration_scaling_factor = 0.5
+        goal.request.start_state.is_diff = True
+
+        # 空の差分により MoveIt の現在状態を使う．/joint_states には
+        # モデル外の関節が含まれ得るため，開始状態へそのまま転送しない．
+
+        goal.planning_options.plan_only = False
+        goal.planning_options.look_around = False
+        goal.planning_options.replan = True
+        goal.planning_options.replan_attempts = 5
+        return goal
+
+
+    def move_groupstate(
+        self,
+        group_name: str = "arm_both_with_waist",
+        state: str = "walk",
+        wait: bool = True,
+    ) -> bool:
+        """SRDF に定義された名前付き姿勢グループステートへ遷移させる．
+
+        Parameters
+        ----------
+        group_name : str, default 'arm_both_with_waist'
+            対象の planning group 名．
+        state : str, default 'walk'
+            目標の group_state 名（'walk', 'home' 等）．
+        wait : bool, default True
+            動作完了を待機するかどうか．
+
+        Returns
+        -------
+        bool
+            姿勢遷移が正常に完了した場合は True，それ以外は False．
+        """
+        if group_name not in self.__srdf_states:
+            self.__logger.error(f"Planning group '{group_name}' not found in SRDF.")
+            return False
+
+        if state not in self.__srdf_states[group_name]:
+            self.__logger.error(f"State '{state}' not found for group '{group_name}'.")
+            return False
+
+        joints = self.__srdf_states[group_name][state]
+        return self.joint_control(rel=False, wait=wait, planning_group=group_name, **joints)
+
+
+    def get_current_endeffector_pose(
+        self,
+        ref: str = "torso_link",
+        arm_side: str = "left",
+    ) -> Optional[Any]:
+        """指定された腕のエンドエフェクタ（amazing_hand）の現在位置姿勢を取得する．
+
+        Parameters
+        ----------
+        ref : str, default 'torso_link'
+            基準座標系名．
+        arm_side : str, default 'left'
+            腕の指定（'left' または 'right'，あるいは直接リンク名）．
+
+        Returns
+        -------
+        Optional[geometry_msgs.msg.Transform]
+            Transform メッセージ（translation, rotation を持つ）．取得失敗時は None．
+        """
+        link_name = arm_side if arm_side.endswith("_amazing_hand") else f"{arm_side}_amazing_hand"
+        deadline = time.monotonic() + self.__timeout_sec
+        while rclpy.ok() and time.monotonic() < deadline:
+            try:
+                ts = self.__tf_buffer.lookup_transform(
+                    ref,
+                    link_name,
+                    rclpy.time.Time(),
+                )
+                return ts.transform
+            except TransformException:
+                rclpy.spin_once(self.__node, timeout_sec=0.1)
+
+        self.__logger.warn(f"TF lookup failed for get_current_endeffector_pose ({link_name} to {ref}).")
+        return None
+
+
+    def transform_pose(self, pose: Pose, source_frame: str,
+                       target_frame: str = "pelvis") -> Optional[Pose]:
+        """最新 TF で姿勢を変換する．腰の回転前に目標を pelvis へ固定できる．"""
+        if source_frame == target_frame:
+            return copy.deepcopy(pose)
+        deadline = time.monotonic() + self.__timeout_sec
+        while rclpy.ok() and time.monotonic() < deadline:
+            try:
+                transform = self.__tf_buffer.lookup_transform(
+                    target_frame, source_frame, rclpy.time.Time()).transform
+                frame_pose = Pose()
+                frame_pose.position.x = transform.translation.x
+                frame_pose.position.y = transform.translation.y
+                frame_pose.position.z = transform.translation.z
+                frame_pose.orientation = transform.rotation
+                return _matrix_pose(_pose_matrix(frame_pose) @ _pose_matrix(pose))
+            except TransformException:
+                rclpy.spin_once(self.__node, timeout_sec=0.05)
+        self.__logger.error(f"TF を取得できません: {source_frame} -> {target_frame}")
+        return None
+
+
+    def _fk_pose(self, state: RobotState, link: str) -> Optional[Pose]:
+        """MoveIt と同じモデルで手先姿勢を求める．モデル外の関節は追加しない．"""
+        request = GetPositionFK.Request()
+        request.header.frame_id = "pelvis"
+        request.fk_link_names = [link]
+        request.robot_state = state
+        future = self.__fk_cli.call_async(request)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+        if not future.done():
+            future.cancel()
+            return None
+        response = future.result()
+        if (response is None or response.error_code.val != MoveItErrorCodes.SUCCESS
+                or len(response.pose_stamped) != 1):
+            return None
+        return response.pose_stamped[0].pose
+
+
+    def _execute_checked_trajectory(self, trajectory) -> bool:
+        """検査済みの軌道を再計画せずに実行し，終了またはキャンセルを確認する．"""
+        if not self.__execute_cli.wait_for_server(timeout_sec=self.__timeout_sec):
+            return False
+        future = self.__execute_cli.send_goal_async(ExecuteTrajectory.Goal(trajectory=trajectory))
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+        if not future.done():
+            # 遅れて受理されたゴールも，次のスピン時にキャンセルする．
+            def cancel_late_goal(completed):
+                handle = completed.result()
+                if handle is not None and handle.accepted:
+                    handle.cancel_goal_async()
+            future.add_done_callback(cancel_late_goal)
+            self.__logger.error("接近軌道の受理を確認できませんでした．")
+            return False
+        handle = future.result()
+        if handle is None or not handle.accepted:
+            return False
+        result_future = handle.get_result_async()
+        rclpy.spin_until_future_complete(
+            self.__node, result_future, timeout_sec=self.__timeout_sec * 4)
+        if not result_future.done():
+            cancellation = handle.cancel_goal_async()
+            rclpy.spin_until_future_complete(
+                self.__node, cancellation, timeout_sec=self.__timeout_sec)
+            rclpy.spin_until_future_complete(
+                self.__node, result_future, timeout_sec=self.__timeout_sec)
+            self.__logger.error("接近軌道が時間内に完了しませんでした．")
+            return False
+        result = result_future.result()
+        return bool(result is not None and result.status == GoalStatus.STATUS_SUCCEEDED
+                    and result.result.error_code.val == MoveItErrorCodes.SUCCESS)
+
+
+    def _align_grasp_y(
+        self, center: np.ndarray, distance: float, group_name: str,
+    ) -> Optional[np.ndarray]:
+        """物体を手先 +Y 軸上の指定距離へ置く接近前姿勢を求め，衝突判定付きで移動する．
+
+        手先位置だけの IK は向きを変えてしまうため，手先から +Y へ距離を加えた
+        点の誤差を，MoveIt の FK による減衰最小二乗法で解く．関節限界と経路の
+        衝突判定は MoveGroup に委ね，計算中はロボットを動かさない．
+        """
+        side = self._arm_side(group_name)
+        if (side is None or not np.isfinite(center).all()
+                or not math.isfinite(distance) or distance <= 0.0
+                or not self.__fk_cli.wait_for_service(timeout_sec=self.__timeout_sec)):
+            return None
+        state = self.collision.get_robot_state()
+        if state is None:
+            return None
+        names = list(state.joint_state.name)
+        group_joints = set()
+        for values in self.__srdf_states.get(group_name, {}).values():
+            group_joints.update(values)
+        indices = [i for i, name in enumerate(names) if name in group_joints]
+        if not indices or not group_joints.issubset(names):
+            return None
+        positions = np.array(state.joint_state.position)
+        if len(positions) != len(names) or not np.isfinite(positions).all():
+            return None
+        link = f"{side}_amazing_hand"
+
+        def evaluate(values):
+            candidate = copy.deepcopy(state)
+            candidate.joint_state.position = values.tolist()
+            pose = self._fk_pose(candidate, link)
+            return _pose_matrix(pose) if pose is not None else None
+
+        for _ in range(30):
+            matrix = evaluate(positions)
+            if matrix is None:
+                return None
+            point = matrix[:3, 3] + distance * matrix[:3, 1]
+            error = center - point
+            if np.linalg.norm(error) <= 0.0001:
+                break
+            columns = []
+            for index in indices:
+                varied = positions.copy()
+                varied[index] += 0.0001
+                shifted = evaluate(varied)
+                if shifted is None:
+                    return None
+                columns.append((shifted[:3, 3] + distance * shifted[:3, 1] - point) / 0.0001)
+            jacobian = np.array(columns).T
+            step = jacobian.T @ np.linalg.solve(
+                jacobian @ jacobian.T + np.eye(3) * 1e-5, error)
+            if not np.isfinite(step).all() or np.max(np.abs(step)) < 1e-8:
+                return None
+            positions[indices] += step * min(1.0, 0.15 / np.max(np.abs(step)))
+        else:
+            self.__logger.error("手先 +Y 軸上の接近前姿勢を求められませんでした．")
+            return None
+
+        goal = self._create_move_group_goal(group_name)
+        constraints = Constraints()
+        for index in indices:
+            constraints.joint_constraints.append(JointConstraint(
+                joint_name=names[index], position=float(positions[index]),
+                tolerance_above=0.0001, tolerance_below=0.0001, weight=1.0))
+        goal.request.goal_constraints = [constraints]
+        if not self.__send_move_group_goal(goal):
+            return None
+        actual = self.collision.get_robot_state()
+        pose = self._fk_pose(actual, link) if actual is not None else None
+        if pose is None:
+            return None
+        matrix = _pose_matrix(pose)
+        if np.linalg.norm(center - matrix[:3, 3] - distance * matrix[:3, 1]) > 0.0005:
+            self.__logger.error("接近前の実際の手先姿勢が +Y 軸上の目標を満たしません．")
+            return None
+        return matrix
+
+
+    def move_cartesian_y(
+        self, distance: float, group_name: str = "arm_left_with_waist",
+    ) -> bool:
+        """現在の手先 +Y 方向へ直線接近する．距離は正の m 単位．
+
+        +Y 軸と進行方向の許容角は 0.1 rad，直線・到達位置の許容差は 5 mm．
+        部分経路は実行しない．時間補間後の経路も 10 ms 以下で順運動学検査する．
+        条件を満たせない場合，位置だけの移動へ切り替えず False を返す．
+        """
+        side = self._arm_side(group_name)
+        if side is None or not math.isfinite(distance) or distance <= 0.0:
+            return False
+        if not (self.__fk_cli.wait_for_service(timeout_sec=self.__timeout_sec)
+                and self.__cartesian_cli.wait_for_service(timeout_sec=self.__timeout_sec)):
+            return False
+        state = self.collision.get_robot_state()
+        if state is None or not state.joint_state.name:
+            return False
+        link = f"{side}_amazing_hand"
+        pose = self._fk_pose(state, link)
+        if pose is None:
+            return False
+        start = _pose_matrix(pose)
+        target = start.copy()
+        target[:3, 3] += start[:3, 1] * distance
+        request = GetCartesianPath.Request()
+        request.header.frame_id = "pelvis"
+        request.start_state = state
+        request.group_name = group_name
+        request.link_name = link
+        request.waypoints = [_matrix_pose(target)]
+        request.max_step = 0.002
+        # 相対ジャンプ判定は静止点が多い経路を誤検出するため，後段で絶対差を検査する．
+        request.jump_threshold = 0.0
+        request.avoid_collisions = True
+        request.max_velocity_scaling_factor = 0.2
+        request.max_acceleration_scaling_factor = 0.2
+        constraint = OrientationConstraint()
+        constraint.header.frame_id = "pelvis"
+        constraint.link_name = link
+        constraint.orientation = pose.orientation
+        constraint.absolute_x_axis_tolerance = 0.1
+        constraint.absolute_y_axis_tolerance = math.pi
+        constraint.absolute_z_axis_tolerance = 0.1
+        constraint.weight = 1.0
+        request.path_constraints.orientation_constraints = [constraint]
+        future = self.__cartesian_cli.call_async(request)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+        if not future.done():
+            future.cancel()
+            return False
+        response = future.result()
+        if (response is None or response.error_code.val != MoveItErrorCodes.SUCCESS
+                or not math.isfinite(response.fraction) or response.fraction < 1.0 - 1e-9):
+            self.__logger.error("+Y 方向の接近経路を全区間で生成できませんでした．")
+            return False
+        trajectory = response.solution.joint_trajectory
+        samples = _sample_joint_trajectory(trajectory)
+        model_names = list(state.joint_state.name)
+        if (samples is None or not set(trajectory.joint_names).issubset(model_names)
+                or response.solution.multi_dof_joint_trajectory.points):
+            self.__logger.error("接近軌道の関節または時間情報が不正です．")
+            return False
+        initial = dict(zip(model_names, state.joint_state.position))
+        if any(abs(initial[n] - q) > 0.01 for n, q in zip(trajectory.joint_names, samples[0])):
+            return False
+        poses = []
+        for positions in samples:
+            candidate = copy.deepcopy(state)
+            values = dict(zip(trajectory.joint_names, positions))
+            candidate.joint_state.position = [values.get(n, initial[n]) for n in model_names]
+            sampled_pose = self._fk_pose(candidate, link)
+            if sampled_pose is None:
+                return False
+            poses.append(_pose_matrix(sampled_pose))
+        if not _positive_y_path_valid(poses, start, distance):
+            self.__logger.error("接近軌道が手先 +Y 方向の条件を満たさないため実行しません．")
+            return False
+        current = self.collision.get_robot_state()
+        if current is None:
+            return False
+        current_values = dict(zip(current.joint_state.name, current.joint_state.position))
+        if any(n not in current_values or abs(current_values[n] - initial[n]) > 0.01
+               for n in model_names):
+            self.__logger.error("経路検査中に開始関節状態が変化しました．")
+            return False
+        if not self._execute_checked_trajectory(response.solution):
+            return False
+        current = self.collision.get_robot_state()
+        final_pose = self._fk_pose(current, link) if current is not None else None
+        return bool(final_pose is not None and _positive_y_path_valid(
+            [start, _pose_matrix(final_pose)], start, distance))
+
+
+    @staticmethod
+    def _arm_side(group_name: str) -> Optional[str]:
+        """単腕の計画グループだけを受け付ける．双腕の手先目標は曖昧なため拒否する．"""
+        for side in ("left", "right"):
+            if group_name in (f"arm_{side}", f"arm_{side}_with_waist"):
+                return side
+        return None
+
 
     def move_abs(
         self,
-        x: float = 0.0,
-        y: float = 0.0,
-        yaw: float = 0.0,
-        tolerance: float = 0.0,
-        reference_frame: str = "map",
+        x: float,
+        y: float,
+        z: float,
+        roll: Optional[Union[float, str]] = None,
+        pitch: Optional[Union[float, str]] = None,
+        yaw: Optional[float] = None,
+        ref_frame: str = "torso_link",
+        group_name: str = "arm_left_with_waist",
         wait: bool = True,
-        timeout: float = None,
-        use_odom_only: bool = False,
-        retry_on_feedback_timeout: bool = True,
-        feedback_timeout_sec: float = 5.0,
     ) -> bool:
-        """
-        基準フレームでの絶対座標を指定してロボットを自律移動させる．
-        内部で move_to_pose() を呼び出す。
+        """指定した基準座標系における絶対座標へエンドエフェクタを移動させる．
 
         Parameters
         ----------
-        x : float, optional
-            目標位置のX座標。デフォルトは 0.0。
-        y : float, optional
-            目標位置のY座標。デフォルトは 0.0。
-        yaw : float, optional
-            目標姿勢のヨー角（ラジアン）。デフォルトは 0.0。
-        tolerance : float, optional
-            目標からの許容誤差半径(m)。指定値以内に到達すれば終了する。デフォルトは 0.5。
-        reference_frame : str, optional
-            座標系の基準フレーム。デフォルトは 'map'。
-        wait : bool, optional
-            移動完了まで処理をブロックするかどうか。デフォルトは True。
-        timeout : float, optional
-            ナビゲーションのタイムアウト時間(秒)。デフォルトは None (タイムアウトなし)。
-        use_odom_only : bool, optional
-            True の場合、x, y, yaw を odom 座標系の絶対目標として扱い簡易移動する。
-        retry_on_feedback_timeout : bool, optional
-            True の場合、Action goal accept 後に feedback が一定時間返らないとき goal を再送する。
-        feedback_timeout_sec : float, optional
-            feedback 未受信時の再送判定時間。デフォルトは 5.0 秒。
+        x : float
+            目標 X 座標（m）．
+        y : float
+            目標 Y 座標（m）．
+        z : float
+            目標 Z 座標（m）．
+        roll : Optional[Union[float, str]], default None
+            目標ロール角（rad）．文字列の場合は ref_frame として扱われる（後方互換対応）．
+        pitch : Optional[Union[float, str]], default None
+            目標ピッチ角（rad）．文字列の場合は group_name として扱われる（後方互換対応）．
+        yaw : Optional[float], default None
+            目標ヨー角（rad）．
+        ref_frame : str, default 'torso_link'
+            基準座標系名．
+        group_name : str, default 'arm_left_with_waist'
+            制御対象の planning group 名．
+        wait : bool, default True
+            動作完了を待機するかどうか．
 
         Returns
         -------
         bool
-            ナビゲーションが成功した場合は True、失敗・キャンセルされた場合は False。
+            移動が正常に完了した場合は True，それ以外は False．
+        """
+        actual_roll: Optional[float] = None
+        actual_pitch: Optional[float] = None
+        actual_yaw: Optional[float] = yaw
+        actual_ref: str = ref_frame
+        actual_group: str = group_name
+
+        if isinstance(roll, str):
+            actual_ref = roll
+            if isinstance(pitch, str):
+                actual_group = pitch
+                if isinstance(yaw, bool):
+                    wait = yaw
+                    actual_yaw = None
+        elif isinstance(roll, (int, float)):
+            actual_roll = float(roll)
+        if isinstance(pitch, (int, float)):
+            actual_pitch = float(pitch)
+
+        side = self._arm_side(actual_group)
+        if side is None:
+            self.__logger.error(f"単腕の計画グループを指定してください: {actual_group}")
+            return False
+
+        if not self.__ik_cli.service_is_ready():
+            self.__logger.warn("ComputeIK service is not ready.")
+            return False
+
+        tip_link = f"{side}_amazing_hand"
+        specified = (actual_roll, actual_pitch, actual_yaw)
+        pose = Pose()
+        pose.position.x, pose.position.y, pose.position.z = float(x), float(y), float(z)
+        current = self.get_current_endeffector_pose(actual_ref, side)
+        if current is None:
+            return False
+        q = current.rotation
+        current_angles = euler_from_quaternion([q.x, q.y, q.z, q.w])
+        angles = [old if new is None else float(new)
+                  for old, new in zip(current_angles, specified)]
+        qx, qy, qz, qw = quaternion_from_euler(*angles)
+        pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = map(
+            float, (qx, qy, qz, qw))
+        target = self.transform_pose(pose, actual_ref)
+        if target is None:
+            return False
+
+        req = GetPositionIK.Request()
+        req.ik_request.group_name = actual_group
+        req.ik_request.pose_stamped.header.frame_id = "pelvis"
+        req.ik_request.pose_stamped.pose = target
+        req.ik_request.ik_link_name = tip_link
+        req.ik_request.timeout.sec = 2
+        req.ik_request.avoid_collisions = True
+        state = self.collision.get_robot_state()
+        if state is None or not state.joint_state.name:
+            self.__logger.error("IK の初期関節状態を取得できませんでした．")
+            return False
+        # IK サーバーが解釈可能なモデル内の関節だけを，シーンから取得する．
+        req.ik_request.robot_state = state
+        if any(angle is not None for angle in specified):
+            constraint = OrientationConstraint()
+            constraint.header.frame_id = "pelvis"
+            constraint.link_name = tip_link
+            constraint.orientation = target.orientation
+            constraint.absolute_x_axis_tolerance = 0.1 if actual_roll is not None else math.pi
+            constraint.absolute_y_axis_tolerance = 0.1 if actual_pitch is not None else math.pi
+            constraint.absolute_z_axis_tolerance = 0.1 if actual_yaw is not None else math.pi
+            constraint.weight = 1.0
+            req.ik_request.constraints.orientation_constraints = [constraint]
+
+        future = self.__ik_cli.call_async(req)
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
+
+        if future.done():
+            res = future.result()
+            if res is not None and res.error_code.val == 1:
+                # 対象 planning group に属する関節名のみを抽出
+                valid_joints = set()
+                if actual_group in self.__srdf_states:
+                    for state_joints in self.__srdf_states[actual_group].values():
+                        valid_joints.update(state_joints.keys())
+                if not valid_joints:
+                    if "left" in actual_group:
+                        valid_joints.update([
+                            "left_shoulder_pitch_joint", "left_shoulder_roll_joint",
+                            "left_shoulder_yaw_joint", "left_elbow_joint", "left_wrist_roll_joint"
+                        ])
+                    if "right" in actual_group:
+                        valid_joints.update([
+                            "right_shoulder_pitch_joint", "right_shoulder_roll_joint",
+                            "right_shoulder_yaw_joint", "right_elbow_joint", "right_wrist_roll_joint"
+                        ])
+                    if "waist" in actual_group:
+                        valid_joints.add("waist_yaw_joint")
+
+                joint_targets: Dict[str, float] = {}
+                for name, pos in zip(
+                    res.solution.joint_state.name, res.solution.joint_state.position
+                ):
+                    if not valid_joints or name in valid_joints:
+                        joint_targets[name] = pos
+                return self.joint_control(
+                    rel=False, wait=wait, planning_group=actual_group, **joint_targets
+                )
+
+        self.__logger.warn("IK solution failed for specified absolute pose.")
+        return False
+
+
+    def move_rel(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        ref_frame: str = "*_left_amazing_hand",
+        group_name: str = "arm_left_with_waist",
+        wait: bool = True,
+    ) -> bool:
+        """指定グループのエンドエフェクタを現在位置から相対移動させる．
+
+        Parameters
+        ----------
+        x : float
+            相対 X 変位（m）．
+        y : float
+            相対 Y 変位（m）．
+        z : float
+            相対 Z 変位（m）．
+        ref_frame : str, default '*_left_amazing_hand'
+            相対移動の基準フレーム．アスタリスクは group_name に基づき動的解決される．
+        group_name : str, default 'arm_left_with_waist'
+            制御対象の planning group 名．
+        wait : bool, default True
+            動作完了を待機するかどうか．
+
+        Returns
+        -------
+        bool
+            移動が正常に完了した場合は True，それ以外は False．
+        """
+        hand_side = self._arm_side(group_name)
+        if hand_side is None:
+            return False
+        resolved_frame = ref_frame.replace("*_left", hand_side).replace("*", hand_side)
+        current = self.get_current_endeffector_pose(ref=resolved_frame, arm_side=hand_side)
+        if current is None:
+            return False
+        return self.move_abs(
+            x=current.translation.x + x, y=current.translation.y + y,
+            z=current.translation.z + z, ref_frame=resolved_frame,
+            group_name=group_name, wait=wait
+        )
+
+
+    def joint_control(
+        self,
+        rel: bool = False,
+        wait: bool = True,
+        planning_group: str = "arm_both_with_waist",
+        joint_tolerance: float = 0.01,
+        **kwargs: float,
+    ) -> bool:
+        """MoveIt Action を通じて指定された関節角度へロボットを駆動する．
+
+        Parameters
+        ----------
+        rel : bool, default False
+            True の場合は現在の関節角度に対する相対変位として扱う．
+        wait : bool, default True
+            動作完了（目標到達）を待機するかどうか．
+        planning_group : str, default 'arm_both_with_waist'
+            対象の planning group 名．
+        joint_tolerance : float, default 0.01
+            目標関節角の許容差（rad，正の有限値）．狭い配置場所への姿勢復帰で指定する．
+        **kwargs : float
+            関節名と目標角度（ラジアン）のペア．
+
+        Returns
+        -------
+        bool
+            軌道計画および実行が正常に完了した場合は True，それ以外は False．
+        """
+        if not math.isfinite(joint_tolerance) or joint_tolerance <= 0:
+            self.__logger.error("joint_tolerance は正の有限値を指定してください．")
+            return False
+        if not kwargs:
+            self.__logger.warn("No joints specified for joint_control.")
+            return False
+
+        current_poses = self.get_current_joint_pose() if rel else {}
+        targets: Dict[str, float] = {}
+        for j_name, j_val in kwargs.items():
+            final_val = float(j_val)
+            if rel:
+                final_val = current_poses.get(j_name, 0.0) + final_val
+            targets[j_name] = final_val
+
+        goal = self._create_move_group_goal(planning_group)
+        constraints = Constraints()
+        for j_name, target in targets.items():
+            jc = JointConstraint()
+            jc.joint_name = j_name
+            jc.position = float(target)
+            jc.tolerance_above = float(joint_tolerance)
+            jc.tolerance_below = float(joint_tolerance)
+            jc.weight = 1.0
+            constraints.joint_constraints.append(jc)
+
+        goal.request.goal_constraints = [constraints]
+        return self.__send_move_group_goal(goal, wait=wait)
+
+
+    def get_current_joint_pose(self) -> Dict[str, float]:
+        """現在の全関節名と関節角度の辞書を取得する．
+
+        Returns
+        -------
+        Dict[str, float]
+            関節名と角度（ラジアン）のマップ．取得失敗時は空の辞書．
+        """
+        latest_joints: Optional[Dict[str, float]] = None
+
+        def __cb_joint(msg: JointState) -> None:
+            nonlocal latest_joints
+            latest_joints = dict(zip(msg.name, msg.position))
+
+        with TemporarySubscriber(
+            node=self.__node,
+            msg=JointState,
+            topic="/joint_states",
+            qos_profile=10,
+            cb=__cb_joint,
+        ):
+            start_time = time.monotonic()
+            while rclpy.ok() and latest_joints is None:
+                if time.monotonic() - start_time > self.__timeout_sec:
+                    self.__logger.warn("Timeout waiting for /joint_states topic.")
+                    break
+                rclpy.spin_once(self.__node, timeout_sec=0.05)
+
+        return latest_joints if latest_joints is not None else {}
+
+
+    def arm_action(self, mode: int) -> bool:
+        """Unitree プリセット腕動作を実行する．
+
+        Parameters
+        ----------
+        mode : int
+            動作モード番号（ArmAction.srv 定数）．
+
+        Returns
+        -------
+        bool
+            動作要求が正常に受理され完了した場合は True，それ以外は False．
+        """
+        if self.__use_sim_time and not self.__arm_action_cli.service_is_ready():
+            self.__logger.warn(
+                f"ArmAction mode={mode} is not supported in simulation/mock environment (service unavailable)."
+            )
+            return False
+
+        req = ArmAction.Request()
+        req.mode = int(mode)
+        return self.__send_arm_action_req(req)
+
+
+    def upper_body_control(self, enable: bool) -> bool:
+        """上半身の関節制御権限の有効化・無効化を切り替える．
+
+        Parameters
+        ----------
+        enable : bool
+            制御を有効化する場合は True，無効化（脱力・保持解除）する場合は False．
+
+        Returns
+        -------
+        bool
+            切り替えが成功した場合は True，それ以外は False．
+        """
+        has_enable_service = (
+            self.__upper_enable_cli.service_is_ready()
+            or self.__fallback_upper_enable_cli.service_is_ready()
+        )
+        if self.__use_sim_time and not has_enable_service:
+            self.__logger.info(
+                f"use_sim_time is active. Skipping hardware upper body control request (enable={enable})."
+            )
+            return True
+
+        req = SetBool.Request()
+        req.data = bool(enable)
+        ok = self.__send_upper_enable_req(req)
+        # FAULT_LATCHED 等で有効化に失敗した場合は，一度 disable を送ってフォルトをリセットし再試行
+        if not ok and enable:
+            self.__logger.info("Attempting fault acknowledgment/reset before re-enabling upper body...")
+            reset_req = SetBool.Request()
+            reset_req.data = False
+            self.__send_upper_enable_req(reset_req)
+            time.sleep(0.5)
+            ok = self.__send_upper_enable_req(req)
+        return ok
+
+
+class NavControl:
+    """Nav2 を用いて Unitree G1 の自律移動および現在姿勢取得を制御する API クラス．
+
+    Parameters
+    ----------
+    node : Node
+        ROS 2 ノードインスタンス．
+    timeout_sec : float, default 60.0
+        ナビゲーションのデフォルトタイムアウト秒数．
+    tf_buffer : Buffer, optional
+        TF2 バッファインスタンス．未指定時は新規作成．
+
+    Methods
+    -------
+    move_abs(x: float, y: float, yaw: float, ref_frame: str = 'map', wait: bool = True) -> bool
+        指定座標系における絶対座標へ自律移動する．
+    move_rel(x: float, y: float, yaw: float, ref_frame: str = 'base_link', wait: bool = True) -> bool
+        ロボットの現在位置からの相対座標目標へ自律移動する．
+    move_pose(pose: PoseStamped, wait: bool = True) -> bool
+        PoseStamped 目標へ自律移動する．
+    get_current_pose(ref_frame: str = 'map', use_xyy: bool = True) -> Union[List[float], PoseStamped]
+        ロボットの現在位置姿勢を取得する．
+    cancel_navigation_action() -> bool
+        実行中のナビゲーション動作を明示的にキャンセルする．
+    """
+
+    def __init__(
+        self,
+        node: Node,
+        timeout_sec: float = 60.0,
+        tf_buffer: Optional[Buffer] = None,
+    ) -> None:
+        """API クラスのインスタンスを初期化する．
+
+        Parameters
+        ----------
+        node : Node
+            ROS 2 ノードインスタンス．
+        timeout_sec : float, default 60.0
+            ナビゲーション完了待機のデフォルトタイムアウト秒数．
+        tf_buffer : Buffer, optional
+            TF2 バッファインスタンス．
+
+        Raises
+        ------
+        RuntimeError
+            指定時間内に Nav2 アクションサーバーが検出されなかった場合．
+        """
+        self.__node = node
+        self.__logger = node.get_logger()
+        self.__timeout_sec = timeout_sec
+
+        self.__cb_group = MutuallyExclusiveCallbackGroup()
+
+        self.__nav_cli = ActionClient(
+            self.__node,
+            NavigateToPose,
+            "/navigate_to_pose",
+            callback_group=self.__cb_group,
+        )
+
+        self.__cmd_vel_pub = self.__node.create_publisher(
+            Twist,
+            "/cmd_vel",
+            10,
+            callback_group=self.__cb_group,
+        )
+
+        self.__tf_buffer = tf_buffer or Buffer()
+        self.__tf_listener = TransformListener(self.__tf_buffer, self.__node)
+
+        self.__current_goal_handle: Optional[ClientGoalHandle] = None
+
+        while not self.__nav_cli.wait_for_server(timeout_sec=5.0):
+            self.__logger.error("Required action server /navigate_to_pose is not available.")
+            raise RuntimeError("Failed to connect to /navigate_to_pose action server.")
+
+
+    def __cb_nav_feedback(self, feedback_msg: Any) -> None:
+        """ナビゲーション進捗コールバック．"""
+        pass
+
+
+    def cancel_navigation_action(self) -> bool:
+        """実行中の自律移動アクションを明示的にキャンセルする．
+
+        Returns
+        -------
+        bool
+            キャンセル要求が正常に送信された場合は True，それ以外は False．
+        """
+        if self.__current_goal_handle is None:
+            return True
+
+        self.__logger.warn("Canceling active navigation goal...")
+        future = self.__current_goal_handle.cancel_goal_async()
+        rclpy.spin_until_future_complete(self.__node, future, timeout_sec=5.0)
+
+        # 停止コマンドを publish して惰性走行を抑制
+        stop_cmd = Twist()
+        self.__cmd_vel_pub.publish(stop_cmd)
+        self.__current_goal_handle = None
+        return True
+
+
+    def move_pose(self, pose: PoseStamped, wait: bool = True) -> bool:
+        """PoseStamped 目標へ自律移動を実行する．
+
+        Parameters
+        ----------
+        pose : PoseStamped
+            目標位置および目標姿勢．
+        wait : bool, default True
+            目標到達まで処理をブロックするかどうか．
+
+        Returns
+        -------
+        bool
+            ナビゲーションが成功した場合は True，失敗またはキャンセル時は False．
+        """
+        goal = NavigateToPose.Goal()
+        goal.pose = pose
+
+        send_future = self.__nav_cli.send_goal_async(
+            goal, feedback_callback=self.__cb_nav_feedback
+        )
+        rclpy.spin_until_future_complete(self.__node, send_future, timeout_sec=self.__timeout_sec)
+
+        if not send_future.done():
+            self.__logger.error("Timeout sending navigation goal.")
+            return False
+
+        goal_handle: ClientGoalHandle = send_future.result()
+        if not goal_handle.accepted:
+            self.__logger.warn("Navigation goal was rejected by Nav2 server.")
+            return False
+
+        self.__current_goal_handle = goal_handle
+
+        if not wait:
+            return True
+
+        result_future = goal_handle.get_result_async()
+        try:
+            rclpy.spin_until_future_complete(
+                self.__node, result_future, timeout_sec=self.__timeout_sec
+            )
+        except KeyboardInterrupt:
+            self.__logger.warn("Navigation interrupted by user. Canceling goal...")
+            self.cancel_navigation_action()
+            raise
+
+        if not result_future.done():
+            self.__logger.error("Navigation timed out. Canceling goal...")
+            self.cancel_navigation_action()
+            return False
+
+        res = result_future.result()
+        self.__current_goal_handle = None
+        return res.status == GoalStatus.STATUS_SUCCEEDED
+
+
+    def move_abs(
+        self,
+        x: float,
+        y: float,
+        yaw: float,
+        ref_frame: str = "map",
+        wait: bool = True,
+    ) -> bool:
+        """指定した基準座標系における絶対座標へ自律移動する．
+
+        Parameters
+        ----------
+        x : float
+            目標 X 座標（m）．
+        y : float
+            目標 Y 座標（m）．
+        yaw : float
+            目標ヨー角（rad）．
+        ref_frame : str, default 'map'
+            基準座標系名．
+        wait : bool, default True
+            目標到達まで待機するかどうか．
+
+        Returns
+        -------
+        bool
+            ナビゲーションが成功した場合は True，それ以外は False．
         """
         pose = PoseStamped()
-        pose.header.frame_id = "odom" if use_odom_only else reference_frame
-        pose.header.stamp = self.node.get_clock().now().to_msg()
+        pose.header.frame_id = str(ref_frame)
+        pose.header.stamp = self.__node.get_clock().now().to_msg()
         pose.pose.position.x = float(x)
         pose.pose.position.y = float(y)
         pose.pose.position.z = 0.0
 
-        q = quaternion_from_euler(0, 0, yaw)
+        q = quaternion_from_euler(0.0, 0.0, float(yaw))
         pose.pose.orientation.x = q[0]
         pose.pose.orientation.y = q[1]
         pose.pose.orientation.z = q[2]
         pose.pose.orientation.w = q[3]
 
-        return self.move_to_pose(
-            pose,
-            tolerance=tolerance,
-            reference_frame=reference_frame,
-            wait=wait,
-            timeout=timeout,
-            use_odom_only=use_odom_only,
-            retry_on_feedback_timeout=retry_on_feedback_timeout,
-            feedback_timeout_sec=feedback_timeout_sec,
-        )
+        return self.move_pose(pose, wait=wait)
+
 
     def move_rel(
         self,
-        x: float = 0.0,
-        y: float = 0.0,
-        yaw: float = 0.0,
-        tolerance: float = 0.0,
+        x: float,
+        y: float,
+        yaw: float,
+        ref_frame: str = "base_link",
         wait: bool = True,
-        timeout: float = None,
-        use_odom_only: bool = False,
-        retry_on_feedback_timeout: bool = True,
-        feedback_timeout_sec: float = 5.0,
     ) -> bool:
-        """
-        ロボットの現在の位置・姿勢からの相対座標で自律移動させる．
-        内部で move_abs() を呼び出す。
+        """ロボットの現在位置からの相対座標目標へ自律移動する．
 
         Parameters
         ----------
-        x : float, optional
-            ロボット前方への相対移動量(m)。デフォルトは 0.0。
-        y : float, optional
-            ロボット左方向への相対移動量(m)。デフォルトは 0.0。
-        yaw : float, optional
-            ロボットの現在角度からの相対的な反時計回りの回転量（ラジアン）。デフォルトは 0.0。
-        tolerance : float, optional
-            目標からの許容誤差半径(m)。指定値以内に到達すれば終了する。デフォルトは 0.5。
-        wait : bool, optional
-            移動完了まで処理をブロックするかどうか。デフォルトは True。
-        timeout : float, optional
-            ナビゲーションのタイムアウト時間(秒)。デフォルトは None (タイムアウトなし)。
-        use_odom_only : bool, optional
-            True の場合、現在 odom 姿勢からのロボット座標系相対量として簡易移動する。
-        retry_on_feedback_timeout : bool, optional
-            True の場合、Action goal accept 後に feedback が一定時間返らないとき goal を再送する。
-        feedback_timeout_sec : float, optional
-            feedback 未受信時の再送判定時間。デフォルトは 5.0 秒。
+        x : float
+            前後方向の移動変位（m，前方が正）．
+        y : float
+            左右方向の移動変位（m，左方が正）．
+        yaw : float
+            回転角度変位（rad，反時計回りが正）．
+        ref_frame : str, default 'base_link'
+            相対移動の基準フレーム．
+        wait : bool, default True
+            目標到達まで待機するかどうか．
 
         Returns
         -------
         bool
-            ナビゲーションが成功した場合は True、失敗・キャンセルされた場合は False。
+            ナビゲーションが成功した場合は True，それ以外は False．
         """
-        if use_odom_only:
-            if retry_on_feedback_timeout:
-                self.node.get_logger().warn(
-                    "retry_on_feedback_timeout is ignored when use_odom_only=True."
-                )
-            if not wait:
-                self.node.get_logger().warn(
-                    "use_odom_only=True does not support wait=False."
-                )
-                return False
+        pose = PoseStamped()
+        pose.header.frame_id = str(ref_frame)
+        pose.header.stamp = self.__node.get_clock().now().to_msg()
+        pose.pose.position.x = float(x)
+        pose.pose.position.y = float(y)
+        pose.pose.position.z = 0.0
+
+        q = quaternion_from_euler(0.0, 0.0, float(yaw))
+        pose.pose.orientation.x = q[0]
+        pose.pose.orientation.y = q[1]
+        pose.pose.orientation.z = q[2]
+        pose.pose.orientation.w = q[3]
+
+        return self.move_pose(pose, wait=wait)
 
-            return self.__move_rel_by_odom_displacement(
-                x=x,
-                y=y,
-                yaw=yaw,
-                tolerance=tolerance,
-                timeout=timeout,
-            )
-
-        current_pose = self.get_current_pose(simple=True)
-        if current_pose is None:
-            self.node.get_logger().error(
-                "Could not get current pose for relative movement"
-            )
-            return False
-
-        current_x, current_y, current_yaw = current_pose
-
-        new_x = current_x + x * math.cos(current_yaw) - y * math.sin(current_yaw)
-        new_y = current_y + x * math.sin(current_yaw) + y * math.cos(current_yaw)
-        new_yaw = current_yaw + yaw
-
-        return self.move_abs(
-            x=new_x,
-            y=new_y,
-            yaw=new_yaw,
-            tolerance=tolerance,
-            reference_frame="map",
-            wait=wait,
-            timeout=timeout,
-            retry_on_feedback_timeout=retry_on_feedback_timeout,
-            feedback_timeout_sec=feedback_timeout_sec,
-        )
-
-    def set_initialpose(
-        self,
-        pose,
-        reference_frame: str = "map",
-        xyy: bool = True,
-        tolerance: float = 0.3,
-        max_attempts: int = 1,
-        settle_time: float = 1.5,
-    ) -> bool:
-        """
-        ロボットの初期位置（Initial Pose）を設定する．
-        ローカライゼーションノードに対して /initialpose トピックをパブリッシュする。
-
-        Parameters
-        ----------
-        pose : list of float or PoseWithCovarianceStamped
-            xyy=True の場合は [x, y, yaw] の形式。
-            xyy=False の場合は PoseWithCovarianceStamped 形式。
-        reference_frame : str, optional
-            基準となる座標フレーム。デフォルトは 'map'。
-        xyy : bool, optional
-            True の場合、pose を [x, y, yaw] として扱う。False の場合、pose を PoseWithCovarianceStamped として扱う。
-        tolerance : float, optional
-            初期位置反映後の現在位置と指定位置の許容距離[m]。デフォルトは 0.3。
-        max_attempts : int, optional
-            初期位置 publish と確認を繰り返す最大回数。デフォルトは 1。
-        settle_time : float, optional
-            publish 後に localization の反映を待つ時間[秒]。デフォルトは 1.5。
-
-        Returns
-        -------
-        bool
-            初期位置が tolerance 内に反映された場合は True、失敗した場合は False。
-        """
-        if xyy:
-            if not (isinstance(pose, list) and len(pose) == 3):
-                self.node.get_logger().error(
-                    "Invalid pose format for set_initialpose. Use [x, y, yaw] when xyy=True."
-                )
-                return False
-
-            msg = PoseWithCovarianceStamped()
-            msg.header.frame_id = reference_frame
-            msg.header.stamp = self.node.get_clock().now().to_msg()
-            msg.pose.pose.position.x = float(pose[0])
-            msg.pose.pose.position.y = float(pose[1])
-            # TODO: 変数として受け取るような仕様のほうがいいかも？
-            # 1.3 is unitree g1 lidar height from ground level
-            # msg.pose.pose.position.z = 0.75
-            msg.pose.pose.position.z = 0.0
-
-            q = quaternion_from_euler(0, 0, pose[2])
-            msg.pose.pose.orientation.x = q[0]
-            msg.pose.pose.orientation.y = q[1]
-            msg.pose.pose.orientation.z = q[2]
-            msg.pose.pose.orientation.w = q[3]
-
-            # Covariance - typical reasonable defaults for a manual reset
-            msg.pose.covariance[0] = 0.25
-            msg.pose.covariance[7] = 0.25
-            msg.pose.covariance[35] = 0.06853891945200942
-
-            target_x = float(pose[0])
-            target_y = float(pose[1])
-            target_yaw = float(pose[2])
-        else:
-            if not isinstance(pose, PoseWithCovarianceStamped):
-                self.node.get_logger().error(
-                    "Invalid pose format for set_initialpose. Use PoseWithCovarianceStamped when xyy=False."
-                )
-                return False
-
-            msg = copy.deepcopy(pose)
-            target_x = float(msg.pose.pose.position.x)
-            target_y = float(msg.pose.pose.position.y)
-            q = msg.pose.pose.orientation
-            (_, _, target_yaw) = euler_from_quaternion([q.x, q.y, q.z, q.w])
-
-        if msg.header.frame_id != "map":
-            self.node.get_logger().warn(
-                "set_initialpose verification compares against get_current_pose() in map frame, "
-                f"but initial pose frame is '{msg.header.frame_id}'."
-            )
-
-        attempts = max(1, int(max_attempts))
-        tolerance = max(0.0, float(tolerance))
-        settle_time = max(0.0, float(settle_time))
-
-        for attempt in range(1, attempts + 1):
-            msg.header.stamp = self.node.get_clock().now().to_msg()
-            self.__initial_pose_pub.publish(msg)
-            self.node.get_logger().info(
-                "Published initial pose to /initialpose "
-                f"(attempt {attempt}/{attempts}, frame={msg.header.frame_id})"
-            )
-
-            time.sleep(settle_time)
-
-            current_pose = self.get_current_pose(simple=True)
-            if current_pose is None:
-                self.node.get_logger().warn(
-                    f"Initial pose verification failed on attempt {attempt}: current pose unavailable."
-                )
-                continue
-
-            current_x, current_y, current_yaw = current_pose
-            distance_error = math.hypot(current_x - target_x, current_y - target_y)
-            yaw_error = math.atan2(
-                math.sin(current_yaw - target_yaw),
-                math.cos(current_yaw - target_yaw),
-            )
-
-            if distance_error <= tolerance:
-                self.node.get_logger().info(
-                    "Initial pose verified: "
-                    f"position_error={distance_error:.3f} m <= {tolerance:.3f} m, cx {current_x:.3f} cy {current_y:.3f}"
-                    f"yaw_error={yaw_error:.3f} rad"
-                )
-                return True
-
-            self.node.get_logger().warn(
-                "Initial pose is outside tolerance after publish: "
-                f"position_error={distance_error:.3f} m > {tolerance:.3f} m, "
-                f"yaw_error={yaw_error:.3f} rad "
-                f"cx {current_x:.3f} cy {current_y:.3f}"
-            )
-
-        self.node.get_logger().error(
-            "Failed to verify initial pose after "
-            f"{attempts} attempts: target=({target_x:.3f}, {target_y:.3f}, {target_yaw:.3f}), "
-            f"tolerance={tolerance:.3f} m"
-        )
-        return False
-
-
-class ArmControlStatus(str, Enum):
-    """マニピュレーション要求の結果。"""
-
-    SUCCEEDED = "succeeded"
-    DEGRADED = "degraded"
-    SUBMITTED = "submitted"
-    INVALID_ARGUMENT = "invalid_argument"
-    NOT_READY = "not_ready"
-    STATE_UNAVAILABLE = "state_unavailable"
-    TF_UNAVAILABLE = "tf_unavailable"
-    GOAL_REJECTED = "goal_rejected"
-    MOVEIT_FAILED = "moveit_failed"
-    CANCELLED = "cancelled"
-    TIMED_OUT = "timed_out"
-    ROS_SHUTDOWN = "ros_shutdown"
-    INTERNAL_ERROR = "internal_error"
-
-
-@dataclass(frozen=True)
-class ArmControlResult:
-    """受付と完了、通常成功と位置のみの縮退成功を区別する。"""
-
-    status: ArmControlStatus
-    message: str = ""
-    moveit_error_code: Optional[int] = None
-    moveit_error_name: Optional[str] = None
-    action_status: Optional[int] = None
-    plan_only: bool = False
-    used_ik: bool = False
-    used_position_only_fallback: bool = False
-
-    @property
-    def succeeded(self) -> bool:
-        return self.status in (
-            ArmControlStatus.SUCCEEDED, ArmControlStatus.DEGRADED)
-
-    @property
-    def strict_success(self) -> bool:
-        return self.status == ArmControlStatus.SUCCEEDED
-
-
-class IkStatus(str, Enum):
-    """IK の失敗原因。"""
-
-    SUCCEEDED = "succeeded"
-    NO_SOLUTION = "no_solution"
-    SERVICE_UNAVAILABLE = "service_unavailable"
-    TIMED_OUT = "timed_out"
-    INVALID_REQUEST = "invalid_request"
-    INVALID_RESPONSE = "invalid_response"
-    STATE_UNAVAILABLE = "state_unavailable"
-    CANCELLED = "cancelled"
-    ROS_SHUTDOWN = "ros_shutdown"
-    INTERNAL_ERROR = "internal_error"
-
-
-@dataclass(frozen=True)
-class IkResult:
-    status: IkStatus
-    joints: Optional[dict[str, float]] = None
-    message: str = ""
-    moveit_error_code: Optional[int] = None
-
-
-class _FutureWaitStatus(str, Enum):
-    COMPLETED = "completed"
-    CANCELLED = "cancelled"
-    TIMED_OUT = "timed_out"
-    ROS_SHUTDOWN = "ros_shutdown"
-
-
-def _finite(value: Any) -> bool:
-    """bool、非数値、非有限値を除外する。"""
-    if isinstance(value, (bool, str, bytes)):
-        return False
-    try:
-        return math.isfinite(float(value))
-    except (TypeError, ValueError, OverflowError):
-        return False
-
-
-def _positive(name: str, value: Any) -> float:
-    if not _finite(value) or float(value) <= 0.0:
-        raise ValueError(f"{name} は正の有限数で指定してください")
-    return float(value)
-
-
-def _name(value: Any) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("名前・座標系は空でない文字列が必要です")
-    return value
-
-
-def _unit_quaternion(value: Quaternion) -> Quaternion:
-    if not isinstance(value, Quaternion):
-        raise ValueError("Quaternion が必要です")
-    values = (value.x, value.y, value.z, value.w)
-    if not all(_finite(v) for v in values):
-        raise ValueError("Quaternion に非有限値があります")
-    norm = math.hypot(*values)
-    if not math.isfinite(norm) or norm <= 1e-12:
-        raise ValueError("Quaternion の長さが不正です")
-    return Quaternion(**dict(zip(
-        ("x", "y", "z", "w"), (v / norm for v in values))))
-
-
-def _quaternion_product(a: Quaternion, b: Quaternion) -> Quaternion:
-    a, b = _unit_quaternion(a), _unit_quaternion(b)
-    return _unit_quaternion(Quaternion(
-        x=a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
-        y=a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
-        z=a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
-        w=a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z))
-
-
-def _quaternion_euler(roll: float, pitch: float, yaw: float) -> Quaternion:
-    if not all(_finite(v) for v in (roll, pitch, yaw)):
-        raise ValueError("姿勢角は有限数で指定してください")
-    values = quaternion_from_euler(float(roll), float(pitch), float(yaw))
-    return _unit_quaternion(Quaternion(
-        x=float(values[0]), y=float(values[1]),
-        z=float(values[2]), w=float(values[3])))
-
-
-def _pose_valid(pose: Pose) -> Pose:
-    if not isinstance(pose, Pose):
-        raise ValueError("Pose が必要です")
-    if not all(_finite(v) for v in (
-            pose.position.x, pose.position.y, pose.position.z)):
-        raise ValueError("位置は有限数で指定してください")
-    result = copy.deepcopy(pose)
-    result.orientation = _unit_quaternion(pose.orientation)
-    return result
-
-
-def _compose_pose(parent: Pose, child: Pose) -> Pose:
-    """親座標の回転も含めて Pose を合成する。"""
-    parent, child = _pose_valid(parent), _pose_valid(child)
-    q = parent.orientation
-    matrix = tf_transformations.quaternion_matrix([q.x, q.y, q.z, q.w])
-    vector = matrix[:3, :3].dot([
-        child.position.x, child.position.y, child.position.z])
-    result = Pose()
-    result.position.x = float(parent.position.x + vector[0])
-    result.position.y = float(parent.position.y + vector[1])
-    result.position.z = float(parent.position.z + vector[2])
-    result.orientation = _quaternion_product(
-        parent.orientation, child.orientation)
-    return _pose_valid(result)
-
-
-class _ArmRosSupport:
-    """外部 executor を奪わず、実時間で期限を管理する。"""
-
-    _SPIN_INTERVAL = 0.02
-
-    def _context_ok(self) -> bool:
-        try:
-            return bool(self.node.context.ok())
-        except (AttributeError, ExternalShutdownException, RCLError,
-                InvalidHandle):
-            return False
-
-    def _spin_once(self, timeout: float) -> bool:
-        if not self._context_ok():
-            return False
-        timeout = max(0.0, min(timeout, self._SPIN_INTERVAL))
-        executor = self.node.executor
-        if executor is not None:
-            time.sleep(timeout)
-            return self._context_ok()
-        if not self._spin_lock.acquire(blocking=False):
-            time.sleep(timeout)
-            return self._context_ok()
-        try:
-            if executor is None:
-                rclpy.spin_once(self.node, timeout_sec=timeout)
-            else:
-                executor.spin_once(timeout_sec=timeout)
-            return self._context_ok()
-        except (ExternalShutdownException, RCLError, InvalidHandle):
-            return False
-        finally:
-            self._spin_lock.release()
-
-    def _safe_service_ready(
-        self, timeout: float = 0.0, client: Any = None,
-    ) -> bool:
-        client = self._ik_client if client is None else client
-        if not self._context_ok():
-            return False
-        try:
-            return bool(client.wait_for_service(timeout_sec=timeout))
-        except (ExternalShutdownException, RCLError, InvalidHandle):
-            return False
-
-    def _wait_for_future(
-        self, future: Any, timeout: float, *,
-        cancel_event: Optional[threading.Event] = None,
-        observe_cancel: bool = True,
-    ) -> _FutureWaitStatus:
-        deadline = time.monotonic() + _positive("timeout", timeout)
-        while self._context_ok():
-            if observe_cancel and (
-                    self._cancel_requested.is_set()
-                    or (cancel_event is not None and cancel_event.is_set())):
-                return _FutureWaitStatus.CANCELLED
-            if future.done():
-                return _FutureWaitStatus.COMPLETED
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return _FutureWaitStatus.TIMED_OUT
-            if not self._spin_once(remaining):
-                return _FutureWaitStatus.ROS_SHUTDOWN
-        return _FutureWaitStatus.ROS_SHUTDOWN
-
-    def _call_service(
-        self, client: Any, request: Any, timeout: float, *,
-        cancel_event: Optional[threading.Event] = None,
-    ) -> tuple[_FutureWaitStatus, Any]:
-        """発見待ちと応答待ちで一つの期限を共有する。"""
-        if not _finite(timeout):
-            raise ValueError("timeout は有限数で指定してください")
-        if timeout <= 0.0:
-            return _FutureWaitStatus.TIMED_OUT, None
-        deadline = time.monotonic() + float(timeout)
-        while not self._safe_service_ready(0.0, client):
-            if not self._context_ok():
-                return _FutureWaitStatus.ROS_SHUTDOWN, None
-            if self._cancel_requested.is_set() or (
-                    cancel_event is not None and cancel_event.is_set()):
-                return _FutureWaitStatus.CANCELLED, None
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return _FutureWaitStatus.TIMED_OUT, None
-            self._spin_once(remaining)
-        if self._cancel_requested.is_set() or (
-                cancel_event is not None and cancel_event.is_set()):
-            return _FutureWaitStatus.CANCELLED, None
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return _FutureWaitStatus.TIMED_OUT, None
-        future = client.call_async(request)
-        status = self._wait_for_future(
-            future, remaining, cancel_event=cancel_event)
-        if status != _FutureWaitStatus.COMPLETED:
-            # サービス要求の実行取消ではなく、ローカルの応答追跡を除去する。
-            client.remove_pending_request(future)
-            return status, None
-        return status, future.result()
-
-
-class ArmCollision(_ArmRosSupport):
-    """PlanningScene の操作を応答確認付きで実施する。"""
-
-    def __init__(
-        self, node: Node, *, timeout: float = 3.0,
-        tf_buffer: Optional[Buffer] = None,
-        spin_lock: Optional[Any] = None,
-    ) -> None:
-        self.node = node
-        self.timeout = _positive("timeout", timeout)
-        self._spin_lock = spin_lock or threading.Lock()
-        self._cancel_requested = threading.Event()
-        self._scene_lock = threading.Lock()
-        self._get_client = node.create_client(
-            GetPlanningScene, "/get_planning_scene")
-        self._apply_client = node.create_client(
-            ApplyPlanningScene, "/apply_planning_scene")
-        self.tf_buffer = tf_buffer if tf_buffer is not None else Buffer()
-        self._tf_listener = (
-            TransformListener(self.tf_buffer, node)
-            if tf_buffer is None else None)
-
-    def _deadline(self, timeout: Optional[float]) -> float:
-        return time.monotonic() + _positive(
-            "timeout", self.timeout if timeout is None else timeout)
-
-    def _scene(
-        self, deadline: float, components: int,
-    ) -> Optional[PlanningScene]:
-        request = GetPlanningScene.Request()
-        request.components.components = components
-        _, response = self._call_service(
-            self._get_client, request, deadline - time.monotonic())
-        return None if response is None else response.scene
-
-    def _apply(self, scene: PlanningScene, deadline: float) -> bool:
-        scene.is_diff = True
-        scene.robot_state.is_diff = True
-        request = ApplyPlanningScene.Request()
-        request.scene = scene
-        _, response = self._call_service(
-            self._apply_client, request, deadline - time.monotonic())
-        return response is not None and bool(response.success)
-
-    def _error(self, error: Exception) -> None:
-        if self._context_ok():
-            self.node.get_logger().error(f"PlanningScene 操作失敗: {error}")
-
-    def _add(
-        self, name: str, ref: str, values: tuple,
-        shape: int, dimensions: list, timeout: Optional[float],
-    ) -> bool:
-        try:
-            deadline = self._deadline(timeout)
-            _name(name)
-            _name(ref)
-            if not all(_finite(v) for v in values):
-                raise ValueError("位置・姿勢は有限数で指定してください")
-            obj = CollisionObject()
-            obj.id, obj.header.frame_id = name, ref
-            obj.operation = CollisionObject.ADD
-            obj.pose.orientation.w = 1.0
-            primitive = SolidPrimitive()
-            primitive.type = shape
-            primitive.dimensions = [
-                _positive("dimension", v) for v in dimensions]
-            pose = Pose()
-            pose.position.x, pose.position.y, pose.position.z = map(
-                float, values[:3])
-            pose.orientation = _quaternion_euler(*values[3:])
-            obj.primitives = [primitive]
-            obj.primitive_poses = [pose]
-            scene = PlanningScene()
-            scene.world.collision_objects = [obj]
-            return self._apply(scene, deadline)
-        except Exception as error:
-            self._error(error)
-            return False
-
-    def add_box(
-        self, name: str, ref: str = "base_link", x: float = 0.0,
-        y: float = 0.0, z: float = 0.0, roll: float = 0.0,
-        pitch: float = 0.0, yaw: float = 0.0,
-        size: tuple = (0.1, 0.1, 0.1), *,
-        timeout: Optional[float] = None,
-    ) -> bool:
-        try:
-            if len(size) != 3:
-                raise ValueError("箱の寸法は 3 要素が必要です")
-            return self._add(
-                name, ref, (x, y, z, roll, pitch, yaw),
-                SolidPrimitive.BOX, list(size), timeout)
-        except (TypeError, ValueError) as error:
-            self._error(error)
-            return False
-
-    def add_sphere(
-        self, name: str, ref: str = "base_link", x: float = 0.0,
-        y: float = 0.0, z: float = 0.0, radius: float = 0.05, *,
-        timeout: Optional[float] = None,
-    ) -> bool:
-        return self._add(
-            name, ref, (x, y, z, 0.0, 0.0, 0.0),
-            SolidPrimitive.SPHERE, [radius], timeout)
-
-    def add_cylinder(
-        self, name: str, ref: str = "base_link", x: float = 0.0,
-        y: float = 0.0, z: float = 0.0, roll: float = 0.0,
-        pitch: float = 0.0, yaw: float = 0.0,
-        height: float = 0.1, radius: float = 0.05, *,
-        timeout: Optional[float] = None,
-    ) -> bool:
-        return self._add(
-            name, ref, (x, y, z, roll, pitch, yaw),
-            SolidPrimitive.CYLINDER, [height, radius], timeout)
-
-    @staticmethod
-    def _removal(name: str) -> PlanningScene:
-        scene = PlanningScene()
-        obj = CollisionObject()
-        obj.id, obj.operation = _name(name), CollisionObject.REMOVE
-        scene.world.collision_objects = [obj]
-        attached = AttachedCollisionObject()
-        attached.object = copy.deepcopy(obj)
-        scene.robot_state.attached_collision_objects = [attached]
-        return scene
-
-    def remove_collision(
-        self, name: str, *, timeout: Optional[float] = None,
-    ) -> bool:
-        try:
-            return self._apply(self._removal(name), self._deadline(timeout))
-        except Exception as error:
-            self._error(error)
-            return False
-
-    def get_object(
-        self, name: str, *, timeout: Optional[float] = None,
-    ) -> Optional[CollisionObject]:
-        try:
-            _name(name)
-            scene = self._scene(
-                self._deadline(timeout),
-                PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
-                | PlanningSceneComponents.ROBOT_STATE_ATTACHED_OBJECTS)
-            if scene is None:
-                return None
-            objects = list(scene.world.collision_objects) + [
-                a.object for a in scene.robot_state.attached_collision_objects]
-            return next((copy.deepcopy(o) for o in objects if o.id == name),
-                        None)
-        except Exception as error:
-            self._error(error)
-            return None
-
-    @staticmethod
-    def _object_pose(obj: CollisionObject) -> Pose:
-        poses = obj.primitive_poses or obj.mesh_poses or obj.plane_poses
-        return (_compose_pose(obj.pose, poses[0]) if poses
-                else _pose_valid(obj.pose))
-
-    def get_object_pose(
-        self, name: str, *, timeout: Optional[float] = None,
-    ) -> Optional[tuple[float, ...]]:
-        obj = self.get_object(name, timeout=timeout)
-        if obj is None:
-            return None
-        try:
-            pose = self._object_pose(obj)
-            q = pose.orientation
-            return (pose.position.x, pose.position.y, pose.position.z,
-                    *euler_from_quaternion([q.x, q.y, q.z, q.w]))
-        except ValueError as error:
-            self._error(error)
-            return None
-
-    def _in_frame(
-        self, pose: Pose, source: str, target: str, deadline: float,
-    ) -> Pose:
-        if source == target:
-            return pose
-        while self._context_ok() and time.monotonic() < deadline:
-            try:
-                tf = self.tf_buffer.lookup_transform(
-                    target, source, rclpy.time.Time())
-                parent = Pose()
-                p = tf.transform.translation
-                parent.position.x, parent.position.y = p.x, p.y
-                parent.position.z = p.z
-                parent.orientation = tf.transform.rotation
-                return _compose_pose(parent, pose)
-            except TransformException:
-                self._spin_once(deadline - time.monotonic())
-        raise ValueError(f"TF を取得できません: {source} -> {target}")
-
-    def remove_near_objects(
-        self, x: float, y: float, z: float, radius: float = 0.05, *,
-        reference_frame: str = "base_link",
-        timeout: Optional[float] = None,
-    ) -> bool:
-        try:
-            if not all(_finite(v) for v in (x, y, z)):
-                raise ValueError("位置は有限数で指定してください")
-            radius = _positive("radius", radius)
-            _name(reference_frame)
-            deadline = self._deadline(timeout)
-            scene = self._scene(
-                deadline, PlanningSceneComponents.WORLD_OBJECT_GEOMETRY)
-            if scene is None:
-                return False
-            diff = PlanningScene()
-            for obj in scene.world.collision_objects:
-                pose = self._in_frame(
-                    self._object_pose(obj), _name(obj.header.frame_id),
-                    reference_frame, deadline)
-                p = pose.position
-                if math.dist((float(x), float(y), float(z)),
-                             (p.x, p.y, p.z)) <= radius:
-                    diff.world.collision_objects.extend(
-                        self._removal(obj.id).world.collision_objects)
-            return not diff.world.collision_objects or self._apply(
-                diff, deadline)
-        except Exception as error:
-            self._error(error)
-            return False
-
-    def clear_all(self, *, timeout: Optional[float] = None) -> bool:
-        try:
-            deadline = self._deadline(timeout)
-            scene = self._scene(
-                deadline, PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
-                | PlanningSceneComponents.ROBOT_STATE_ATTACHED_OBJECTS)
-            if scene is None:
-                return False
-            diff = PlanningScene()
-            names = {o.id for o in scene.world.collision_objects}
-            names.update(a.object.id
-                         for a in scene.robot_state.attached_collision_objects)
-            for name in names:
-                removal = self._removal(name)
-                diff.world.collision_objects.extend(
-                    removal.world.collision_objects)
-                diff.robot_state.attached_collision_objects.extend(
-                    removal.robot_state.attached_collision_objects)
-            return not names or self._apply(diff, deadline)
-        except Exception as error:
-            self._error(error)
-            return False
-
-    def attach_collision(
-        self, name: str, link_name: str,
-        touch_links: Optional[list] = None,
-        collision_object: Optional[CollisionObject] = None, *,
-        timeout: Optional[float] = None,
-    ) -> bool:
-        try:
-            deadline = self._deadline(timeout)
-            _name(name)
-            _name(link_name)
-            if touch_links is not None and not isinstance(
-                    touch_links, (list, tuple)):
-                raise ValueError("touch_links はリンク名の列が必要です")
-            links = [_name(v) for v in (touch_links or [link_name])]
-            obj = (self.get_object(
-                name, timeout=deadline - time.monotonic())
-                if collision_object is None else copy.deepcopy(
-                    collision_object))
-            if not isinstance(obj, CollisionObject):
-                raise ValueError("アタッチ対象が見つかりません")
-            _name(obj.header.frame_id)
-            obj.pose = _pose_valid(obj.pose)
-            if not (obj.primitives or obj.meshes or obj.planes):
-                raise ValueError("アタッチ対象の形状がありません")
-            for shapes, poses in (
-                    (obj.primitives, obj.primitive_poses),
-                    (obj.meshes, obj.mesh_poses),
-                    (obj.planes, obj.plane_poses)):
-                if len(shapes) != len(poses):
-                    raise ValueError("形状と姿勢の数が一致しません")
-                for index, pose in enumerate(poses):
-                    poses[index] = _pose_valid(pose)
-            for primitive in obj.primitives:
-                counts = {SolidPrimitive.BOX: 3, SolidPrimitive.SPHERE: 1,
-                          SolidPrimitive.CYLINDER: 2, SolidPrimitive.CONE: 2}
-                if len(primitive.dimensions) != counts.get(primitive.type):
-                    raise ValueError("プリミティブ寸法が不正です")
-                for dimension in primitive.dimensions:
-                    _positive("dimension", dimension)
-            obj.id, obj.operation = name, CollisionObject.ADD
-            attached = AttachedCollisionObject()
-            attached.link_name, attached.touch_links = link_name, links
-            attached.object = obj
-            diff = self._removal(name)
-            diff.robot_state.attached_collision_objects = [attached]
-            return self._apply(diff, deadline)
-        except Exception as error:
-            self._error(error)
-            return False
-
-    def allow_collision(
-        self, name1: str, name2: str, *,
-        timeout: Optional[float] = None,
-    ) -> bool:
-        try:
-            _name(name1)
-            _name(name2)
-            deadline = self._deadline(timeout)
-            if not self._scene_lock.acquire(
-                    timeout=max(0.0, deadline - time.monotonic())):
-                return False
-            try:
-                scene = self._scene(
-                    deadline, PlanningSceneComponents.ALLOWED_COLLISION_MATRIX)
-                if scene is None:
-                    return False
-                acm = scene.allowed_collision_matrix
-                size = len(acm.entry_names)
-                if len(acm.entry_values) != size or any(
-                        len(e.enabled) != size for e in acm.entry_values):
-                    raise ValueError("衝突許可行列の次元が不正です")
-                for name in (name1,) if name2 == "all" else (name1, name2):
-                    if name not in acm.entry_names:
-                        acm.entry_names.append(name)
-                        for row in acm.entry_values:
-                            row.enabled.append(False)
-                        row = AllowedCollisionEntry()
-                        row.enabled = [False] * len(acm.entry_names)
-                        acm.entry_values.append(row)
-                first = acm.entry_names.index(name1)
-                targets = (range(len(acm.entry_names)) if name2 == "all"
-                           else [acm.entry_names.index(name2)])
-                for second in targets:
-                    acm.entry_values[first].enabled[second] = True
-                    acm.entry_values[second].enabled[first] = True
-                if name2 == "all":
-                    if name1 in acm.default_entry_names:
-                        acm.default_entry_values[
-                            acm.default_entry_names.index(name1)] = True
-                    else:
-                        acm.default_entry_names.append(name1)
-                        acm.default_entry_values.append(True)
-                diff = PlanningScene()
-                diff.allowed_collision_matrix = acm
-                return self._apply(diff, deadline)
-            finally:
-                self._scene_lock.release()
-        except Exception as error:
-            self._error(error)
-            return False
-
-
-@dataclass
-class _ArmGoal:
-    """遅延した受付応答でも取消要求を失わないゴール単位の記録。"""
-
-    future: Any
-    goal: Any
-    response_deadline: float
-    result_timeout: float
-    cancel_event: Optional[threading.Event]
-    used_ik: bool = False
-    position_only: bool = False
-    handle: Any = None
-    result_future: Any = None
-    cancel_future: Any = None
-    result_deadline: Optional[float] = None
-    abort_status: Optional[ArmControlStatus] = None
-    result: Optional[ArmControlResult] = None
-
-
-def _arm_result_guard(method: Any) -> Any:
-    """公開詳細 API の例外を構造化結果へ変換する。"""
-    @wraps(method)
-    def guarded(self: Any, *args: Any, **kwargs: Any) -> ArmControlResult:
-        try:
-            if not self._context_ok():
-                result = ArmControlResult(ArmControlStatus.ROS_SHUTDOWN)
-            elif self._cancel_requested.is_set():
-                result = ArmControlResult(ArmControlStatus.CANCELLED)
-            else:
-                result = method(self, *args, **kwargs)
-        except (ValueError, TypeError, OverflowError) as error:
-            result = ArmControlResult(
-                ArmControlStatus.INVALID_ARGUMENT, str(error))
-        except (ExternalShutdownException, RCLError, InvalidHandle):
-            result = ArmControlResult(ArmControlStatus.ROS_SHUTDOWN)
-        except Exception as error:
-            result = ArmControlResult(
-                ArmControlStatus.INTERNAL_ERROR, str(error))
-        if kwargs.get("execute") is False and not result.plan_only:
-            result = replace(result, plan_only=True)
-        return result
-    return guarded
-
-
-class ArmControl(_ArmRosSupport):
-    """G1 の既存 bool API と詳細結果 API を提供する。
-
-    wait=False の完了監視には node の executor を継続して spin する。
-    同じ executor の単一スレッド callback から同期 API は呼ばない。
-    """
-
-    _GROUPS = (
-        "arm_left", "arm_left_with_waist", "arm_right",
-        "arm_right_with_waist", "arm_both", "arm_both_with_waist", "head",
-    )
-    _SINGLE_GROUPS = _GROUPS[:4]
-    _PLAN_FAILURES = (
-        MoveItErrorCodes.PLANNING_FAILED,
-        MoveItErrorCodes.INVALID_MOTION_PLAN,
-        MoveItErrorCodes.NO_IK_SOLUTION,
-        MoveItErrorCodes.GOAL_CONSTRAINTS_VIOLATED,
-    )
-
-    def __init__(
-        self, node: Node, wait_time: int = 5, tf_buffer: Buffer = None,
-    ) -> None:
-        if not _finite(wait_time) or wait_time < 0:
-            raise ValueError("wait_time は非負の有限数が必要です")
-        self.node = node
-        self.base_frame = "base_link"
-        self.position_tolerance = 0.001
-        self.orientation_tolerance = 0.1
-        self.joint_tolerance = 0.01
-        self.joint_state_max_age = 1.0
-        self.goal_response_timeout = 5.0
-        self.result_timeout = 30.0
-        self.cancel_timeout = 2.0
-        self._velocity_scale = 1.0
-        self._acceleration_scale = 1.0
-        self._spin_lock = threading.Lock()
-        self._joint_state_lock = threading.RLock()
-        self._goal_lock = threading.RLock()
-        self._cancel_requested = threading.Event()
-        self._joint_states: dict[str, float] = {}
-        self._joint_state_updated_at: dict[str, float] = {}
-        self._goals: dict[Any, _ArmGoal] = {}
-        self.last_result: Optional[ArmControlResult] = None
-        self._groups: dict[str, tuple[str, ...]] = {}
-        self._srdf_group_states: Optional[dict] = None
-        self.tf_buffer = tf_buffer if tf_buffer is not None else Buffer()
-        self._tf_listener = (
-            TransformListener(self.tf_buffer, node)
-            if tf_buffer is None else None)
-        self._move_group_client = ActionClient(node, MoveGroup, "/move_action")
-        self._ik_client = node.create_client(GetPositionIK, "/compute_ik")
-        self._fk_client = node.create_client(GetPositionFK, "/compute_fk")
-        self._hand_client = node.create_client(HandCommand, "/hand_command")
-        self._ubc_client = node.create_client(
-            SetBool, "/enable_upper_body_control")
-        self._joint_sub = node.create_subscription(
-            JointState, "/joint_states", self._joint_state_callback,
-            QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
-        self.collision = ArmCollision(
-            node, tf_buffer=self.tf_buffer, spin_lock=self._spin_lock)
-        # ROS 時刻が停止しても非同期ゴールの期限を監視する。
-        self._goal_timer = node.create_timer(
-            self._SPIN_INTERVAL, self._monitor_goals,
-            clock=Clock(clock_type=ClockType.STEADY_TIME))
-        self._load_srdf_group_states()
-        if wait_time > 0:
-            self.wait_until_ready(float(wait_time), require_ik=False)
-
-    @staticmethod
-    def _canonical_group(name: str) -> str:
-        return {
-            "upper_body": "arm_both_with_waist",
-            "__pure_arm_left": "arm_left",
-            "__pure_arm_right": "arm_right",
-        }.get(name, name)
-
-    @staticmethod
-    def _scale(name: str, value: Any) -> float:
-        value = _positive(name, value)
-        if value > 1.0:
-            raise ValueError(f"{name} は 1.0 以下が必要です")
-        return value
-
-    @property
-    def velocity_scale(self) -> float:
-        return self._velocity_scale
-
-    @velocity_scale.setter
-    def velocity_scale(self, value: float) -> None:
-        self._velocity_scale = self._scale("velocity_scale", value)
-
-    @property
-    def acceleration_scale(self) -> float:
-        return self._acceleration_scale
-
-    @acceleration_scale.setter
-    def acceleration_scale(self, value: float) -> None:
-        self._acceleration_scale = self._scale("acceleration_scale", value)
-
-    def set_motion_scaling(
-        self, velocity_scale: Optional[float] = None,
-        acceleration_scale: Optional[float] = None,
-    ) -> None:
-        """両方を検証してから反映し、片方だけの変更を防ぐ。"""
-        velocity = (self.velocity_scale if velocity_scale is None
-                    else self._scale("velocity_scale", velocity_scale))
-        acceleration = (self.acceleration_scale if acceleration_scale is None
-                        else self._scale(
-                            "acceleration_scale", acceleration_scale))
-        self._velocity_scale, self._acceleration_scale = velocity, acceleration
-
-    @staticmethod
-    def _to_legacy_bool(result: ArmControlResult) -> bool:
-        return result.succeeded or result.status == ArmControlStatus.SUBMITTED
-
-    @staticmethod
-    def _result(
-        status: ArmControlStatus, message: str = "", **fields: Any,
-    ) -> ArmControlResult:
-        return ArmControlResult(status, message, **fields)
-
-    def _safe_action_ready(self, timeout: float = 0.0) -> bool:
-        if not self._context_ok():
-            return False
-        try:
-            return bool(self._move_group_client.wait_for_server(
-                timeout_sec=timeout))
-        except (ExternalShutdownException, RCLError, InvalidHandle):
-            return False
-
-    def is_move_group_ready(self) -> bool:
-        return self._safe_action_ready()
-
-    def is_ik_ready(self) -> bool:
-        return self._safe_service_ready()
-
-    def wait_until_ready(
-        self, timeout: float = 5.0, require_ik: bool = True,
-    ) -> ArmControlResult:
-        try:
-            deadline = time.monotonic() + _positive("timeout", timeout)
-            while self._context_ok():
-                if self._cancel_requested.is_set():
-                    return self._result(ArmControlStatus.CANCELLED)
-                if self.is_move_group_ready() and (
-                        not require_ik or self.is_ik_ready()):
-                    return self._result(ArmControlStatus.SUCCEEDED)
-                if time.monotonic() >= deadline:
-                    return self._result(
-                        ArmControlStatus.NOT_READY, "MoveIt が未起動です")
-                self._spin_once(deadline - time.monotonic())
-            return self._result(ArmControlStatus.ROS_SHUTDOWN)
-        except (TypeError, ValueError) as error:
-            return self._result(ArmControlStatus.INVALID_ARGUMENT, str(error))
-
-    def _joint_state_callback(self, message: JointState) -> None:
-        if (len(message.name) != len(message.position)
-                or len(set(message.name)) != len(message.name)):
-            return
-        received = time.monotonic()
-        with self._joint_state_lock:
-            for name, position in zip(message.name, message.position):
-                if name and _finite(position):
-                    self._joint_states[name] = float(position)
-                    self._joint_state_updated_at[name] = received
-                else:
-                    self._joint_state_updated_at.pop(name, None)
-
-    def get_current_joints_pose(
-        self, planning_group: str = "arm_both_with_waist",
-    ) -> dict[str, float]:
-        # 旧仕様どおり受信済み全関節のコピーを返す。
-        with self._joint_state_lock:
-            return self._joint_states.copy()
-
-    def get_joint_state_age(
-        self, joint_name: Optional[str] = None,
-    ) -> Optional[float]:
-        with self._joint_state_lock:
-            stamps = ([self._joint_state_updated_at[joint_name]]
-                      if joint_name in self._joint_state_updated_at
-                      else [] if joint_name is not None
-                      else list(self._joint_state_updated_at.values()))
-        return time.monotonic() - min(stamps) if stamps else None
-
-    def _fresh_joint_snapshot(
-        self, joints: tuple[str, ...],
-    ) -> tuple[Optional[dict[str, float]], list[str]]:
-        now = time.monotonic()
-        with self._joint_state_lock:
-            missing = [
-                name for name in joints
-                if name not in self._joint_states
-                or name not in self._joint_state_updated_at
-                or now - self._joint_state_updated_at[name]
-                > self.joint_state_max_age]
-            return (None, missing) if missing else (
-                {name: self._joint_states[name] for name in joints}, [])
-
-    def wait_for_joint_states(
-        self, planning_group: str = "arm_both_with_waist",
-        timeout: float = 2.0,
-    ) -> ArmControlResult:
-        try:
-            joints = self._joints_for_group(planning_group)
-            deadline = time.monotonic() + _positive("timeout", timeout)
-            while self._context_ok():
-                if self._cancel_requested.is_set():
-                    return self._result(ArmControlStatus.CANCELLED)
-                snapshot, missing = self._fresh_joint_snapshot(joints)
-                if snapshot is not None:
-                    return self._result(ArmControlStatus.SUCCEEDED)
-                if time.monotonic() >= deadline:
-                    return self._result(
-                        ArmControlStatus.STATE_UNAVAILABLE,
-                        f"関節状態が未受信または古いです: {missing}")
-                self._spin_once(deadline - time.monotonic())
-            return self._result(ArmControlStatus.ROS_SHUTDOWN)
-        except (TypeError, ValueError) as error:
-            return self._result(ArmControlStatus.INVALID_ARGUMENT, str(error))
-
-    def _load_srdf_group_states(self) -> Optional[dict]:
-        if self._srdf_group_states is not None:
-            return self._srdf_group_states
-        try:
-            path = Path(get_package_share_directory(
-                "erasers_g1_moveit")) / "config" / "g1.srdf"
-            root = ET.parse(path).getroot()
-            groups = {g.get("name") for g in root.findall("group")}
-            states = {}
-            for state in root.findall("group_state"):
-                group, name = state.get("group"), state.get("name")
-                if group not in self._GROUPS:
-                    continue
-                if not name or group not in groups or (group, name) in states:
-                    raise ValueError("SRDF のグループ・姿勢名が不正です")
-                joints = {}
-                for joint in state.findall("joint"):
-                    key, value = _name(joint.get("name")), float(
-                        joint.get("value"))
-                    if key in joints or not _finite(value):
-                        raise ValueError("SRDF の関節値が不正です")
-                    joints[key] = value
-                if not joints:
-                    raise ValueError("SRDF の姿勢が空です")
-                states[(group, name)] = joints
-            definitions = {
-                group: tuple(states[(group, "home")])
-                for group in self._GROUPS if (group, "home") in states}
-            if not all(group in definitions for group in self._GROUPS[:6]):
-                raise ValueError("G1 の 6 グループの home 定義が必要です")
-            left, right = (set(definitions["arm_left"]),
-                           set(definitions["arm_right"]))
-            if left & right:
-                raise ValueError("左右腕の関節が重複しています")
-            expected = {
-                "arm_left_with_waist": left | {"waist_yaw_joint"},
-                "arm_right_with_waist": right | {"waist_yaw_joint"},
-                "arm_both": left | right,
-                "arm_both_with_waist": left | right | {"waist_yaw_joint"},
-            }
-            if any(set(definitions[g]) != values
-                   for g, values in expected.items()):
-                raise ValueError("G1 の腕・腰のグループ構成が不正です")
-            for (group, _), joints in states.items():
-                if not set(joints) <= set(definitions.get(group, ())):
-                    raise ValueError("グループ外の関節が SRDF にあります")
-            self._groups, self._srdf_group_states = definitions, states
-            return states
-        except (OSError, ET.ParseError, ValueError, TypeError,
-                PackageNotFoundError) as error:
-            if self._context_ok():
-                self.node.get_logger().error(f"SRDF 読み込み失敗: {error}")
-            return None
-
-    def _joints_for_group(self, group: str) -> tuple[str, ...]:
-        group = self._canonical_group(_name(group))
-        if self._load_srdf_group_states() is None:
-            raise ValueError("SRDF を読み込めません")
-        if group not in self._groups:
-            raise ValueError(f"未対応のグループです: {group}")
-        return self._groups[group]
-
-    def get_supported_joints(
-        self, planning_group: str = "arm_both_with_waist",
-    ) -> tuple[str, ...]:
-        try:
-            return self._joints_for_group(planning_group)
-        except ValueError:
-            return ()
-
-    def list_group_states(
-        self, planning_group: str = "arm_both_with_waist",
-    ) -> tuple[str, ...]:
-        states = self._load_srdf_group_states() or {}
-        group = self._canonical_group(planning_group)
-        return tuple(sorted(s for g, s in states if g == group))
-
-    def get_group_state(
-        self, group_state: str,
-        planning_group: str = "arm_both_with_waist",
-    ) -> Optional[dict[str, float]]:
-        states = self._load_srdf_group_states() or {}
-        joints = states.get((
-            self._canonical_group(planning_group), group_state))
-        return None if joints is None else joints.copy()
-
-    def reload_group_states(self) -> ArmControlResult:
-        self._srdf_group_states, self._groups = None, {}
-        return self._result(
-            ArmControlStatus.SUCCEEDED if self._load_srdf_group_states()
-            is not None else ArmControlStatus.INTERNAL_ERROR)
-
-    def _goal_result(
-        self, operation: _ArmGoal, status: ArmControlStatus,
-        message: str = "", **fields: Any,
-    ) -> ArmControlResult:
-        return self._result(
-            status, message,
-            plan_only=operation.goal.planning_options.plan_only,
-            used_ik=operation.used_ik,
-            used_position_only_fallback=operation.position_only, **fields)
-
-    def _finish_goal(
-        self, operation: _ArmGoal, result: ArmControlResult,
-    ) -> None:
-        with self._goal_lock:
-            operation.result = result
-            self.last_result = result
-            self._goals.pop(operation.future, None)
-
-    def _cancel_operation(self, operation: _ArmGoal) -> None:
-        if (operation.handle is None or operation.cancel_future is not None
-                or not self._context_ok()):
-            return
-        try:
-            operation.cancel_future = operation.handle.cancel_goal_async()
-        except Exception as error:
-            # 終了確認ができないゴールは追跡から外さない。
-            self.last_result = self._goal_result(
-                operation, ArmControlStatus.INTERNAL_ERROR,
-                f"取消要求に失敗しました。終了状態は未確認です: {error}")
-
-    def _abort_goal(
-        self, operation: _ArmGoal, status: ArmControlStatus,
-    ) -> None:
-        with self._goal_lock:
-            if operation.result is not None:
-                return
-            if operation.abort_status is None:
-                operation.abort_status = status
-            self._cancel_operation(operation)
-            self.last_result = self._goal_result(
-                operation, operation.abort_status, "取消要求中です")
-
-    def request_cancel(self) -> None:
-        """待機中と送信済みの全ゴールに非同期で取消を要求する。"""
-        self._cancel_requested.set()
-        with self._goal_lock:
-            for operation in list(self._goals.values()):
-                self._abort_goal(operation, ArmControlStatus.CANCELLED)
-
-    def reset_cancel_request(self) -> None:
-        """新規要求の取消フラグだけを解除する。送信済み取消は維持する。"""
-        self._cancel_requested.clear()
-
-    def _monitor_goals(self) -> None:
-        with self._goal_lock:
-            for operation in list(self._goals.values()):
-                if self._cancel_requested.is_set() or (
-                        operation.cancel_event is not None
-                        and operation.cancel_event.is_set()):
-                    self._abort_goal(operation, ArmControlStatus.CANCELLED)
-                deadline = (operation.response_deadline
-                            if operation.result_deadline is None
-                            else operation.result_deadline)
-                if time.monotonic() >= deadline:
-                    self._abort_goal(operation, ArmControlStatus.TIMED_OUT)
-
-    def _goal_response_done(self, operation: _ArmGoal, future: Any) -> None:
-        """callback 内では待機せず、結果と取消要求を登録する。"""
-        try:
-            handle = future.result()
-            if handle is None or not handle.accepted:
-                self._finish_goal(operation, self._goal_result(
-                    operation, operation.abort_status
-                    or ArmControlStatus.GOAL_REJECTED,
-                    "MoveGroup がゴールを拒否しました"))
-                return
-            with self._goal_lock:
-                operation.handle = handle
-                operation.result_deadline = (
-                    time.monotonic() + operation.result_timeout)
-                operation.result_future = handle.get_result_async()
-                operation.result_future.add_done_callback(
-                    lambda result: self._goal_finished(operation, result))
-                if (operation.abort_status is not None
-                        or self._cancel_requested.is_set()
-                        or (operation.cancel_event is not None
-                            and operation.cancel_event.is_set())):
-                    self._abort_goal(
-                        operation, operation.abort_status
-                        or ArmControlStatus.CANCELLED)
-        except Exception as error:
-            # 受理済みか不明な通信失敗は、新しい動作を開始しない。
-            self._abort_goal(operation, ArmControlStatus.INTERNAL_ERROR)
-            self.last_result = self._goal_result(
-                operation, ArmControlStatus.INTERNAL_ERROR, str(error))
-
-    @staticmethod
-    def _moveit_error_name(code: int) -> str:
-        return next((name for name in dir(MoveItErrorCodes)
-                     if name.isupper()
-                     and getattr(MoveItErrorCodes, name) == code),
-                    f"UNKNOWN_{code}")
-
-    def _goal_finished(self, operation: _ArmGoal, future: Any) -> None:
-        try:
-            wrapped = future.result()
-            code = wrapped.result.error_code.val
-            action_status = wrapped.status
-            if action_status == GoalStatus.STATUS_CANCELED:
-                status = ArmControlStatus.CANCELLED
-            elif (action_status == GoalStatus.STATUS_SUCCEEDED
-                  and code == MoveItErrorCodes.SUCCESS):
-                status = (ArmControlStatus.DEGRADED if operation.position_only
-                          else ArmControlStatus.SUCCEEDED)
-            else:
-                status = ArmControlStatus.MOVEIT_FAILED
-            status = operation.abort_status or status
-            result = self._goal_result(
-                operation, status, self._moveit_error_name(code),
-                moveit_error_code=code,
-                moveit_error_name=self._moveit_error_name(code),
-                action_status=action_status)
-            self._finish_goal(operation, result)
-        except Exception as error:
-            # 終了を確認できない場合も handle を保持して取消を可能にする。
-            self._abort_goal(operation, ArmControlStatus.INTERNAL_ERROR)
-            self.last_result = self._goal_result(
-                operation, ArmControlStatus.INTERNAL_ERROR, str(error))
-
-    def cancel_current_goal(
-        self, timeout: Optional[float] = None,
-    ) -> ArmControlResult:
-        try:
-            deadline = time.monotonic() + _positive(
-                "timeout", self.cancel_timeout if timeout is None else timeout)
-        except ValueError as error:
-            return self._result(ArmControlStatus.INVALID_ARGUMENT, str(error))
-        with self._goal_lock:
-            operations = list(self._goals.values())
-        self.request_cancel()
-        if not operations:
-            return self._result(
-                ArmControlStatus.INVALID_ARGUMENT, "実行中ゴールがありません")
-        while self._context_ok():
-            if all(op.result is not None for op in operations):
-                if all(op.result.action_status == GoalStatus.STATUS_CANCELED
-                       for op in operations):
-                    return self._result(
-                        ArmControlStatus.CANCELLED, "取消完了を確認しました")
-                return self._result(
-                    ArmControlStatus.GOAL_REJECTED,
-                    "取消より先にゴールが終了したか、取消が拒否されました")
-            if time.monotonic() >= deadline:
-                return self._result(
-                    ArmControlStatus.TIMED_OUT,
-                    "取消後の終了は未確認です。ゴールの追跡を継続します")
-            self._spin_once(deadline - time.monotonic())
-        return self._result(ArmControlStatus.ROS_SHUTDOWN)
-
-    def cancel(self, wait: bool = True, timeout: float = 5.0) -> bool:
-        if not wait:
-            self.request_cancel()
-            return True
-        return self.cancel_current_goal(timeout).status == (
-            ArmControlStatus.CANCELLED)
-
-    def _send_move_group_goal_detailed(
-        self, goal: MoveGroup.Goal, *, wait: bool = True,
-        execute: bool = True, goal_response_timeout: Optional[float] = None,
-        result_timeout: Optional[float] = None,
-        cancel_timeout: Optional[float] = None,
-        cancel_event: Optional[threading.Event] = None,
-        used_ik: bool = False, position_only: bool = False,
-    ) -> ArmControlResult:
-        try:
-            response_limit = _positive(
-                "goal_response_timeout", self.goal_response_timeout
-                if goal_response_timeout is None else goal_response_timeout)
-            result_limit = _positive(
-                "result_timeout", self.result_timeout
-                if result_timeout is None else result_timeout)
-            cancel_limit = _positive(
-                "cancel_timeout", self.cancel_timeout
-                if cancel_timeout is None else cancel_timeout)
-            if not isinstance(wait, bool) or not isinstance(execute, bool):
-                raise ValueError("wait と execute は bool が必要です")
-            if cancel_event is not None and not isinstance(
-                    cancel_event, threading.Event):
-                raise ValueError("cancel_event は threading.Event が必要です")
-            if not self._context_ok():
-                return self._result(ArmControlStatus.ROS_SHUTDOWN)
-            if self._cancel_requested.is_set() or (
-                    cancel_event is not None and cancel_event.is_set()):
-                return self._result(ArmControlStatus.CANCELLED)
-            if not self.is_move_group_ready():
-                return self._result(ArmControlStatus.NOT_READY)
-            goal.planning_options.plan_only = not execute
-            with self._goal_lock:
-                if self._goals:
-                    return self._result(
-                        ArmControlStatus.NOT_READY,
-                        "前のゴールが終了していません")
-                future = self._move_group_client.send_goal_async(goal)
-                operation = _ArmGoal(
-                    future, goal, time.monotonic() + response_limit,
-                    result_limit, cancel_event, used_ik, position_only)
-                self._goals[future] = operation
-                future.add_done_callback(
-                    lambda done: self._goal_response_done(operation, done))
-            if not wait:
-                return operation.result or self._goal_result(
-                    operation, ArmControlStatus.SUBMITTED, "ゴールを送信しました")
-            while self._context_ok():
-                self._monitor_goals()
-                with self._goal_lock:
-                    if operation.result is not None:
-                        return operation.result
-                    abort_status = operation.abort_status
-                if abort_status is not None:
-                    # 取消応答待ちも有限。未終了ゴールは後続 callback が監視する。
-                    deadline = time.monotonic() + cancel_limit
-                    while (self._context_ok() and operation.result is None
-                           and time.monotonic() < deadline):
-                        self._spin_once(deadline - time.monotonic())
-                    return operation.result or self._goal_result(
-                        operation, abort_status,
-                        "要求を中断しました。取消後の終了状態は未確認です")
-                self._spin_once(self._SPIN_INTERVAL)
-            return self._goal_result(
-                operation, ArmControlStatus.ROS_SHUTDOWN)
-        except KeyboardInterrupt:
-            self.request_cancel()
-            raise
-        except (ValueError, TypeError) as error:
-            return self._result(ArmControlStatus.INVALID_ARGUMENT, str(error))
-        except (ExternalShutdownException, RCLError, InvalidHandle):
-            return self._result(ArmControlStatus.ROS_SHUTDOWN)
-        except Exception as error:
-            if "operation" in locals():
-                self._abort_goal(operation, ArmControlStatus.INTERNAL_ERROR)
-            return self._result(ArmControlStatus.INTERNAL_ERROR, str(error))
-
-    def _send_move_group_goal(
-        self,
-        goal_msg: MoveGroup.Goal,
-        wait: bool,
-    ) -> bool:
-        return self._to_legacy_bool(self._send_move_group_goal_detailed(
-            goal_msg, wait=wait,
-            execute=not goal_msg.planning_options.plan_only))
-
-    def _tip(self, group: str, tip_link: Optional[str] = None) -> str:
-        group = self._canonical_group(_name(group))
-        self._joints_for_group(group)
-        if group == "head":
-            raise ValueError("頭部には関節制御を使用してください")
-        left, right = "left_amazing_hand", "right_amazing_hand"
-        allowed = ((left,) if "left" in group else (right,)
-                   if "right" in group else (left, right))
-        link = tip_link or (left if "left" in group else right)
-        if link not in allowed:
-            raise ValueError(f"{group} の手先リンクではありません: {link}")
-        return link
-
-    def _current_pose(
-        self, group: str, reference_frame: str,
-        tip_link: Optional[str] = None, timeout: float = 2.0,
-    ) -> Optional[PoseStamped]:
-        link, frame = self._tip(group, tip_link), _name(reference_frame)
-        deadline = time.monotonic() + _positive("pose_timeout", timeout)
-        while self._context_ok() and not self._cancel_requested.is_set():
-            try:
-                tf = self.tf_buffer.lookup_transform(
-                    frame, link, rclpy.time.Time())
-                pose = PoseStamped()
-                pose.header = tf.header
-                pose.header.frame_id = frame
-                p = tf.transform.translation
-                pose.pose.position.x, pose.pose.position.y = p.x, p.y
-                pose.pose.position.z = p.z
-                pose.pose.orientation = tf.transform.rotation
-                pose.pose = _pose_valid(pose.pose)
-                return pose
-            except TransformException:
-                if time.monotonic() >= deadline:
-                    break
-                self._spin_once(deadline - time.monotonic())
-        return None
 
     def get_current_pose(
-        self, simple: bool = False,
-        planning_group: str = "arm_both_with_waist",
-        reference_frame: str = "base_link",
-    ) -> Optional[Union[PoseStamped, list[float]]]:
-        try:
-            pose = self._current_pose(planning_group, reference_frame)
-            if pose is None or not simple:
-                return pose
-            p, q = pose.pose.position, pose.pose.orientation
-            return [p.x, p.y, p.z,
-                    *euler_from_quaternion([q.x, q.y, q.z, q.w])]
-        except (ValueError, TypeError, ExternalShutdownException,
-                RCLError, InvalidHandle):
-            return None
-
-    def _valid_pose(
-        self, pose: Union[Pose, PoseStamped],
-    ) -> PoseStamped:
-        if isinstance(pose, PoseStamped):
-            target = copy.deepcopy(pose)
-            _name(target.header.frame_id)
-        elif isinstance(pose, Pose):
-            target = PoseStamped()
-            target.header.frame_id = self.base_frame
-            target.pose = copy.deepcopy(pose)
-        else:
-            raise ValueError("Pose または PoseStamped が必要です")
-        target.pose = _pose_valid(target.pose)
-        return target
-
-    def _absolute_pose(
-        self, values: tuple, reference_frame: str,
-    ) -> PoseStamped:
-        if not all(_finite(v) for v in values):
-            raise ValueError("目標位置・姿勢は有限数で指定してください")
-        pose = PoseStamped()
-        pose.header.frame_id = _name(reference_frame)
-        pose.pose.position.x, pose.pose.position.y, pose.pose.position.z = (
-            float(v) for v in values[:3])
-        pose.pose.orientation = _quaternion_euler(*values[3:])
-        return pose
-
-    def _relative_pose(
-        self, current: PoseStamped, values: tuple,
-    ) -> PoseStamped:
-        if not all(_finite(v) for v in values):
-            raise ValueError("相対位置・姿勢は有限数で指定してください")
-        pose = copy.deepcopy(current)
-        pose.pose.position.x += float(values[0])
-        pose.pose.position.y += float(values[1])
-        pose.pose.position.z += float(values[2])
-        pose.pose.orientation = _quaternion_product(
-            current.pose.orientation, _quaternion_euler(*values[3:]))
-        return self._valid_pose(pose)
-
-    def _options(self, kwargs: dict) -> dict:
-        defaults = {
-            "planning_attempts": 10, "planning_time": 5.0,
-            "execute": True,
-            "goal_response_timeout": self.goal_response_timeout,
-            "result_timeout": self.result_timeout,
-            "cancel_timeout": self.cancel_timeout, "cancel_event": None,
-            "velocity_scale": self.velocity_scale,
-            "acceleration_scale": self.acceleration_scale,
-        }
-        unknown = set(kwargs) - set(defaults)
-        if unknown:
-            raise ValueError(f"不明な引数です: {sorted(unknown)}")
-        defaults.update(kwargs)
-        attempts = defaults["planning_attempts"]
-        if not isinstance(attempts, int) or isinstance(attempts, bool) or (
-                attempts < 1):
-            raise ValueError("planning_attempts は正の整数が必要です")
-        for name in ("planning_time", "goal_response_timeout",
-                     "result_timeout", "cancel_timeout"):
-            defaults[name] = _positive(name, defaults[name])
-        for name in ("velocity_scale", "acceleration_scale"):
-            defaults[name] = self._scale(name, defaults[name])
-        if not isinstance(defaults["execute"], bool):
-            raise ValueError("execute は bool が必要です")
-        event = defaults["cancel_event"]
-        if event is not None and not isinstance(event, threading.Event):
-            raise ValueError("cancel_event は threading.Event が必要です")
-        return defaults
-
-    def _new_goal(self, group: str, options: dict) -> MoveGroup.Goal:
-        group = self._canonical_group(_name(group))
-        self._joints_for_group(group)
-        goal = MoveGroup.Goal()
-        goal.request.group_name = group
-        goal.request.start_state.is_diff = True
-        goal.request.num_planning_attempts = options["planning_attempts"]
-        goal.request.allowed_planning_time = options["planning_time"]
-        goal.request.max_velocity_scaling_factor = options["velocity_scale"]
-        goal.request.max_acceleration_scaling_factor = options[
-            "acceleration_scale"]
-        goal.planning_options.plan_only = not options["execute"]
-        return goal
-
-    def _submit(
-        self, goal: MoveGroup.Goal, wait: bool, options: dict, *,
-        used_ik: bool = False, position_only: bool = False,
-    ) -> ArmControlResult:
-        return self._send_move_group_goal_detailed(
-            goal, wait=wait, execute=options["execute"],
-            goal_response_timeout=options["goal_response_timeout"],
-            result_timeout=options["result_timeout"],
-            cancel_timeout=options["cancel_timeout"],
-            cancel_event=options["cancel_event"],
-            used_ik=used_ik, position_only=position_only)
-
-    def _create_pose_constraints(
-        self, target_pose: PoseStamped, tip_link: str,
-    ) -> tuple[PositionConstraint, OrientationConstraint]:
-        pose = self._valid_pose(target_pose)
-        pc = PositionConstraint()
-        pc.header, pc.link_name, pc.weight = pose.header, tip_link, 1.0
-        primitive = SolidPrimitive()
-        primitive.type = SolidPrimitive.SPHERE
-        primitive.dimensions = [
-            _positive("position_tolerance", self.position_tolerance)]
-        pc.constraint_region.primitives = [primitive]
-        pc.constraint_region.primitive_poses = [pose.pose]
-        oc = OrientationConstraint()
-        oc.header, oc.link_name, oc.weight = pose.header, tip_link, 1.0
-        oc.orientation = pose.pose.orientation
-        tolerance = _positive(
-            "orientation_tolerance", self.orientation_tolerance)
-        oc.absolute_x_axis_tolerance = tolerance
-        oc.absolute_y_axis_tolerance = tolerance
-        oc.absolute_z_axis_tolerance = tolerance
-        return pc, oc
-
-    def _pose_goal(
-        self, targets: list[tuple[PoseStamped, str]], group: str,
-        options: dict, include_orientation: bool = True,
-    ) -> MoveGroup.Goal:
-        goal, constraints = self._new_goal(group, options), Constraints()
-        for pose, tip in targets:
-            pc, oc = self._create_pose_constraints(pose, tip)
-            constraints.position_constraints.append(pc)
-            if include_orientation:
-                constraints.orientation_constraints.append(oc)
-        # 両手の条件を一つの Constraints にまとめ、AND 条件で解く。
-        goal.request.goal_constraints = [constraints]
-        return goal
-
-    def _joint_goal(
-        self, targets: dict[str, float], group: str, options: dict,
-    ) -> MoveGroup.Goal:
-        goal, constraints = self._new_goal(group, options), Constraints()
-        for name, target in targets.items():
-            jc = JointConstraint()
-            jc.joint_name, jc.position, jc.weight = name, float(target), 1.0
-            jc.tolerance_above = _positive(
-                "joint_tolerance", self.joint_tolerance)
-            jc.tolerance_below = jc.tolerance_above
-            constraints.joint_constraints.append(jc)
-        goal.request.goal_constraints = [constraints]
-        return goal
-
-    def _solve_ik_detailed(
-        self, pose_stamped: PoseStamped, group_name: str,
-        tip_link: Optional[str] = None, *,
-        timeout: Optional[float] = None,
-        cancel_event: Optional[threading.Event] = None,
-    ) -> IkResult:
-        try:
-            group = self._canonical_group(_name(group_name))
-            if group not in self._SINGLE_GROUPS:
-                return IkResult(
-                    IkStatus.INVALID_REQUEST, message="単腕グループが必要です")
-            target = self._valid_pose(pose_stamped)
-            tip = self._tip(group, tip_link)
-            joints = self._joints_for_group(group)
-            deadline = time.monotonic() + _positive(
-                "timeout", self.goal_response_timeout
-                if timeout is None else timeout)
-            if not self._context_ok():
-                return IkResult(IkStatus.ROS_SHUTDOWN)
-            if self._cancel_requested.is_set() or (
-                    cancel_event is not None and cancel_event.is_set()):
-                return IkResult(IkStatus.CANCELLED)
-            current, missing = self._fresh_joint_snapshot(joints)
-            if current is None:
-                return IkResult(
-                    IkStatus.STATE_UNAVAILABLE,
-                    message=f"関節状態が未受信または古いです: {missing}")
-            if not self.is_ik_ready():
-                return IkResult(IkStatus.SERVICE_UNAVAILABLE)
-            # rotation_scale=0 の解を姿勢まで一致した成功と誤認しない。
-            if not self._safe_service_ready(0.0, self._fk_client):
-                return IkResult(
-                    IkStatus.NO_SOLUTION, message="FK で姿勢を確認できません")
-            req = GetPositionIK.Request()
-            req.ik_request.group_name, req.ik_request.ik_link_name = group, tip
-            req.ik_request.pose_stamped = target
-            req.ik_request.timeout.sec = 1
-            req.ik_request.avoid_collisions = True
-            req.ik_request.robot_state.is_diff = True
-            req.ik_request.robot_state.joint_state.name = list(current)
-            req.ik_request.robot_state.joint_state.position = list(
-                current.values())
-            status, response = self._call_service(
-                self._ik_client, req, deadline - time.monotonic(),
-                cancel_event=cancel_event)
-            if status != _FutureWaitStatus.COMPLETED:
-                return IkResult(IkStatus(status.value))
-            if response is None:
-                return IkResult(IkStatus.INVALID_RESPONSE)
-            code = response.error_code.val
-            if code != MoveItErrorCodes.SUCCESS:
-                return IkResult(IkStatus.NO_SOLUTION, moveit_error_code=code)
-            state = response.solution.joint_state
-            if (len(state.name) != len(state.position)
-                    or len(set(state.name)) != len(state.name)
-                    or not all(_finite(v) for v in state.position)):
-                return IkResult(IkStatus.INVALID_RESPONSE)
-            solution = dict(zip(state.name, state.position))
-            if not set(joints) <= solution.keys():
-                return IkResult(IkStatus.INVALID_RESPONSE)
-            fk = GetPositionFK.Request()
-            fk.header = target.header
-            fk.fk_link_names = [tip]
-            fk.robot_state = response.solution
-            fk.robot_state.is_diff = True
-            status, checked = self._call_service(
-                self._fk_client, fk, deadline - time.monotonic(),
-                cancel_event=cancel_event)
-            if status != _FutureWaitStatus.COMPLETED:
-                return IkResult(IkStatus(status.value))
-            if (checked is None
-                    or checked.error_code.val != MoveItErrorCodes.SUCCESS
-                    or tip not in checked.fk_link_names):
-                return IkResult(IkStatus.INVALID_RESPONSE)
-            achieved = checked.pose_stamped[checked.fk_link_names.index(tip)]
-            if achieved.header.frame_id != target.header.frame_id:
-                return IkResult(IkStatus.INVALID_RESPONSE)
-            a, b = _pose_valid(achieved.pose), target.pose
-            position_error = math.dist(
-                (a.position.x, a.position.y, a.position.z),
-                (b.position.x, b.position.y, b.position.z))
-            # OrientationConstraint と同じ軸ごとの誤差を評価する。
-            inverse = Quaternion(
-                x=-b.orientation.x, y=-b.orientation.y,
-                z=-b.orientation.z, w=b.orientation.w)
-            error = _quaternion_product(inverse, a.orientation)
-            angles = euler_from_quaternion(
-                [error.x, error.y, error.z, error.w])
-            if (position_error > self.position_tolerance
-                    or any(abs(v) > self.orientation_tolerance
-                           for v in angles)):
-                return IkResult(
-                    IkStatus.NO_SOLUTION,
-                    message="IK 解の位置または姿勢が許容値を超えています")
-            return IkResult(
-                IkStatus.SUCCEEDED,
-                joints={name: float(solution[name]) for name in joints},
-                moveit_error_code=code)
-        except (TypeError, ValueError) as error:
-            return IkResult(IkStatus.INVALID_REQUEST, message=str(error))
-        except (ExternalShutdownException, RCLError, InvalidHandle):
-            return IkResult(IkStatus.ROS_SHUTDOWN)
-        except Exception as error:
-            return IkResult(IkStatus.INTERNAL_ERROR, message=str(error))
-
-    def _solve_ik(
-        self, pose_stamped: PoseStamped, group_name: str,
-        tip_link: str = None,
-    ) -> Optional[dict]:
-        result = self._solve_ik_detailed(pose_stamped, group_name, tip_link)
-        return result.joints if result.status == IkStatus.SUCCEEDED else None
-
-    def _fallback_allowed(self, result: ArmControlResult) -> bool:
-        return (result.status == ArmControlStatus.MOVEIT_FAILED
-                and result.moveit_error_code in self._PLAN_FAILURES
-                and not self._cancel_requested.is_set())
-
-    @_arm_result_guard
-    def move_to_pose_detailed(
-        self, pose: Union[Pose, PoseStamped],
-        planning_group: str = "arm_both_with_waist", wait: bool = True,
-        tip_link: str = None, *, allow_position_only_fallback: bool = False,
-        use_ik: bool = True, **kwargs: Any,
-    ) -> ArmControlResult:
-        if not isinstance(wait, bool) or not isinstance(
-                allow_position_only_fallback, bool):
-            raise ValueError("wait と fallback は bool が必要です")
-        if not wait and allow_position_only_fallback:
-            raise ValueError(
-                "位置のみのフォールバックには wait=True が必要です")
-        if not isinstance(use_ik, bool):
-            raise ValueError("use_ik は bool が必要です")
-        group = self._canonical_group(_name(planning_group))
-        target, tip = self._valid_pose(pose), self._tip(group, tip_link)
-        options = self._options(kwargs)
-        if use_ik and group in self._SINGLE_GROUPS:
-            ik = self._solve_ik_detailed(
-                target, group, tip, timeout=options["goal_response_timeout"],
-                cancel_event=options["cancel_event"])
-            if ik.status == IkStatus.SUCCEEDED:
-                result = self._submit(
-                    self._joint_goal(ik.joints, group, options),
-                    wait, options, used_ik=True)
-                if not self._fallback_allowed(result):
-                    return result
-            elif ik.status not in (
-                    IkStatus.NO_SOLUTION, IkStatus.SERVICE_UNAVAILABLE):
-                status = {
-                    IkStatus.TIMED_OUT: ArmControlStatus.TIMED_OUT,
-                    IkStatus.CANCELLED: ArmControlStatus.CANCELLED,
-                    IkStatus.ROS_SHUTDOWN: ArmControlStatus.ROS_SHUTDOWN,
-                    IkStatus.STATE_UNAVAILABLE:
-                        ArmControlStatus.STATE_UNAVAILABLE,
-                    IkStatus.INVALID_REQUEST:
-                        ArmControlStatus.INVALID_ARGUMENT,
-                }.get(ik.status, ArmControlStatus.INTERNAL_ERROR)
-                return self._result(
-                    status, ik.message, moveit_error_code=ik.moveit_error_code)
-        targets = [(target, tip)]
-        result = self._submit(
-            self._pose_goal(targets, group, options), wait, options)
-        if allow_position_only_fallback and self._fallback_allowed(result):
-            return self._submit(
-                self._pose_goal(targets, group, options, False),
-                wait, options, position_only=True)
-        return result
-
-    @_arm_result_guard
-    def move_abs_detailed(
-        self, x: float = 0.0, y: float = 0.0, z: float = 0.0,
-        roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0,
-        planning_group: str = "arm_both_with_waist", wait: bool = True,
-        reference_frame: str = "base_link", tip_link: str = None,
-        **kwargs: Any,
-    ) -> ArmControlResult:
-        pose = self._absolute_pose(
-            (x, y, z, roll, pitch, yaw), reference_frame)
-        return self.move_to_pose_detailed(
-            pose, planning_group, wait, tip_link, **kwargs)
-
-    @_arm_result_guard
-    def move_rel_detailed(
-        self, x: float = 0.0, y: float = 0.0, z: float = 0.0,
-        roll: float = 0.0, pitch: float = 0.0, yaw: float = 0.0,
-        planning_group: str = "arm_both_with_waist", wait: bool = True,
-        **kwargs: Any,
-    ) -> ArmControlResult:
-        values = (x, y, z, roll, pitch, yaw)
-        if not all(_finite(v) for v in values):
-            raise ValueError("相対位置・姿勢は有限数で指定してください")
-        frame = kwargs.pop("reference_frame", self.base_frame)
-        tip = kwargs.pop("tip_link", None)
-        timeout = kwargs.pop("pose_timeout", 2.0)
-        current = self._current_pose(planning_group, frame, tip, timeout)
-        if current is None:
-            status = (ArmControlStatus.ROS_SHUTDOWN if not self._context_ok()
-                      else ArmControlStatus.CANCELLED
-                      if self._cancel_requested.is_set()
-                      else ArmControlStatus.TF_UNAVAILABLE)
-            return self._result(status)
-        return self.move_to_pose_detailed(
-            self._relative_pose(current, values), planning_group, wait,
-            tip, **kwargs)
-
-    @_arm_result_guard
-    def move_dual_abs_detailed(
-        self, lx: float = 0.0, ly: float = 0.0, lz: float = 0.0,
-        lr: float = 0.0, lp: float = 0.0, lyaw: float = 0.0,
-        rx: float = 0.0, ry: float = 0.0, rz: float = 0.0,
-        rr: float = 0.0, rp: float = 0.0, ryaw: float = 0.0,
-        wait: bool = True, reference_frame: str = "base_link",
-        **kwargs: Any,
-    ) -> ArmControlResult:
-        group = self._canonical_group(kwargs.pop(
-            "planning_group", "arm_both_with_waist"))
-        if group not in ("arm_both", "arm_both_with_waist"):
-            raise ValueError("双腕グループを指定してください")
-        fallback = kwargs.pop("allow_position_only_fallback", False)
-        if not isinstance(fallback, bool) or (fallback and not wait):
-            raise ValueError("位置のみのフォールバックには同期指定が必要です")
-        options = self._options(kwargs)
-        targets = [
-            (self._absolute_pose((lx, ly, lz, lr, lp, lyaw), reference_frame),
-             "left_amazing_hand"),
-            (self._absolute_pose((rx, ry, rz, rr, rp, ryaw), reference_frame),
-             "right_amazing_hand")]
-        result = self._submit(
-            self._pose_goal(targets, group, options), wait, options)
-        if fallback and self._fallback_allowed(result):
-            return self._submit(
-                self._pose_goal(targets, group, options, False),
-                wait, options, position_only=True)
-        return result
-
-    @_arm_result_guard
-    def move_dual_rel_detailed(
-        self, lx: float = 0.0, ly: float = 0.0, lz: float = 0.0,
-        lr: float = 0.0, lp: float = 0.0, lyaw: float = 0.0,
-        rx: float = 0.0, ry: float = 0.0, rz: float = 0.0,
-        rr: float = 0.0, rp: float = 0.0, ryaw: float = 0.0,
-        wait: bool = True, **kwargs: Any,
-    ) -> ArmControlResult:
-        values = ((lx, ly, lz, lr, lp, lyaw), (rx, ry, rz, rr, rp, ryaw))
-        if not all(_finite(v) for pose in values for v in pose):
-            raise ValueError("相対位置・姿勢は有限数で指定してください")
-        frame = kwargs.pop("reference_frame", self.base_frame)
-        deadline = time.monotonic() + _positive(
-            "pose_timeout", kwargs.pop("pose_timeout", 2.0))
-        poses = []
-        for group, delta in zip(("arm_left", "arm_right"), values):
-            current = self._current_pose(
-                group, frame, timeout=deadline - time.monotonic())
-            if current is None:
-                status = (ArmControlStatus.CANCELLED
-                          if self._cancel_requested.is_set()
-                          else ArmControlStatus.ROS_SHUTDOWN
-                          if not self._context_ok()
-                          else ArmControlStatus.TF_UNAVAILABLE)
-                return self._result(status)
-            target = self._relative_pose(current, delta)
-            p, q = target.pose.position, target.pose.orientation
-            poses.extend((p.x, p.y, p.z, *euler_from_quaternion(
-                [q.x, q.y, q.z, q.w])))
-        return self.move_dual_abs_detailed(
-            *poses, wait=wait, reference_frame=frame, **kwargs)
-
-    @_arm_result_guard
-    def joint_control_detailed(
-        self, rlt: bool = False, wait: bool = True,
-        planning_group: str = "arm_both_with_waist", **kwargs: Any,
-    ) -> ArmControlResult:
-        if not isinstance(rlt, bool):
-            raise ValueError("rlt は bool が必要です")
-        group = self._canonical_group(_name(planning_group))
-        joints = self._joints_for_group(group)
-        targets = {name: kwargs.pop(name) for name in joints if name in kwargs}
-        options = self._options(kwargs)
-        if not all(_finite(v) for v in targets.values()):
-            raise ValueError("関節値は有限数で指定してください")
-        current = {}
-        if rlt or set(targets) != set(joints):
-            current, missing = self._fresh_joint_snapshot(joints)
-            if current is None:
-                return self._result(
-                    ArmControlStatus.STATE_UNAVAILABLE,
-                    f"関節状態が未受信または古いです: {missing}")
-        resolved = {
-            name: (float(targets[name]) + (current[name] if rlt else 0.0)
-                   if name in targets else current[name])
-            for name in joints}
-        if not all(_finite(v) for v in resolved.values()):
-            raise ValueError("計算後の関節値が非有限です")
-        return self._submit(self._joint_goal(
-            resolved, group, options), wait, options)
-
-    @_arm_result_guard
-    def move_groupstate_detailed(
-        self, group_name: str = "arm_both_with_waist",
-        group_state: str = "home", wait: bool = True, **kwargs: Any,
-    ) -> ArmControlResult:
-        group_name = self._canonical_group(_name(group_name))
-        group_state = self._canonical_group(_name(group_state))
-        states = self._load_srdf_group_states()
-        if states is None:
-            return self._result(
-                ArmControlStatus.NOT_READY, "SRDF を読み込めません")
-        groups, names = {g for g, _ in states}, {s for _, s in states}
-        if group_name in names and group_state in groups:
-            group_name, group_state = group_state, group_name
-        if (group_state == "home" and group_name not in groups
-                and group_name in names):
-            group_name, group_state = "arm_both_with_waist", group_name
-        joints = states.get((group_name, group_state))
-        if joints is None:
-            raise ValueError("指定された SRDF 姿勢がありません")
-        return self.joint_control_detailed(
-            planning_group=group_name, wait=wait, **kwargs, **joints)
-
-    @_arm_result_guard
-    def place_detailed(
-        self, x: float, y: float, z: float,
-        planning_group: str = "arm_right", wait: bool = True,
-        **kwargs: Any,
-    ) -> ArmControlResult:
-        options = self._options(kwargs)
-        pose = self._absolute_pose((x, y, z, 0.0, 0.0, 0.0), self.base_frame)
-        goal = self._pose_goal(
-            [(pose, self._tip(planning_group))], planning_group,
-            options, False)
-        region = goal.request.goal_constraints[0].position_constraints[0]
-        region.constraint_region.primitives[0].type = SolidPrimitive.BOX
-        region.constraint_region.primitives[0].dimensions = [0.05] * 3
-        return self._submit(goal, wait, options)
-
-    @_arm_result_guard
-    def enable_upper_body_control_detailed(
-        self, enable: bool = True, *, timeout: float = 5.0,
-    ) -> ArmControlResult:
-        if not isinstance(enable, bool):
-            raise ValueError("enable は bool が必要です")
-        request = SetBool.Request()
-        request.data = enable
-        return self._external_service(self._ubc_client, request, timeout)
-
-    def enable_upper_body_control(self, enable: bool = True) -> bool:
-        return self._to_legacy_bool(
-            self.enable_upper_body_control_detailed(enable))
-
-    @_arm_result_guard
-    def hand_control_detailed(
-        self, command: str = "walk", hand: str = "both", *,
-        timeout: float = 5.0,
-    ) -> ArmControlResult:
-        request = HandCommand.Request()
-        request.command, request.hand = _name(command), _name(hand)
-        if hand not in ("left", "right", "both"):
-            raise ValueError("hand は left、right、both のいずれかです")
-        return self._external_service(self._hand_client, request, timeout)
-
-    def hand_control(self, command: str = "walk", hand: str = "both") -> bool:
-        return self._to_legacy_bool(
-            self.hand_control_detailed(command, hand))
-
-    def _external_service(
-        self, client: Any, request: Any, timeout: float,
-    ) -> ArmControlResult:
-        status, response = self._call_service(client, request, timeout)
-        if status != _FutureWaitStatus.COMPLETED:
-            return self._result(
-                ArmControlStatus(status.value),
-                "サービス要求の実行結果は未確認です")
-        if response is None:
-            return self._result(ArmControlStatus.INTERNAL_ERROR)
-        return self._result(
-            ArmControlStatus.SUCCEEDED if response.success
-            else ArmControlStatus.GOAL_REJECTED,
-            getattr(response, "message", ""))
-
-    def move_to_pose(
         self,
-        pose: Union[Pose, PoseStamped],
-        planning_group: str = 'arm_both_with_waist',
-        wait: bool = True,
-        tip_link: str = None,
-        **kwargs: Any,
+        ref_frame: str = "map",
+        use_xyy: bool = True,
+    ) -> Union[List[float], PoseStamped]:
+        """ロボットの現在位置姿勢を取得する．
+
+        Parameters
+        ----------
+        ref_frame : str, default 'map'
+            基準座標系名．
+        use_xyy : bool, default True
+            True の場合は [x, y, yaw] の 1 次元リスト形式，
+            False の場合は PoseStamped 型で返却する．
+
+        Returns
+        -------
+        Union[List[float], PoseStamped]
+            use_xyy=True の場合は [x, y, yaw]，False の場合は PoseStamped．
+        """
+        try:
+            tf_stamped = self.__tf_buffer.lookup_transform(
+                ref_frame,
+                "base_link",
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=2.0),
+            )
+            px = tf_stamped.transform.translation.x
+            py = tf_stamped.transform.translation.y
+            pz = tf_stamped.transform.translation.z
+            rot = tf_stamped.transform.rotation
+            yaw = _quaternion_to_yaw(rot.x, rot.y, rot.z, rot.w)
+
+            if use_xyy:
+                return [px, py, yaw]
+
+            pose = PoseStamped()
+            pose.header = tf_stamped.header
+            pose.pose.position.x = px
+            pose.pose.position.y = py
+            pose.pose.position.z = pz
+            pose.pose.orientation = rot
+            return pose
+
+        except TransformException as exc:
+            self.__logger.warn(f"TF lookup failed for get_current_pose: {exc}")
+
+        # フォールバック: /localization/pose_with_covariance の最新値を購読
+        latest_pose: Optional[PoseWithCovarianceStamped] = None
+
+        def __cb_loc(msg: PoseWithCovarianceStamped) -> None:
+            nonlocal latest_pose
+            latest_pose = msg
+
+        loc_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+
+        with TemporarySubscriber(
+            node=self.__node,
+            msg=PoseWithCovarianceStamped,
+            topic="/localization/pose_with_covariance",
+            qos_profile=loc_qos,
+            cb=__cb_loc,
+        ):
+            start_time = time.monotonic()
+            while rclpy.ok() and latest_pose is None:
+                if time.monotonic() - start_time > 2.0:
+                    break
+                rclpy.spin_once(self.__node, timeout_sec=0.05)
+
+        if latest_pose is not None:
+            px = latest_pose.pose.pose.position.x
+            py = latest_pose.pose.pose.position.y
+            pz = latest_pose.pose.pose.position.z
+            rot = latest_pose.pose.pose.orientation
+            yaw = _quaternion_to_yaw(rot.x, rot.y, rot.z, rot.w)
+            if use_xyy:
+                return [px, py, yaw]
+            pose = PoseStamped()
+            pose.header = latest_pose.header
+            pose.pose = latest_pose.pose.pose
+            return pose
+
+        self.__logger.error("Failed to determine current robot pose.")
+        return [0.0, 0.0, 0.0] if use_xyy else PoseStamped()
+
+
+class G1Mic:
+    """ロボット搭載マイクからの音声収録を管理するコンテキストマネージャクラス．
+
+    Parameters
+    ----------
+    node : Node
+        ROS 2 ノードインスタンス．
+    sample_rate : int, default 16000
+        サンプリングレート（Hz）．
+    channels : int, default 1
+        オーディオチャンネル数．
+    """
+
+    def __init__(self, node: Node, sample_rate: int = 16000, channels: int = 1) -> None:
+        """マイク管理クラスのインスタンスを初期化する．"""
+        self.__node = node
+        self.__logger = node.get_logger()
+        self.__sample_rate = sample_rate
+        self.__channels = channels
+        self.__audio_buffer: List[np.ndarray] = []
+        self.__buffer_lock = threading.Lock()
+
+        self.__mic_sub = self.__node.create_subscription(
+            Int16MultiArray,
+            "/mic_data",
+            self.__audio_callback,
+            10,
+        )
+
+        self.__mic_enable_cli = self.__node.create_client(
+            SetBool,
+            "/enable_mic",
+        )
+
+
+    def __audio_callback(self, msg: Int16MultiArray) -> None:
+        """マイク音声データ受信コールバック．"""
+        data = np.array(msg.data, dtype=np.int16)
+        with self.__buffer_lock:
+            self.__audio_buffer.append(data)
+
+
+    def __enter__(self) -> "G1Mic":
+        """コンテキストマネージャ開始時に音声配信を有効化する．"""
+        req = SetBool.Request()
+        req.data = True
+        if self.__mic_enable_cli.wait_for_service(timeout_sec=2.0):
+            future = self.__mic_enable_cli.call_async(req)
+            rclpy.spin_until_future_complete(self.__node, future, timeout_sec=2.0)
+        with self.__buffer_lock:
+            self.__audio_buffer = []
+        return self
+
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """コンテキストマネージャ終了時に音声配信を無効化する．"""
+        req = SetBool.Request()
+        req.data = False
+        if self.__mic_enable_cli.wait_for_service(timeout_sec=1.0):
+            future = self.__mic_enable_cli.call_async(req)
+            rclpy.spin_until_future_complete(self.__node, future, timeout_sec=1.0)
+
+
+    def read(self) -> np.ndarray:
+        """前回呼出から現在までに蓄積された全音声データを取得する．
+
+        Returns
+        -------
+        np.ndarray
+            結合された int16 音声配列．
+        """
+        with self.__buffer_lock:
+            if not self.__audio_buffer:
+                return np.array([], dtype=np.int16)
+            full_data = np.concatenate(self.__audio_buffer)
+            self.__audio_buffer = []
+            return full_data
+
+
+    def save_wav(self, file_path: str, audio_data: np.ndarray) -> bool:
+        """音声データを WAV ファイルとして保存する．
+
+        Parameters
+        ----------
+        file_path : str
+            出力先ファイルパス．
+        audio_data : np.ndarray
+            保存対象の音声データ配列．
+
+        Returns
+        -------
+        bool
+            保存に成功した場合は True，それ以外は False．
+        """
+        if audio_data.size == 0:
+            self.__logger.warn("No audio data to save.")
+            return False
+
+        try:
+            with wave.open(file_path, "wb") as wf:
+                wf.setnchannels(self.__channels)
+                wf.setsampwidth(2)
+                wf.setframerate(self.__sample_rate)
+                wf.writeframes(audio_data.tobytes())
+            return True
+        except Exception as exc:
+            self.__logger.error(f"Failed to save WAV file: {exc}")
+            return False
+
+
+class ArmGrasp:
+    """単腕の物体把持・配置を管理する．
+
+    先頭形状の中心を目標座標の基準とし，複合形状の配置を保つ．
+    ラバーハンドの物理的な保持力は検出せず，PlanningScene の結合を管理する．
+    呼び出しは逐次実行すること．
+    """
+
+    POSITION_TOLERANCE = 0.01
+    ORIENTATION_TOLERANCE = 0.1
+
+    def __init__(self, arm: ArmControl, collision: Optional[ArmCollision] = None) -> None:
+        """アームとシーン管理を共有する．"""
+        self.__arm = arm
+        self.__node = arm._ArmControl__node
+        self.__logger = self.__node.get_logger()
+        self.__collision = collision or arm.collision
+        self.__last_grasp_plan = None
+
+    @property
+    def arm(self) -> ArmControl:
+        """アーム制御インスタンスを取得する．"""
+        return self.__arm
+
+    @property
+    def collision(self) -> ArmCollision:
+        """コリジョン管理インスタンスを取得する．"""
+        return self.__collision
+
+    @property
+    def last_grasp_plan(self) -> Optional[Dict[str, Any]]:
+        """最後に選択した方向・距離を返す．候補が成立しなかった場合は None．"""
+        return copy.deepcopy(self.__last_grasp_plan)
+
+    def _group(self, arm_side: str, group_name: Optional[str]) -> Optional[str]:
+        """左右腕と計画グループの一致を確認する．"""
+        group = group_name or f"arm_{arm_side}_with_waist"
+        if arm_side not in ("left", "right") or ArmControl._arm_side(group) != arm_side:
+            self.__logger.error(f"腕と計画グループが一致しません: {arm_side}, {group}")
+            return None
+        return group
+
+    def _ee_matrix(self, arm_side: str, ref: str = "pelvis") -> Optional[np.ndarray]:
+        """現在の手先を同次変換で取得する．"""
+        transform = self.__arm.get_current_endeffector_pose(ref=ref, arm_side=arm_side)
+        if transform is None:
+            return None
+        q = transform.rotation
+        matrix = quaternion_matrix([q.x, q.y, q.z, q.w])
+        p = transform.translation
+        matrix[:3, 3] = [p.x, p.y, p.z]
+        return matrix
+
+    def grasp(
+        self,
+        object: str,
+        approach_type: str = "auto",
+        arm_side: str = "left",
+        offset_dist: Optional[float] = None,
+        pre_offset_dist: Optional[float] = None,
+        lift: bool = True,
+        lift_height: float = 0.10,
+        group_name: Optional[str] = None,
+        grasp_offset: Optional[float] = None,
+        approach_frame: str = "base_link",
     ) -> bool:
-        """既存の引数と bool 戻り値を維持する。"""
-        kwargs.setdefault("allow_position_only_fallback", bool(wait))
-        return self._to_legacy_bool(self.move_to_pose_detailed(
-            pose=pose,
-            planning_group=planning_group,
-            wait=wait,
-            tip_link=tip_link,
-            **kwargs))
+        """手先のローカル +Y 方向へ接近し，物体を結合して持ち上げる．
+
+        Parameters
+        ----------
+        object : str
+            PlanningScene に登録された把持対象の ID．先頭形状の中心を
+            物体基準点とする．
+        approach_type : {'auto', 'side', 'front', 'top'}, default 'auto'
+            接近方向．`approach_frame` 基準で，side は左腕が -Y，
+            右腕が +Y，front は +X（ロボット側から），top は -Z．
+            auto は三方向の姿勢・経路・衝突を移動前に評価し，成立した
+            候補から関節移動量と関節限界までの余裕に基づいて選択する．
+        arm_side : {'left', 'right'}, default 'left'
+            使用する腕．
+        offset_dist : float or None, default None
+            把持時の物体基準点と手先原点の距離（m，非負）．None は物体と
+            ハンドの形状から候補を作り，衝突・到達可能性により選択する．
+            数値を指定した場合は自動変更しない．
+        pre_offset_dist : float or None, default None
+            最終直線接近の距離（m，正）．None は 0.025，0.05，0.10 m
+            の候補から選択する．接近前の物体と手先の距離は，これと
+            選択された `offset_dist` の合計になる．
+        lift : bool, default True
+            結合後に pelvis の +Z 方向へ持ち上げるかどうか．
+        lift_height : float, default 0.10
+            持ち上げる高さ（m，非負）．
+        group_name : str or None, default None
+            計画グループ．None は arm_left_with_waist または
+            arm_right_with_waist．指定する場合は `arm_side` と一致させる．
+        grasp_offset : float or None, default None
+            `offset_dist` の互換引数．指定時は `offset_dist` より優先する．
+        approach_frame : str, default 'base_link'
+            接近方向の基準フレーム．開始時の方向を pelvis へ変換して固定し，
+            腰の回転に追従させない．
+
+        Returns
+        -------
+        bool
+            把持および指定された持ち上げが成功した場合は True．入力不正，
+            到達不能，衝突，通信失敗，動作失敗の場合は False．
+
+        Notes
+        -----
+        すべての方向で手先 +Y 軸を対象へ向ける．最終接近の方向許容差は
+        0.1 rad，直線経路・終点の検査許容差は 5 mm．補間後の軌道も検査し，
+        部分経路は実行しない．side / front / top を明示した場合は，
+        指定方向が不成立でも別方向へ切り替えない．
+
+        自動距離は，接近側の物体表面とハンド形状が接する距離の近傍から
+        5，15，25 mm 内側の候補を作る．基本形状とメッシュに対応する．
+        平面など有限な寸法を得られない対象では距離の明示が必要となる．
+        候補探索は有限であり，任意の物体配置での成功を保証するものではない．
+        選択結果はログと `last_grasp_plan` で確認できる．
+
+        対象と指定ハンド以外の接触は許可しない．結合前の失敗では物体を
+        ワールドに残し，結合後のリフト失敗では手先への結合を維持する．
+        接触許可は処理終了時に復元する．物理的な保持力の検出やハンド開閉は
+        行わず，PlanningScene 上の把持を扱う．呼び出しは逐次実行すること．
+
+        Examples
+        --------
+        >>> grasp.grasp('object_0', approach_type='auto')
+        >>> grasp.grasp('object_0', approach_type='top', arm_side='right',
+        ...             offset_dist=0.07, pre_offset_dist=0.025, lift=False)
+        """
+        from .grasp_planner import GraspPlanner
+
+        self.__last_grasp_plan = None
+        group = self._group(arm_side, group_name)
+        if group is None or approach_type not in ("auto", "side", "front", "top"):
+            self.__logger.error("腕・計画グループ・approach_type の指定を確認してください．")
+            return False
+        try:
+            if grasp_offset is not None:
+                offset_dist = float(grasp_offset)
+            if (not approach_frame or not math.isfinite(lift_height) or lift_height < 0
+                    or any(v is not None and (not math.isfinite(v) or v < 0)
+                           for v in (offset_dist, pre_offset_dist))
+                    or pre_offset_dist == 0):
+                raise ValueError('距離・高さ・基準フレームの指定が不正です．')
+        except (TypeError, ValueError) as exc:
+            self.__logger.error(str(exc))
+            return False
+        target_object = self.__collision.get_object(object)
+        if target_object is None:
+            self.__logger.error(f"把持対象が見つかりません: {object}")
+            return False
+        tip = f"{arm_side}_amazing_hand"
+        touch_links = [tip, f"{arm_side}_wrist_roll_rubber_hand"]
+        ok = False
+        original_acm = None
+        restored = True
+        try:
+            with GraspPlanner(self.__arm, self.__collision) as planner:
+                plan = planner.plan(target_object, approach_type, arm_side, group,
+                                    offset_dist, pre_offset_dist, approach_frame)
+                if plan is None:
+                    return False
+                self.__last_grasp_plan = {
+                    "approach_type": plan.approach_type, "offset_dist": plan.offset,
+                    "pre_offset_dist": plan.pre_offset, "approach_frame": approach_frame,
+                    "direction_pelvis": plan.direction.tolist(),
+                }
+                if (not planner.matches_state(plan.initial_state)
+                        or self.__collision.get_object(object) != target_object):
+                    self.__logger.error("候補評価中に開始状態または対象物体が変化しました．")
+                    return False
+                if not self.__arm._execute_checked_trajectory(plan.pre_trajectory):
+                    return False
+                if (not planner.matches_state(plan.pre_state)
+                        or self.__collision.get_object(object) != target_object):
+                    return False
+                # 移動後のシーンでも接近全区間を再確認する．
+                trajectory = plan.approach_trajectory.joint_trajectory
+                samples = _sample_joint_trajectory(trajectory)
+                if samples is None or any(not planner.valid(
+                        planner.state_at(plan.pre_state, trajectory.joint_names, values),
+                        object, touch_links) for values in samples):
+                    return False
+                original_acm = self.__collision.get_allowed_collision_matrix()
+                if original_acm is None:
+                    return False
+                approach_acm = copy.deepcopy(original_acm)
+                for link in touch_links:
+                    ArmCollision._set_allowed_pair(approach_acm, object, link)
+                ok = self.__collision.apply_allowed_collision_matrix(approach_acm)
+                if ok:
+                    ok = self.__arm._execute_checked_trajectory(plan.approach_trajectory)
+            if ok:
+                state = self.__collision.get_robot_state()
+                pose = self.__arm._fk_pose(state, tip) if state is not None else None
+                reached = _pose_matrix(pose) if pose is not None else None
+                target = plan.center - plan.direction * plan.offset
+                ok = (reached is not None and
+                      np.linalg.norm(reached[:3, 3] - target) <= self.POSITION_TOLERANCE)
+                if ok:
+                    relative = reached[:3, :3].T @ (plan.center - reached[:3, 3])
+                    ok = (float(reached[:3, 1] @ plan.direction) >= math.cos(0.1)
+                          and relative[1] >= -0.001)
+                    if plan.offset > 0.0:
+                        ok = ok and math.atan2(np.linalg.norm(relative[[0, 2]]), relative[1]) <= 0.1
+                if not ok:
+                    self.__logger.error("把持位置または +Y 接近の条件を満たさないため結合しません．")
+            if ok:
+                # ID による移管で物体原点・全形状・サブフレームの座標を MoveIt に保持させる．
+                ok = self.__collision.attach(object, attach_frame=tip, touch_links=touch_links)
+            if ok:
+                attached = self.__collision.get_attached_object(object, link_name=tip)
+                ok = attached is not None and attached.link_name == tip
+        except Exception as exc:
+            self.__logger.error(f"把持中に失敗しました: {exc}")
+            ok = False
+        finally:
+            if original_acm is not None:
+                restored = self.__collision.apply_allowed_collision_matrix(original_acm)
+                if not restored:
+                    self.__logger.error("一時的な接触許可を復元できませんでした．")
+        if not ok or not restored:
+            return False
+        if lift:
+            return self.__arm.move_rel(
+                0.0, 0.0, lift_height, ref_frame="pelvis", group_name=group)
+        return True
 
     def place(
         self,
         x: float,
         y: float,
         z: float,
-        planning_group: str = 'arm_right',
-        wait: bool = True,
+        roll: Optional[float] = None,
+        pitch: Optional[float] = None,
+        yaw: Optional[float] = None,
+        use_rlt: bool = False,
+        ref: str = "torso_link",
+        release: bool = True,
+        detach: bool = True,
+        dettach: Optional[bool] = None,
+        object: Optional[str] = None,
+        arm_side: str = "left",
+        group_name: Optional[str] = None,
     ) -> bool:
-        """既存の引数と bool 戻り値を維持する。"""
-        return self._to_legacy_bool(self.place_detailed(
-            x=x,
-            y=y,
-            z=z,
-            planning_group=planning_group,
-            wait=wait))
+        """物体基準点を指定座標へ移動し，実際の到達姿勢で解放する．
 
-    def move_abs(
-        self,
-        x: float = 0.0,
-        y: float = 0.0,
-        z: float = 0.0,
-        roll: float = 0.0,
-        pitch: float = 0.0,
-        yaw: float = 0.0,
-        planning_group: str = 'arm_both_with_waist',
-        wait: bool = True,
-        reference_frame: str = 'base_link',
-        tip_link: str = None,
-        **kwargs: Any,
-    ) -> bool:
-        """既存の引数と bool 戻り値を維持する。"""
-        kwargs.setdefault("allow_position_only_fallback", bool(wait))
-        return self._to_legacy_bool(self.move_abs_detailed(
-            x=x,
-            y=y,
-            z=z,
-            roll=roll,
-            pitch=pitch,
-            yaw=yaw,
-            planning_group=planning_group,
-            wait=wait,
-            reference_frame=reference_frame,
-            tip_link=tip_link,
-            **kwargs))
-
-    def move_rel(
-        self,
-        x: float = 0.0,
-        y: float = 0.0,
-        z: float = 0.0,
-        roll: float = 0.0,
-        pitch: float = 0.0,
-        yaw: float = 0.0,
-        planning_group: str = 'arm_both_with_waist',
-        wait: bool = True,
-        **kwargs: Any,
-    ) -> bool:
-        """既存の引数と bool 戻り値を維持する。"""
-        kwargs.setdefault("allow_position_only_fallback", bool(wait))
-        return self._to_legacy_bool(self.move_rel_detailed(
-            x=x,
-            y=y,
-            z=z,
-            roll=roll,
-            pitch=pitch,
-            yaw=yaw,
-            planning_group=planning_group,
-            wait=wait,
-            **kwargs))
-
-    def move_dual_abs(
-        self,
-        lx: float = 0.0,
-        ly: float = 0.0,
-        lz: float = 0.0,
-        lr: float = 0.0,
-        lp: float = 0.0,
-        lyaw: float = 0.0,
-        rx: float = 0.0,
-        ry: float = 0.0,
-        rz: float = 0.0,
-        rr: float = 0.0,
-        rp: float = 0.0,
-        ryaw: float = 0.0,
-        wait: bool = True,
-        reference_frame: str = 'base_link',
-        **kwargs: Any,
-    ) -> bool:
-        """既存の引数と bool 戻り値を維持する。"""
-        return self._to_legacy_bool(self.move_dual_abs_detailed(
-            lx=lx,
-            ly=ly,
-            lz=lz,
-            lr=lr,
-            lp=lp,
-            lyaw=lyaw,
-            rx=rx,
-            ry=ry,
-            rz=rz,
-            rr=rr,
-            rp=rp,
-            ryaw=ryaw,
-            wait=wait,
-            reference_frame=reference_frame,
-            **kwargs))
-
-    def move_dual_rel(
-        self,
-        lx: float = 0.0,
-        ly: float = 0.0,
-        lz: float = 0.0,
-        lr: float = 0.0,
-        lp: float = 0.0,
-        lyaw: float = 0.0,
-        rx: float = 0.0,
-        ry: float = 0.0,
-        rz: float = 0.0,
-        rr: float = 0.0,
-        rp: float = 0.0,
-        ryaw: float = 0.0,
-        wait: bool = True,
-        **kwargs: Any,
-    ) -> bool:
-        """既存の引数と bool 戻り値を維持する。"""
-        return self._to_legacy_bool(self.move_dual_rel_detailed(
-            lx=lx,
-            ly=ly,
-            lz=lz,
-            lr=lr,
-            lp=lp,
-            lyaw=lyaw,
-            rx=rx,
-            ry=ry,
-            rz=rz,
-            rr=rr,
-            rp=rp,
-            ryaw=ryaw,
-            wait=wait,
-            **kwargs))
-
-    def move_groupstate(
-        self,
-        group_name: str = 'arm_both_with_waist',
-        group_state: str = 'home',
-        wait: bool = True,
-    ) -> bool:
-        """既存の引数と bool 戻り値を維持する。"""
-        return self._to_legacy_bool(self.move_groupstate_detailed(
-            group_name=group_name,
-            group_state=group_state,
-            wait=wait))
-
-    def joint_control(
-        self,
-        rlt: bool = False,
-        wait: bool = True,
-        planning_group: str = 'arm_both_with_waist',
-        **kwargs: Any,
-    ) -> bool:
-        """既存の引数と bool 戻り値を維持する。"""
-        return self._to_legacy_bool(self.joint_control_detailed(
-            rlt=rlt,
-            wait=wait,
-            planning_group=planning_group,
-            **kwargs))
-
-
-class G1Mic:
-    """
-    Unitree G1 robot microphone audio receiver class.
-    Communicates with mic_server node via ROS 2 services and topics.
-    """
-
-    def __init__(self, node: Node, sample_rate: int = 16000, channels: int = 1):
+        x, y, z は先頭形状の中心（m）．use_rlt=True では現在の物体中心から
+        ref 軸方向の変位とする．目標は開始時点の ref から pelvis に固定する．
+        姿勢未指定時は位置優先で計画し，実際の手先回転に応じて中心位置を補正する．
+        指定された姿勢を満たせない場合は False を返して結合を維持する．
+        detach=False は結合を維持する．dettach は互換引数．
+        release はハンド開閉未対応のため予約引数として受け付ける．
         """
-        G1Mic クラスのコンストラクタ
-
-        Parameters
-        ----------
-        node : Node
-            ROS2 ノードオブジェクト
-        sample_rate : int, optional
-            サンプリングレート。
-        channels : int, optional
-            チャンネル数。
-        """
-        self.node = node
-        self.__sample_rate = sample_rate
-        self.__channels = channels
-
-        self.__audio_buffer = []
-        self.__buffer_lock = threading.Lock()
-
-        # Service client for control
-        self.__mic_rec_cli = self.node.create_client(SetBool, "mic_rec")
-
-        # Subscriber for audio data
-        self.__audio_sub = self.node.create_subscription(
-            Int16MultiArray, "/audio/raw", self.__audio_callback, 10
-        )
-
-    def __audio_callback(self, msg: Int16MultiArray):
-        """
-        音声データを受信した際のコールバック関数。
-        """
-        with self.__buffer_lock:
-            # Convert Int16MultiArray data to numpy array
-            self.__audio_buffer.append(np.array(msg.data, dtype=np.int16))
-
-    def __enter__(self) -> "G1Mic":
-        """
-        コンテキストマネージャの開始。音声配信を有効化します。
-        """
-        if not self.__mic_rec_cli.wait_for_service(timeout_sec=5.0):
-            self.node.get_logger().error("mic_server (mic_rec service) is not running.")
-            raise RuntimeError("mic_server is not running.")
-
-        # 録音開始のリクエスト
-        req = SetBool.Request()
-        req.data = True
-
-        future = self.__mic_rec_cli.call_async(req)
-        rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
-
-        if future.done():
-            res = future.result()
-            if res.success:
-                self.node.get_logger().info(
-                    "Microphone recording enabled via mic_server."
-                )
-            else:
-                self.node.get_logger().error(
-                    f"Failed to enable recording: {res.message}"
-                )
-        else:
-            self.node.get_logger().error("Service call timed out.")
-
-        with self.__buffer_lock:
-            self.__audio_buffer = []  # Clear buffer on start
-
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """
-        コンテキストマネージャの終了。音声配信を無効化します。
-        """
-        req = SetBool.Request()
-        req.data = False
-
-        future = self.__mic_rec_cli.call_async(req)
-        # We don't necessarily need to wait long here, but it's good practice
-        rclpy.spin_until_future_complete(self.node, future, timeout_sec=1.0)
-
-        self.node.get_logger().info("Microphone recording disabled.")
-
-    def read(self) -> np.ndarray:
-        """
-        前回の呼び出しから現在までに蓄積された全ての音声データを取得します。
-
-        Returns
-        -------
-        np.ndarray
-            蓄積された音声データ（int16）を結合したもの。データがない場合は空の配列。
-        """
-        with self.__buffer_lock:
-            if not self.__audio_buffer:
-                return np.array([], dtype=np.int16)
-
-            # Concatenate all chunks in buffer
-            full_data = np.concatenate(self.__audio_buffer)
-            self.__audio_buffer = []  # Clear buffer after reading
-            return full_data
-
-    def save_wav(self, file_path: str, audio_data: np.ndarray) -> bool:
-        """
-        取得した音声データを WAV ファイルとして保存します。
-
-        Parameters
-        ----------
-        file_path : str
-            保存先のファイルパス。
-        audio_data : np.ndarray
-            保存する音声データ。int16 の numpy 配列。
-
-        Returns
-        -------
-        bool
-            保存に成功した場合は True。
-        """
-        if audio_data.size == 0:
-            self.node.get_logger().warn("No audio data to save.")
+        group = self._group(arm_side, group_name)
+        if group is None:
+            return False
+        if dettach is not None:
+            detach = dettach
+        tip = f"{arm_side}_amazing_hand"
+        attached = self.__collision.get_attached_object(object or "", link_name=tip)
+        if attached is None or attached.link_name != tip:
+            self.__logger.error(f"指定した腕に配置対象が結合されていません: {tip}")
             return False
 
-        try:
-            with wave.open(file_path, "wb") as wf:
-                wf.setnchannels(self.__channels)
-                wf.setsampwidth(2)  # 16-bit
-                wf.setframerate(self.__sample_rate)
-                wf.writeframes(audio_data.tobytes())
-
-            self.node.get_logger().info(f"Successfully saved audio to {file_path}")
-            return True
-        except Exception as e:
-            self.node.get_logger().error(f"Failed to save WAV file: {e}")
+        local_pose = self.__arm.transform_pose(
+            _object_reference_pose(attached.object), attached.object.header.frame_id, tip)
+        current = self._ee_matrix(arm_side, ref)
+        if local_pose is None or current is None:
             return False
+        local = _pose_matrix(local_pose)
+        current_object = current @ local
+        target = current_object.copy()
+        target[:3, 3] = np.array([float(x), float(y), float(z)])
+        if use_rlt:
+            target[:3, 3] += current_object[:3, 3]
+        specified = (roll, pitch, yaw)
+        explicit_orientation = any(value is not None for value in specified)
+        if explicit_orientation:
+            current_angles = euler_from_quaternion(quaternion_from_matrix(current_object))
+            angles = [old if new is None else float(new)
+                      for old, new in zip(current_angles, specified)]
+            target[:3, :3] = quaternion_matrix(quaternion_from_euler(*angles))[:3, :3]
+        target_pose = self.__arm.transform_pose(_matrix_pose(target), ref, "pelvis")
+        if target_pose is None:
+            return False
+        target = _pose_matrix(target_pose)
+        if not np.isfinite(target).all():
+            return False
+
+        # 位置優先 IK は手先の回転を変え得るため，物体中心の実測誤差で補正する．
+        for attempt in range(5):
+            current = self._ee_matrix(arm_side)
+            if current is None:
+                return False
+            actual = current @ local
+            position_error = np.linalg.norm(actual[:3, 3] - target[:3, 3])
+            rotation_error = math.acos(float(np.clip(
+                (np.trace(target[:3, :3].T @ actual[:3, :3]) - 1.0) / 2.0, -1.0, 1.0)))
+            if (position_error <= self.POSITION_TOLERANCE and
+                    (not explicit_orientation or rotation_error <= self.ORIENTATION_TOLERANCE)):
+                if detach:
+                    # MoveIt が現在のロボット状態でワールドへ戻す．目標座標で上書きしない．
+                    return self.__collision.detach(attached.object.id, attach_frame=tip)
+                return True
+            if attempt == 4:
+                break
+            rotation = (target[:3, :3] @ local[:3, :3].T
+                        if explicit_orientation else current[:3, :3])
+            ee_target = target[:3, 3] - rotation @ local[:3, 3]
+            kwargs = {}
+            if explicit_orientation:
+                transform = np.eye(4)
+                transform[:3, :3] = rotation
+                angles = euler_from_quaternion(quaternion_from_matrix(transform))
+                kwargs = dict(zip(("roll", "pitch", "yaw"), angles))
+            if not self.__arm.move_abs(
+                    *map(float, ee_target), ref_frame="pelvis", group_name=group, **kwargs):
+                return False
+        self.__logger.error(f"配置位置の誤差が許容値を超えています: {position_error:.4f} m")
+        return False
+
+
+# 後方互換性エイリアス / Piper 互換エイリアス
+Collision = ArmCollision
+Grasp = ArmGrasp
+G1Navigation = NavControl

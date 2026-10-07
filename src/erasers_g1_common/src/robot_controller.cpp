@@ -49,14 +49,16 @@ RobotControllerNode::RobotControllerNode(
   std::shared_ptr<LowCmdSinkInterface> lowcmd_sink,
   SteadyNowFunction steady_now,
   UpperBodyPolicy upper_body_policy,
-  std::vector<G1JointControlLimit> upper_body_limits)
+  std::vector<G1JointControlLimit> upper_body_limits,
+  std::shared_ptr<LedClientInterface> led_client)
 : Node("robot_controller", options),
   loco_client_(std::move(loco_client)),
   arm_action_client_(std::move(arm_action_client)),
   lowcmd_sink_(std::move(lowcmd_sink)),
   steady_now_(std::move(steady_now)),
   upper_body_session_(upper_body_policy),
-  upper_body_limits_(std::move(upper_body_limits))
+  upper_body_limits_(std::move(upper_body_limits)),
+  led_client_(std::move(led_client))
 {
   if (!steady_now_) {
     steady_now_ = []() {return std::chrono::steady_clock::now();};
@@ -64,6 +66,9 @@ RobotControllerNode::RobotControllerNode(
   if (!loco_client_) {
     loco_client_ = std::make_shared<G1LocoClient>(
       this, "/api/sport/request", "/api/sport/response");
+  }
+  if (!led_client_) {
+    led_client_ = std::make_shared<UnitreeLedClient>(this);
   }
 
   declare_parameter<std::vector<int64_t>>("allow_fsm_ids", {500, 801});
@@ -256,6 +261,11 @@ RobotControllerNode::RobotControllerNode(
       std::placeholders::_1, std::placeholders::_2),
     state_options);
 
+  led_sub_ = create_subscription<std_msgs::msg::Int32MultiArray>(
+    "/robot_controller/led", rclcpp::QoS(10),
+    std::bind(&RobotControllerNode::handle_led_command, this, std::placeholders::_1),
+    state_options);
+
   fsm_poll_timer_ = create_wall_timer(
     std::chrono::duration<double>(1.0 / std::max(0.1, fsm_state_publish_rate_hz_)),
     std::bind(&RobotControllerNode::poll_fsm_state_timer, this), state_cb_group_);
@@ -345,6 +355,7 @@ void RobotControllerNode::poll_fsm_state_timer()
     upper_fsm_mode_time_ = steady_now_();
   }
   transition_mutex_.unlock();
+  try_initialize_upper_body_ownership();
 }
 
 void RobotControllerNode::handle_robot_pose(
@@ -681,14 +692,16 @@ void RobotControllerNode::handle_arm_action_deferred(
     reject("EMERGENCY_STOP_LATCHED");
     return;
   }
+  try_initialize_upper_body_ownership();
   bool fresh_normal_noop = false;
   bool arm_request_pending = false;
   {
+    const auto now_steady = steady_now_();
+    std::lock_guard<std::mutex> upper_lock(upper_body_mutex_);
     std::lock_guard<std::mutex> arm_lock(arm_state_mutex_);
     arm_request_pending = arm_request_pending_;
-    fresh_normal_noop = request->mode == kArmActionReleaseId && arm_state_valid_ &&
-      arm_action_id_ == kArmActionNormalId && !arm_holding_ &&
-      steady_now_() - arm_state_time_ <= upper_body_session_.policy().arm_state_timeout &&
+    fresh_normal_noop = request->mode == kArmActionReleaseId &&
+      is_arm_normal_locked(now_steady) &&
       !arm_request_pending_;
   }
   if (arm_request_pending) {
@@ -951,6 +964,13 @@ void RobotControllerNode::handle_upper_body_enable_deferred(
       service->send_response(*header, *response);
       return;
     }
+    if (state.owner == UpperBodyOwner::UNKNOWN) {
+      const auto now_steady = steady_now_();
+      std::lock_guard<std::mutex> arm_lock(arm_state_mutex_);
+      if (is_arm_normal_locked(now_steady)) {
+        upper_body_arbiter_.tryAssumeIdleFromUnknown();
+      }
+    }
     recovery_attempt = state.phase == UpperBodyPhase::FAULT;
     latched_fault_reason = state.fault_reason;
     std::string reason;
@@ -1173,10 +1193,7 @@ void RobotControllerNode::upper_joint_command_callback(
         bool arm_normal = false;
         {
           std::lock_guard<std::mutex> arm_lock(arm_state_mutex_);
-          arm_normal = arm_state_valid_ && !arm_state_malformed_ &&
-            arm_action_id_ == kArmActionNormalId && !arm_holding_ &&
-            !arm_request_pending_ &&
-            now_steady - arm_state_time_ <= upper_body_session_.policy().arm_state_timeout;
+          arm_normal = is_arm_normal_locked(now_steady);
         }
         const bool inputs_fresh = lowstate_valid_ &&
           now_steady - lowstate_time_ <= upper_body_session_.policy().lowstate_timeout &&
@@ -1499,15 +1516,14 @@ bool RobotControllerNode::upper_body_preconditions(std::string & reason, bool re
     upper_fsm_time_ = steady_now_();
   }
 
+  std::lock_guard<std::mutex> lock(upper_body_mutex_);
+  const auto now_steady = steady_now_();
+
   bool arm_normal = false;
   {
     std::lock_guard<std::mutex> arm_lock(arm_state_mutex_);
-    arm_normal = arm_state_valid_ && !arm_state_malformed_ &&
-      arm_action_id_ == kArmActionNormalId && !arm_holding_ && !arm_request_pending_ &&
-      steady_now_() - arm_state_time_ <= upper_body_session_.policy().arm_state_timeout;
+    arm_normal = is_arm_normal_locked(now_steady);
   }
-  std::lock_guard<std::mutex> lock(upper_body_mutex_);
-  const auto now_steady = steady_now_();
   if (std::find(
       upper_body_session_.policy().allowed_fsm_ids.begin(),
       upper_body_session_.policy().allowed_fsm_ids.end(),
@@ -1554,6 +1570,53 @@ bool RobotControllerNode::upper_body_preconditions(std::string & reason, bool re
     return false;
   }
   return true;
+}
+
+bool RobotControllerNode::is_arm_normal_locked(SteadyTime now_steady) const
+{
+  if (arm_request_pending_) {
+    return false;
+  }
+  if (arm_state_valid_ && !arm_state_malformed_ &&
+    arm_action_id_ == kArmActionNormalId && !arm_holding_ &&
+    now_steady - arm_state_time_ <= upper_body_session_.policy().arm_state_timeout)
+  {
+    return true;
+  }
+  if (!emergency_latched_ && !emergency_hold_ && !upper_transition_active_ &&
+    (!arm_state_valid_ || (!arm_holding_ && !arm_state_malformed_ && arm_action_id_ == kArmActionNormalId)))
+  {
+    const bool fsm_ok = std::find(
+      upper_body_session_.policy().allowed_fsm_ids.begin(),
+      upper_body_session_.policy().allowed_fsm_ids.end(),
+      upper_fsm_id_) != upper_body_session_.policy().allowed_fsm_ids.end() &&
+      upper_fsm_time_ != SteadyTime{} &&
+      now_steady - upper_fsm_time_ <= upper_body_session_.policy().fsm_timeout;
+    if (fsm_ok) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool RobotControllerNode::try_initialize_upper_body_ownership()
+{
+  const auto now_steady = steady_now_();
+  std::lock_guard<std::mutex> upper_lock(upper_body_mutex_);
+  if (upper_body_arbiter_.state().owner != UpperBodyOwner::UNKNOWN) {
+    return false;
+  }
+  std::lock_guard<std::mutex> arm_lock(arm_state_mutex_);
+  if (is_arm_normal_locked(now_steady)) {
+    if (upper_body_arbiter_.tryAssumeIdleFromUnknown()) {
+      RCLCPP_INFO(
+        get_logger(),
+        "Upper-body ownership initialized from UNKNOWN to NONE via safe fallback (FSM=%d)",
+        upper_fsm_id_);
+      return true;
+    }
+  }
+  return false;
 }
 
 void RobotControllerNode::cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg)
@@ -2060,6 +2123,41 @@ std::string RobotControllerNode::gid_to_string(const rmw_gid_t & gid)
     stream << std::setw(2) << static_cast<unsigned int>(gid.data[i]);
   }
   return stream.str();
+}
+
+void RobotControllerNode::handle_led_command(const std_msgs::msg::Int32MultiArray::SharedPtr msg)
+{
+  if (!msg || msg->data.size() < 3) {
+    RCLCPP_WARN(
+      get_logger(),
+      "LED command rejected: invalid array size (expected at least 3 elements [R, G, B])");
+    return;
+  }
+
+  const int32_t r = msg->data[0];
+  const int32_t g = msg->data[1];
+  const int32_t b = msg->data[2];
+
+  if (r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255) {
+    RCLCPP_WARN(
+      get_logger(),
+      "LED command rejected: RGB values must be within [0, 255], got [%d, %d, %d]",
+      r, g, b);
+    return;
+  }
+
+  if (led_client_) {
+    const bool ok = led_client_->set_led_color(
+      static_cast<uint8_t>(r),
+      static_cast<uint8_t>(g),
+      static_cast<uint8_t>(b));
+    if (!ok) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Failed to set LED color [%d, %d, %d] via led_client",
+        r, g, b);
+    }
+  }
 }
 
 }  // namespace erasers_g1_common

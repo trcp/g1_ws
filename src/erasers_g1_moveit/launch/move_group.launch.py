@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """MoveIt の move_group ノードのみを起動する."""
 
 from launch import LaunchDescription
@@ -28,16 +29,11 @@ def _node(context):
     if mock:
         for joint, values in read_yaml('mock_joint_limits.yaml')['joint_limits'].items():
             limits['joint_limits'].setdefault(joint, {}).update(values)
-    ompl = read_yaml('ompl_planning.yaml')
-    if mock:
-        # 複数手先の経路制約も関節空間で表現する。
-        for group in ('arm_both', 'arm_both_with_waist'):
-            ompl[group]['enforce_joint_model_state_space'] = True
     parameters = [
         {'robot_description': description, 'robot_description_semantic': semantic},
         {'robot_description_kinematics': read_yaml('kinematics.yaml')},
         {'robot_description_planning': limits},
-        {'ompl': ompl},
+        {'ompl': read_yaml('ompl_planning.yaml')},
         read_yaml('mock_moveit_controllers.yaml' if mock else 'moveit_controllers.yaml'),
         {'planning_pipelines': ['ompl'], 'default_planning_pipeline': 'ompl',
          'use_sim_time': sim_time},
@@ -46,16 +42,6 @@ def _node(context):
         'publish_robot_description': True, 'publish_robot_description_semantic': True,
         'trajectory_execution.allowed_start_tolerance': 0.05,
     })
-    if mock:
-        parameters.append({
-            'constraint_samplers': 'erasers_g1_moveit/DualArmConstraintSampler',
-            # RViz へ送る現在状態も 30 Hz を上限に更新する。
-            'publish_planning_scene': True,
-            'publish_state_updates': True,
-            'publish_geometry_updates': True,
-            'publish_transforms_updates': True,
-            'publish_planning_scene_hz': 30.0,
-        })
     return [Node(
         package='moveit_ros_move_group', executable='move_group', name='move_group',
         parameters=parameters, output='screen', emulate_tty=True,

@@ -7,23 +7,6 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-find_package(moveit_core REQUIRED)
-find_package(pluginlib REQUIRED)
-add_library(dual_arm_constraint_sampler SHARED src/dual_arm_constraint_sampler.cpp)
-target_compile_features(dual_arm_constraint_sampler PUBLIC cxx_std_17)
-ament_target_dependencies(dual_arm_constraint_sampler moveit_core pluginlib)
-pluginlib_export_plugin_description_file(moveit_core constraint_sampler_plugins.xml)
-install(TARGETS dual_arm_constraint_sampler LIBRARY DESTINATION lib)
-find_package(Qt5 REQUIRED COMPONENTS Widgets)
-find_package(rviz_common REQUIRED)
-find_package(moveit_ros_visualization REQUIRED)
-add_library(coordinated_motion_planning_display SHARED src/coordinated_motion_planning_display.cpp)
-target_compile_features(coordinated_motion_planning_display PUBLIC cxx_std_17)
-ament_target_dependencies(coordinated_motion_planning_display moveit_core pluginlib rviz_common)
-target_link_libraries(coordinated_motion_planning_display
-  moveit_ros_visualization::moveit_motion_planning_rviz_plugin_core Qt5::Widgets)
-pluginlib_export_plugin_description_file(rviz_common rviz_plugins.xml)
-install(TARGETS coordinated_motion_planning_display LIBRARY DESTINATION lib)
 
 # uncomment the following section in order to fill in
 # further dependencies manually.

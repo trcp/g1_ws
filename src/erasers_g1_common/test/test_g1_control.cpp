@@ -166,3 +166,45 @@ TEST(G1Ownership, ExcludesArmActionsAndRequiresExplicitFaultRecovery)
   arbiter.acknowledgeFaultDisable();
   EXPECT_TRUE(arbiter.prepareFaultRecovery(error));
 }
+
+TEST(G1Ownership, FallbackInitializationFromUnknown)
+{
+  UpperBodyArbiter arbiter;
+  EXPECT_EQ(arbiter.state().owner, UpperBodyOwner::UNKNOWN);
+  EXPECT_EQ(arbiter.state().phase, UpperBodyPhase::READY);
+
+  EXPECT_TRUE(arbiter.tryAssumeIdleFromUnknown());
+  EXPECT_EQ(arbiter.state().owner, UpperBodyOwner::NONE);
+
+  std::string error;
+  EXPECT_TRUE(arbiter.reserveJointState(error));
+  EXPECT_EQ(arbiter.state().owner, UpperBodyOwner::JOINT_STATE);
+}
+
+TEST(G1Ownership, ReserveJointStateAndArmActionAutoPromotesFromUnknown)
+{
+  {
+    UpperBodyArbiter arbiter;
+    std::string error;
+    EXPECT_TRUE(arbiter.reserveJointState(error));
+    EXPECT_EQ(arbiter.state().owner, UpperBodyOwner::JOINT_STATE);
+  }
+  {
+    UpperBodyArbiter arbiter;
+    std::string error;
+    EXPECT_TRUE(arbiter.reserveArmAction(false, error));
+    EXPECT_EQ(arbiter.state().owner, UpperBodyOwner::ARM_ACTION);
+  }
+}
+
+TEST(G1Ownership, PrepareInitialOwnership)
+{
+  UpperBodyArbiter arbiter;
+  std::string error;
+  EXPECT_TRUE(arbiter.prepareInitialOwnership(error));
+  EXPECT_EQ(arbiter.state().owner, UpperBodyOwner::NONE);
+  EXPECT_TRUE(arbiter.prepareInitialOwnership(error));
+
+  arbiter.fault("test_fault");
+  EXPECT_FALSE(arbiter.prepareInitialOwnership(error));
+}

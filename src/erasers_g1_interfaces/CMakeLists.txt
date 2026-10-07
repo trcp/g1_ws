@@ -14,15 +14,15 @@ find_package(action_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   srv/RobotServiceClient.srv
-  srvs/PosePolicy.srv
-  srvs/AudioClient.srv
-  srvs/MoveServo.srv
+  srv/PosePolicy.srv
+  srv/AudioClient.srv
+  srv/MoveServo.srv
+  srv/RobotPose.srv
+  srv/ArmAction.srv
   action/CartesianEE.action
   action/VuiTTS.action
   action/VuiAudio.action
   action/WhisperRecongnition.action
-  srvs/RobotPose.srv
-  srvs/ArmAction.srv
   DEPENDENCIES geometry_msgs action_msgs
 )
 ament_export_dependencies(rosidl_default_runtime)

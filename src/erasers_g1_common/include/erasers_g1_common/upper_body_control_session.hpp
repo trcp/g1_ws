@@ -19,7 +19,7 @@ struct UpperBodyPolicy
 {
   std::chrono::milliseconds control_period{10};
   std::chrono::milliseconds lowstate_timeout{200};
-  std::chrono::milliseconds fsm_timeout{2000};
+  std::chrono::milliseconds fsm_timeout{3000};
   std::chrono::milliseconds arm_state_timeout{2000};
   std::chrono::milliseconds acquire_duration{1000};
   std::chrono::milliseconds release_duration{1000};

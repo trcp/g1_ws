@@ -6,8 +6,11 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
+        - /MotionPlanning1/Planning Request1
+        - /TF1
+        - /TF1/Frames1
       Splitter Ratio: 0.5
-    Tree Height: 200
+    Tree Height: 156
   - Class: rviz_common/Selection
     Name: Selection
   - Class: rviz_common/Tool Properties
@@ -279,9 +282,9 @@ Visualization Manager:
         TextHeight: 0.07999999821186066
       Planning Request:
         Colliding Link Color: 255; 0; 0
-        Goal State Alpha: 1
+        Goal State Alpha: 0.20000000298023224
         Goal State Color: 250; 128; 0
-        Interactive Marker Size: 0
+        Interactive Marker Size: 0.10000000149011612
         Joint Violation Color: 255; 0; 255
         Planning Group: arm_both_with_waist
         Query Goal State: true
@@ -493,6 +496,146 @@ Visualization Manager:
         Show Robot Visual: true
       Value: true
       Velocity_Scaling_Factor: 1
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Frame Timeout: 15
+      Frames:
+        All Enabled: false
+        base_link:
+          Value: false
+        d435_link:
+          Value: false
+        d455_link:
+          Value: false
+        head_link:
+          Value: false
+        head_servo_link:
+          Value: false
+        imu_in_pelvis:
+          Value: false
+        imu_in_torso:
+          Value: false
+        left_amazing_hand:
+          Value: true
+        left_ankle_pitch_link:
+          Value: false
+        left_ankle_roll_link:
+          Value: false
+        left_elbow_link:
+          Value: false
+        left_hip_pitch_link:
+          Value: false
+        left_hip_roll_link:
+          Value: false
+        left_hip_yaw_link:
+          Value: false
+        left_knee_link:
+          Value: false
+        left_shoulder_pitch_link:
+          Value: false
+        left_shoulder_roll_link:
+          Value: false
+        left_shoulder_yaw_link:
+          Value: false
+        left_wrist_roll_rubber_hand:
+          Value: false
+        livox_frame:
+          Value: false
+        logo_link:
+          Value: false
+        mid360_link:
+          Value: false
+        pelvis:
+          Value: false
+        pelvis_contour_link:
+          Value: false
+        right_amazing_hand:
+          Value: true
+        right_ankle_pitch_link:
+          Value: false
+        right_ankle_roll_link:
+          Value: false
+        right_elbow_link:
+          Value: false
+        right_hip_pitch_link:
+          Value: false
+        right_hip_roll_link:
+          Value: false
+        right_hip_yaw_link:
+          Value: false
+        right_knee_link:
+          Value: false
+        right_shoulder_pitch_link:
+          Value: false
+        right_shoulder_roll_link:
+          Value: false
+        right_shoulder_yaw_link:
+          Value: false
+        right_wrist_roll_rubber_hand:
+          Value: false
+        torso_link:
+          Value: false
+        xl330_link:
+          Value: false
+      Marker Scale: 1
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Tree:
+        base_link:
+          pelvis:
+            imu_in_pelvis:
+              {}
+            left_hip_pitch_link:
+              left_hip_roll_link:
+                left_hip_yaw_link:
+                  left_knee_link:
+                    left_ankle_pitch_link:
+                      left_ankle_roll_link:
+                        {}
+            pelvis_contour_link:
+              {}
+            right_hip_pitch_link:
+              right_hip_roll_link:
+                right_hip_yaw_link:
+                  right_knee_link:
+                    right_ankle_pitch_link:
+                      right_ankle_roll_link:
+                        {}
+            torso_link:
+              d435_link:
+                {}
+              head_link:
+                {}
+              head_servo_link:
+                xl330_link:
+                  d455_link:
+                    {}
+              imu_in_torso:
+                {}
+              left_shoulder_pitch_link:
+                left_shoulder_roll_link:
+                  left_shoulder_yaw_link:
+                    left_elbow_link:
+                      left_wrist_roll_rubber_hand:
+                        left_amazing_hand:
+                          {}
+              livox_frame:
+                {}
+              logo_link:
+                {}
+              mid360_link:
+                {}
+              right_shoulder_pitch_link:
+                right_shoulder_roll_link:
+                  right_shoulder_yaw_link:
+                    right_elbow_link:
+                      right_wrist_roll_rubber_hand:
+                        right_amazing_hand:
+                          {}
+      Update Interval: 0
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -539,7 +682,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.628914475440979
+      Distance: 2.850559949874878
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -554,22 +697,22 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.4903982877731323
+      Pitch: 0.3153986632823944
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 1.1703976392745972
+      Yaw: 0.11037635803222656
     Saved: ~
 Window Geometry:
   Displays:
-    collapsed: false
+    collapsed: true
   Height: 1011
-  Hide Left Dock: false
+  Hide Left Dock: true
   Hide Right Dock: true
   MotionPlanning:
-    collapsed: false
+    collapsed: true
   MotionPlanning - Trajectory Slider:
     collapsed: false
-  QMainWindow State: 000000ff00000000fd0000000400000000000001c700000355fc020000000bfb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073010000003d00000153000000c900fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261fb000000280020002d0020005400720061006a006500630074006f0072007900200053006c00690064006500720000000000ffffffff0000000000000000fb00000044004d006f00740069006f006e0050006c0061006e006e0069006e00670020002d0020005400720061006a006500630074006f0072007900200053006c00690064006500720000000000ffffffff0000004100fffffffb0000001c004d006f00740069006f006e0050006c0061006e006e0069006e00670100000196000001fc0000017d00ffffff000000010000010f000002b0fc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073000000003d000002b0000000a400fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e100000197000000030000073e0000003efc0100000002fb0000000800540069006d006501000000000000073e0000022700fffffffb0000000800540069006d00650100000000000004500000000000000000000005710000035500000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  QMainWindow State: 000000ff00000000fd0000000400000000000001c700000355fc020000000bfb0000001200530065006c0065006300740069006f006e00000001e10000009b0000005c00fffffffb0000001e0054006f006f006c002000500072006f007000650072007400690065007302000001ed000001df00000185000000a3fb000000120056006900650077007300200054006f006f02000001df000002110000018500000122fb000000200054006f006f006c002000500072006f0070006500720074006900650073003203000002880000011d000002210000017afb000000100044006900730070006c006100790073000000003d00000127000000c900fffffffb0000002000730065006c0065006300740069006f006e00200062007500660066006500720200000138000000aa0000023a00000294fb00000014005700690064006500530074006500720065006f02000000e6000000d2000003ee0000030bfb0000000c004b0069006e0065006300740200000186000001060000030c00000261fb000000280020002d0020005400720061006a006500630074006f0072007900200053006c00690064006500720000000000ffffffff0000000000000000fb00000044004d006f00740069006f006e0050006c0061006e006e0069006e00670020002d0020005400720061006a006500630074006f0072007900200053006c00690064006500720000000000ffffffff0000004100fffffffb0000001c004d006f00740069006f006e0050006c0061006e006e0069006e0067000000016a000002280000017d00ffffff000000010000010f000002b0fc0200000003fb0000001e0054006f006f006c002000500072006f00700065007200740069006500730100000041000000780000000000000000fb0000000a00560069006500770073000000003d000002b0000000a400fffffffb0000001200530065006c0065006300740069006f006e010000025a000000b200000000000000000000000200000490000000a9fc0100000001fb0000000a00560069006500770073030000004e00000080000002e100000197000000030000039f0000003efc0100000002fb0000000800540069006d006501000000000000039f0000022700fffffffb0000000800540069006d006501000000000000045000000000000000000000039f0000035500000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
   Selection:
     collapsed: false
   Time:
@@ -578,6 +721,6 @@ Window Geometry:
     collapsed: false
   Views:
     collapsed: true
-  Width: 1854
+  Width: 927
   X: 66
   Y: 32

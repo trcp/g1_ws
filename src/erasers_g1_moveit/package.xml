@@ -13,11 +13,6 @@
   <test_depend>ament_lint_common</test_depend>
 
   <depend>moveit_ros</depend>
-  <depend>moveit_core</depend>
-  <depend>pluginlib</depend>
-  <depend>rviz_common</depend>
-  <depend>moveit_ros_visualization</depend>
-  <depend>qtbase5-dev</depend>
   <depend>moveit_planners_ompl</depend>
   <depend>moveit_simple_controller_manager</depend>
   <depend>pick_ik</depend>

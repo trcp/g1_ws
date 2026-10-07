@@ -312,6 +312,7 @@ install(TARGETS robot_controller robot_manager vui_client robot_service_interfac
 install(TARGETS erasers_g1_runtime robot_service_interface_client_lib EXPORT export_g1_runtime
   LIBRARY DESTINATION lib ARCHIVE DESTINATION lib RUNTIME DESTINATION bin)
 install(DIRECTORY audio config DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY include/ DESTINATION include)
 ament_export_targets(export_g1_runtime HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
 ament_export_dependencies(rclcpp rclcpp_action unitree_api unitree_hg
@@ -322,7 +323,8 @@ if(BUILD_TESTING)
   find_package(OpenSSL REQUIRED)
   foreach(test_name
     test_audio_playback_monitor test_mic_udp_receiver test_wav_audio_converter
-    test_unitree_api_client_executor test_fan_noise_reducer test_g1_control)
+    test_unitree_api_client_executor test_fan_noise_reducer test_g1_control
+    test_led_control)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} erasers_g1_runtime OpenSSL::Crypto)
     set_tests_properties(${test_name} PROPERTIES RUN_SERIAL TRUE

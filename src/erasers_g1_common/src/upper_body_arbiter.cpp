@@ -29,9 +29,14 @@ bool UpperBodyArbiter::reserveJointState(std::string & reason)
       reason = "FAULT_LATCHED: disable or release acknowledgement required";
       return false;
     }
-  } else if (state_.owner != UpperBodyOwner::NONE || state_.phase != UpperBodyPhase::READY) {
-    reason = "BUSY: upper body ownership is unavailable";
-    return false;
+  } else {
+    if (state_.owner == UpperBodyOwner::UNKNOWN) {
+      tryAssumeIdleFromUnknown();
+    }
+    if (state_.owner != UpperBodyOwner::NONE || state_.phase != UpperBodyPhase::READY) {
+      reason = "BUSY: upper body ownership is unavailable";
+      return false;
+    }
   }
 
   state_.owner = UpperBodyOwner::JOINT_STATE;
@@ -117,6 +122,9 @@ bool UpperBodyArbiter::reserveArmAction(bool is_release, std::string & reason)
     reason = "LOCAL_REJECT: UPPER_BODY_JOINT_STATE_OWNS_CONTROL";
     return false;
   }
+  if (state_.owner == UpperBodyOwner::UNKNOWN) {
+    tryAssumeIdleFromUnknown();
+  }
   if (state_.phase == UpperBodyPhase::FAULT || state_.owner == UpperBodyOwner::UNKNOWN) {
     reason = "LOCAL_REJECT: UPPER_BODY_OWNERSHIP_UNKNOWN";
     return false;
@@ -145,6 +153,35 @@ void UpperBodyArbiter::observeRemoteNormal()
   if (state_.phase == UpperBodyPhase::READY && !state_.enabled_intent) {
     state_.owner = UpperBodyOwner::NONE;
   }
+}
+
+bool UpperBodyArbiter::tryAssumeIdleFromUnknown()
+{
+  if (state_.phase == UpperBodyPhase::READY &&
+    state_.owner == UpperBodyOwner::UNKNOWN &&
+    !state_.enabled_intent &&
+    !state_.abort_requested)
+  {
+    state_.owner = UpperBodyOwner::NONE;
+    return true;
+  }
+  return false;
+}
+
+bool UpperBodyArbiter::prepareInitialOwnership(std::string & reason)
+{
+  if (state_.phase == UpperBodyPhase::FAULT) {
+    reason = "FAULT_LATCHED: disable or release acknowledgement required";
+    return false;
+  }
+  if (state_.owner == UpperBodyOwner::NONE) {
+    return true;
+  }
+  if (state_.owner == UpperBodyOwner::UNKNOWN && tryAssumeIdleFromUnknown()) {
+    return true;
+  }
+  reason = "BUSY: upper body ownership is unavailable";
+  return false;
 }
 
 void UpperBodyArbiter::markUnknown(const std::string & reason)

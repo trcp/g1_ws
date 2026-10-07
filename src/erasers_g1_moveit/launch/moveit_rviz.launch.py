@@ -1,14 +1,13 @@
+#!/usr/bin/env python3
 """MoveIt のモデル・設定を渡した RViz2 のみを起動する."""
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
-from launch.event_handlers import OnShutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import os
-import tempfile
 import xacro
 import yaml
 
@@ -41,25 +40,7 @@ def _node(context):
          'use_sim_time': sim_time},
     ]
     rviz_config = os.path.join(share, 'rviz', 'moveit.rviz')
-    cleanup = []
-    if mock:
-        with open(rviz_config, encoding='utf-8') as stream:
-            config = yaml.safe_load(stream)
-        for display in config['Visualization Manager']['Displays']:
-            if display.get('Class') == 'moveit_rviz_plugin/MotionPlanning':
-                display['Class'] = 'erasers_g1_moveit/CoordinatedMotionPlanning'
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.rviz', delete=False) as stream:
-            yaml.safe_dump(config, stream, allow_unicode=True)
-            rviz_config = stream.name
-
-        def remove_config(_context):
-            if os.path.exists(rviz_config):
-                os.unlink(rviz_config)
-            return []
-
-        cleanup.append(RegisterEventHandler(OnShutdown(
-            on_shutdown=[OpaqueFunction(function=remove_config)])))
-    return cleanup + [Node(
+    return [Node(
         package='rviz2', executable='rviz2', name='rviz2',
         arguments=['-d', rviz_config],
         parameters=parameters, condition=IfCondition(LaunchConfiguration('use_rviz')),

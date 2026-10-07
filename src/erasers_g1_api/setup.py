@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os
-from glob import glob
 from setuptools import find_packages, setup
 
 package_name = 'erasers_g1_api'
@@ -13,12 +12,17 @@ data_files.append(("share/" + package_name, ["package.xml"]))
 
 
 def package_files(directory, data_files):
+    """ディレクトリ階層を保って，実ファイルを一度ずつインストールする．"""
     for path, directories, filenames in os.walk(directory):
-        for filename in filenames:
+        directories[:] = [name for name in directories
+                          if not name.startswith('.') and name != '__pycache__']
+        files = [os.path.join(path, name) for name in filenames
+                 if not name.startswith('.') and not name.endswith(('.pyc', '.swp'))]
+        if files:
             data_files.append(
                 (
                     "share/" + package_name + "/" + path,
-                    glob(path + "/**/*.*", recursive=True),
+                    files,
                 )
             )
     return data_files
@@ -49,6 +53,9 @@ setup(
             'sample_whisper_recongnition = samples.sample_whisper_recongnition:main',
             'whisper_node = nodes.whisper_node:main',
             'emergency_stop_announcer = nodes.emergency_stop_announcer:main',
+            'sample_robot_pose = samples.sample_robot_pose:main',
+            'sample_robot_service_client = samples.sample_robot_service_client:main',
+            'sample_led = samples.sample_led:main',
             'sample_head_control = samples.sample_head_control:main',
             'sample_hand_control = samples.sample_hand_control:main',
             'sample_amazing_hand_control = samples.sample_amazing_hand_control:main',
@@ -59,6 +66,7 @@ setup(
             'sample_voice_recongnition = samples.sample_state_voice_recong:main',
             'sample_gemini = samples.sample_state_gemini:main',
             'sample_wait_push_hand = samples.sample_state_wait_push_hand:main',
+            'sample_object_grasp = samples.manipulation.sample_object_grasp:main'
         ],
     },
 )

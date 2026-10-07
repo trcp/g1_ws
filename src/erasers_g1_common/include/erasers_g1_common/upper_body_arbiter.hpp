@@ -54,6 +54,8 @@ public:
   bool reserveArmAction(bool is_release, std::string & reason);
   void completeArmAction(bool holding);
   void observeRemoteNormal();
+  bool tryAssumeIdleFromUnknown();
+  bool prepareInitialOwnership(std::string & reason);
   void markUnknown(const std::string & reason);
 
   void fault(const std::string & reason);

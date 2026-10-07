@@ -1,7 +1,0 @@
-<library path="coordinated_motion_planning_display">
-  <class name="erasers_g1_moveit/CoordinatedMotionPlanning"
-         type="erasers_g1_moveit::CoordinatedMotionPlanningDisplay"
-         base_class_type="rviz_common::Display">
-    <description>双腕の目標を一つの共通マーカーで操作する MotionPlanning 表示</description>
-  </class>
-</library>

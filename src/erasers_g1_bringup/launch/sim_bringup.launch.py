@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """実機通信を起動しない G1 上半身の仮想検証環境."""
 
 from launch import LaunchDescription
@@ -15,6 +16,7 @@ def generate_launch_description():
 
     # 既定値
     description_share = get_package_share_directory('erasers_g1_description')
+    hw_controller_share = get_package_share_directory('erasers_g1_hw_controller')
     moveit_share = get_package_share_directory('erasers_g1_moveit')
     default_model = os.path.join(description_share, 'urdf', 'erasers_g1.urdf.xacro')
 
@@ -43,6 +45,14 @@ def generate_launch_description():
             'use_sim_time': use_sim_time, 'use_rviz': 'false',
         }.items(),
     )
+    controller = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(hw_controller_share, 'launch', 'controller.launch.py')),
+        launch_arguments={
+            'robot_model': robot_model, 'use_mock_hardware': use_mock_hardware,
+            'use_sim_time': use_sim_time,
+        }.items(),
+    )
     moveit = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(moveit_share, 'launch', 'moveit_control_bringup.launch.py')),
@@ -68,6 +78,7 @@ def generate_launch_description():
     ld.add_action(clock)
     # 子 Launch の use_rviz などを親・兄弟へ漏らさない。
     ld.add_action(GroupAction(actions=[display], scoped=True))
+    ld.add_action(GroupAction(actions=[controller], scoped=True))
     ld.add_action(GroupAction(actions=[moveit], scoped=True))
 
     return ld

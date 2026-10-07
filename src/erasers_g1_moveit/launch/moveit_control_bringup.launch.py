@@ -14,7 +14,6 @@ import os
 def generate_launch_description():
     ld = LaunchDescription()
 
-
     # default variables
     pkg_share_dir = get_package_share_directory('erasers_g1_moveit')
     erasers_g1_description_pkg_share_dir = get_package_share_directory('erasers_g1_description')
@@ -23,14 +22,12 @@ def generate_launch_description():
     default_move_group_launch = os.path.join(pkg_share_dir, 'launch', 'move_group.launch.py')
     default_moveit_rviz_launch = os.path.join(pkg_share_dir, 'launch', 'moveit_rviz.launch.py')
 
-
     # launch configurations
     robot_model = LaunchConfiguration('robot_model')
     use_mock_hardware = LaunchConfiguration('use_mock_hardware')
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_rviz = LaunchConfiguration('use_rviz')
     auto_enable_upper_body = LaunchConfiguration('auto_enable_upper_body')
-
 
     # launch arguments
     declare_robot_model = DeclareLaunchArgument(
@@ -75,7 +72,6 @@ def generate_launch_description():
     ld.add_action(declare_auto_enable_upper_body)
     ld.add_action(declare_start_robot_controller)
 
-
     # include launch
     include_move_group = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(default_move_group_launch),
@@ -97,7 +93,6 @@ def generate_launch_description():
     ld.add_action(include_move_group)
     ld.add_action(include_visualizer)
 
-
     # nodes
     # HW の中継サービスを使い、robot_controller の排他・停止判定を維持する。
     enable_upper_body_control = Node(
@@ -114,6 +109,4 @@ def generate_launch_description():
     )
     ld.add_action(enable_upper_body_control)
 
-
     return ld
-
