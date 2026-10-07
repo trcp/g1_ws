@@ -420,7 +420,8 @@ def generate_launch_description():
         parameters=[{
             'run_detect': True,
             'model_path': '/tmp/yolo26l-seg.pt',
-            'device': ParameterValue(object_device, value_type=str),
+            'device': 'cuda',
+            'confidence': 0.45,
             'use_sim_time': False,
         }],
     )
