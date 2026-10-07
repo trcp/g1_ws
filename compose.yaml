@@ -94,7 +94,7 @@ services:
       - DX_PATH=/dev/ttyCH341USB0
       - USE_EMC=true
       - USE_HEAD_CAMERA=true
-      - USE_AMAZING_HAND=false
+      - USE_AMAZING_HAND=true
       # GPU settings. DO NOT EDIT
       - XAUTHORITY=/tmp/.docker.xauth
       - NVIDIA_DRIVER_CAPABILITIES=all
