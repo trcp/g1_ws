@@ -1,2 +1,0 @@
-/usr/bin/ar qc libonnxruntime_lora.a CMakeFiles/onnxruntime_lora.dir/tmp/onnxruntime/onnxruntime/lora/adapter_format_utils.cc.o
-/usr/bin/ranlib libonnxruntime_lora.a

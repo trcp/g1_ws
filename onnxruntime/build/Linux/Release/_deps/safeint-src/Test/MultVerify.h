@@ -1,5 +1,0 @@
-
-namespace mult_verify
-{
-
-}

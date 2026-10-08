@@ -1,3 +1,0 @@
-/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/CMakeFiles/kleidiai-populate.dir
-/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/CMakeFiles/edit_cache.dir
-/tmp/onnxruntime/build/Linux/Release/_deps/kleidiai-subbuild/CMakeFiles/rebuild_cache.dir

@@ -1,1 +1,0 @@
-/usr/bin/c++  -ffunction-sections -fdata-sections -DCPUINFO_SUPPORTED -O3 -DNDEBUG CMakeFiles/mock.dir/contrib/mock_main.cc.o CMakeFiles/mock.dir/contrib/mock_c.c.o -o /tmp/onnxruntime/build/Linux/Release/_deps/dlpack-src/bin/mock

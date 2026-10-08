@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/tmp/onnxruntime/build/Linux/Release/_deps/mp11-subbuild/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

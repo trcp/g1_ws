@@ -1,2 +1,0 @@
-/usr/bin/ar qc libonnxruntime_flatbuffers.a CMakeFiles/onnxruntime_flatbuffers.dir/tmp/onnxruntime/onnxruntime/core/flatbuffers/flatbuffers_utils.cc.o
-/usr/bin/ranlib libonnxruntime_flatbuffers.a
