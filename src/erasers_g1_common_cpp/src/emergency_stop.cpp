@@ -19,11 +19,14 @@ public:
   EmergencyStopNode()
   : Node("emergency_stop_node"), prev_button_state_(false), is_processing_(false), 
     is_armed_(false), initial_warning_sent_(false), safety_active_(false),
-    restart_warning_active_(false)
+    restart_warning_active_(false), joy_received_(false), joy_timed_out_(false)
   {
     this->declare_parameter<int>("emc_button_index", 0);
     this->declare_parameter<std::string>("emc_pose", "damp");
     this->declare_parameter<bool>("enable_zero_torque", true);
+    this->declare_parameter<double>("joy_timeout_sec", 1.0);
+
+    last_joy_time_ = this->now();
 
     joy_sub_ = this->create_subscription<sensor_msgs::msg::Joy>(
       "/emc/joy", 10, std::bind(&EmergencyStopNode::joy_callback, this, _1));
@@ -42,6 +45,8 @@ public:
       50ms, std::bind(&EmergencyStopNode::publish_safety_zero_cmd, this));
     restart_warning_timer_ = this->create_wall_timer(
       10s, std::bind(&EmergencyStopNode::publish_restart_warning_tts, this));
+    watchdog_timer_ = this->create_wall_timer(
+      50ms, std::bind(&EmergencyStopNode::check_joy_timeout, this));
 
     RCLCPP_INFO(this->get_logger(), "Emergency Stop Node has been started.");
   }
@@ -49,6 +54,13 @@ public:
 private:
   void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
   {
+    last_joy_time_ = this->now();
+    joy_received_ = true;
+    if (joy_timed_out_) {
+      RCLCPP_INFO(this->get_logger(), "Communication with /emc/joy restored.");
+      joy_timed_out_ = false;
+    }
+
     int button_index = this->get_parameter("emc_button_index").as_int();
 
     if (button_index < 0 || button_index >= static_cast<int>(msg->buttons.size())) {
@@ -90,6 +102,30 @@ private:
   {
     if (msg->keys == 192) {
       execute_emergency_sequence("REMOTE CONTROLLER");
+    }
+  }
+
+  void check_joy_timeout()
+  {
+    if (!is_armed_ || !joy_received_) {
+      return;
+    }
+
+    double timeout_sec = this->get_parameter("joy_timeout_sec").as_double();
+    if (timeout_sec <= 0.0) {
+      return;
+    }
+
+    double elapsed = (this->now() - last_joy_time_).seconds();
+    if (elapsed > timeout_sec) {
+      if (!joy_timed_out_) {
+        joy_timed_out_ = true;
+        RCLCPP_ERROR(
+          this->get_logger(),
+          "Lost communication with /emc/joy! (Elapsed: %.2f s > Timeout: %.2f s). Triggering emergency stop sequence.",
+          elapsed, timeout_sec);
+        execute_emergency_sequence("JOY WATCHDOG TIMEOUT");
+      }
     }
   }
 
@@ -179,6 +215,11 @@ private:
 
   void publish_restart_warning_tts()
   {
+    if (joy_timed_out_) {
+      send_tts_request("Emergency button is Disconnected. Please reconnect it then restart container.");
+      return;
+    }
+
     if (!restart_warning_active_) {
       return;
     }
@@ -248,15 +289,19 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr zero_cmd_vel_pub_;
   rclcpp::TimerBase::SharedPtr zero_cmd_timer_;
   rclcpp::TimerBase::SharedPtr restart_warning_timer_;
+  rclcpp::TimerBase::SharedPtr watchdog_timer_;
   rclcpp::Client<g1_srvs::srv::PosePolicy>::SharedPtr pose_policy_client_;
   rclcpp::Client<g1_srvs::srv::AudioClient>::SharedPtr audio_client_;
-  
+
+  rclcpp::Time last_joy_time_;
   bool prev_button_state_;
   bool is_processing_;    
   bool is_armed_;
   bool initial_warning_sent_;
   bool safety_active_;
   bool restart_warning_active_;
+  bool joy_received_;
+  bool joy_timed_out_;
 };
 
 int main(int argc, char * argv[])
