@@ -6,7 +6,9 @@ import time
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Bool
 
 from dynamixel_sdk import COMM_SUCCESS, PacketHandler, PortHandler
 from g1_srvs.srv import MoveServo
@@ -85,6 +87,7 @@ class HeadServoNode(Node):
         self.port_open = False
         self.is_connected = False
         self.last_connect_attempt = 0.0
+        self.is_emergency_stop = False
 
         self.joint_state_pub = self.create_publisher(
             JointState, '/joint_states', 10)
@@ -95,6 +98,17 @@ class HeadServoNode(Node):
             10)
         self.create_service(
             MoveServo, '/move_servo', self._move_servo_callback)
+
+        emergency_stop_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE)
+        self.create_subscription(
+            Bool,
+            '/emergency_stop/active',
+            self._emergency_stop_callback,
+            emergency_stop_qos)
+
         self.create_timer(1.0 / publish_rate, self._timer_callback)
 
         self.get_logger().info(
@@ -112,9 +126,32 @@ class HeadServoNode(Node):
             return normalized
         return value
 
+    def _emergency_stop_callback(self, msg: Bool) -> None:
+        self.is_emergency_stop = bool(msg.data)
+        if self.is_emergency_stop:
+            self.get_logger().warn(
+                'Emergency stop active received. Disabling head servo torque.')
+            self._disable_torque()
+        else:
+            self.get_logger().info('Emergency stop deactivated.')
+
+    def _disable_torque(self) -> None:
+        if not self.port_open:
+            return
+        for dxl_id, label in ((self.pan_id, 'pan'), (self.tilt_id, 'tilt')):
+            self._write1(
+                dxl_id,
+                ADDR_TORQUE_ENABLE,
+                TORQUE_OFF,
+                f'{label} emergency torque off',
+            )
+
     def _connect(self, force: bool = False) -> bool:
         if self.is_connected:
             return True
+
+        if self.is_emergency_stop:
+            return False
 
         now = time.monotonic()
         if (
@@ -238,6 +275,9 @@ class HeadServoNode(Node):
         return value
 
     def _write_position(self, dxl_id: int, goal_pulse: int) -> bool:
+        if self.is_emergency_stop:
+            return False
+
         if not self._connect():
             return False
 
@@ -331,6 +371,8 @@ class HeadServoNode(Node):
         return ok
 
     def _joint_command_callback(self, msg: JointState) -> None:
+        if self.is_emergency_stop:
+            return
         success = True
         for name, pos_rad in zip(msg.name, msg.position):
             if name == PAN_JOINT_NAME:
@@ -342,6 +384,9 @@ class HeadServoNode(Node):
                 'Failed to apply one or more joint commands')
 
     def _move_servo_callback(self, request, response):
+        if self.is_emergency_stop:
+            response.success = False
+            return response
         pan_ok = self._command_pan(request.pan)
         tilt_ok = self._command_tilt(request.tilt)
         response.success = bool(pan_ok and tilt_ok)
