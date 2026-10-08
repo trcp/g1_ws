@@ -21,6 +21,7 @@ import rclpy
 
 # ROS 2 interfaces
 from erasers_g1_interfaces.srv import RobotServiceClient, RobotPose, MoveServo, ArmAction
+from amazing_hand_interfaces.srv import HandCommand
 from moveit_msgs.msg import (
     PlanningScene,
     CollisionObject,
@@ -1363,6 +1364,9 @@ class ArmControl:
 
         self.__cb_group = MutuallyExclusiveCallbackGroup()
 
+        self.__hand_cli = self.__node.create_client(
+            HandCommand, "/hand_command", callback_group=self.__cb_group)
+
         self.__arm_action_cli = self.__node.create_client(
             ArmAction,
             "/arm_action",
@@ -2189,6 +2193,48 @@ class ArmControl:
         return latest_joints if latest_joints is not None else {}
 
 
+    def hand_control(self, command: str = "walk", hand: str = "both") -> bool:
+        """既存の定型ハンド操作を送信する．任意角度・トルク指定には対応しない．
+
+        command は open，close，walk，progressive，hand は left，right，
+        both を受け付ける．成功はサービス応答を表し，保持力や到達角度の
+        実測確認を意味しない．タイムアウト時は自動再送しない．
+        """
+        if not isinstance(command, str) or not isinstance(hand, str):
+            self.__logger.error("command と hand は文字列で指定してください．")
+            return False
+        command, hand = command.strip().lower(), hand.strip().lower()
+        if command not in ("open", "close", "walk", "progressive") or hand not in (
+                "left", "right", "both"):
+            self.__logger.error("ハンド操作コマンドまたは左右指定が不正です．")
+            return False
+        future = None
+        try:
+            if not self.__hand_cli.wait_for_service(timeout_sec=self.__timeout_sec):
+                self.__logger.error("/hand_command が利用できません．")
+                return False
+            request = HandCommand.Request()
+            request.command, request.hand = command, hand
+            future = self.__hand_cli.call_async(request)
+            rclpy.spin_until_future_complete(
+                self.__node, future, timeout_sec=self.__timeout_sec)
+            if not future.done() or future.cancelled():
+                self.__logger.error("ハンド指令の応答を確認できません．実機状態は未確認です．")
+                return False
+            response = future.result()
+            if response is None or not response.success:
+                self.__logger.error(
+                    f"ハンド指令が失敗しました: {response.message if response else '応答なし'}")
+                return False
+            return True
+        except Exception as exc:
+            self.__logger.error(f"ハンド制御で例外が発生しました: {exc}")
+            return False
+        finally:
+            if future is not None and not future.done():
+                future.cancel()
+
+
     def arm_action(self, mode: int) -> bool:
         """Unitree プリセット腕動作を実行する．
 
@@ -2213,13 +2259,18 @@ class ArmControl:
         return self.__send_arm_action_req(req)
 
 
-    def upper_body_control(self, enable: bool) -> bool:
+    def upper_body_control(
+        self, enable: bool, *, recover_fault: bool = True
+    ) -> bool:
         """上半身の関節制御権限の有効化・無効化を切り替える．
 
         Parameters
         ----------
         enable : bool
             制御を有効化する場合は True，無効化（脱力・保持解除）する場合は False．
+        recover_fault : bool, default True
+            有効化失敗時の無効化・再有効化を許可する．
+            False の場合は最初の失敗を返し，自動復旧しない．
 
         Returns
         -------
@@ -2240,7 +2291,7 @@ class ArmControl:
         req.data = bool(enable)
         ok = self.__send_upper_enable_req(req)
         # FAULT_LATCHED 等で有効化に失敗した場合は，一度 disable を送ってフォルトをリセットし再試行
-        if not ok and enable:
+        if not ok and enable and recover_fault:
             self.__logger.info("Attempting fault acknowledgment/reset before re-enabling upper body...")
             reset_req = SetBool.Request()
             reset_req.data = False

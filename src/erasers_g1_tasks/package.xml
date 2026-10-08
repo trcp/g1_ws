@@ -17,6 +17,7 @@
 
   <depend>erasers_g1_bringup</depend>
   <depend>erasers_g1_api</depend>
+  <exec_depend>rclpy</exec_depend>
   <depend>smach_ros</depend>
 
   <depend>erasers_g1_machida_navigation</depend>

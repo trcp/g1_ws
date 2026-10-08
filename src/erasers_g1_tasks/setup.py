@@ -45,6 +45,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'demo_ceatec = erasers_g1_tasks.demo_ceatec:main',
             'robot_inspection = erasers_g1_tasks.robot_inspection:main',
             'restaurant_task = erasers_g1_tasks.restaurant:main',
             'test = erasers_g1_tasks.test:main'
