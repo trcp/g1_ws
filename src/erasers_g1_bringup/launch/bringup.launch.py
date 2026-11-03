@@ -366,6 +366,11 @@ def generate_launch_description():
         output='screen',
         emulate_tty=True,
     )
+    bringup = Node(
+        package='erasers_g1_tasks',
+        executable='bringup',
+        emulate_tty=True
+    )
     whisper_node = Node(
         package='erasers_g1_api',
         executable='whisper_node',
@@ -452,6 +457,7 @@ def generate_launch_description():
     ld.add_action(emc_joy)
     ld.add_action(odom)
     ld.add_action(scan)
+    ld.add_action(bringup)
     ld.add_action(whisper_node)
     ld.add_action(person_pose)
     ld.add_action(person_pose_3d)
