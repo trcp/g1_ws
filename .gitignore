@@ -5,6 +5,7 @@ log/**
 !build/.gitkeep
 !install/.gitkeep
 !log/.gitkeep
+/src/depends
 
 
 # Python
