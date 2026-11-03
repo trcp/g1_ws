@@ -11,8 +11,14 @@
 
   <depend>rosbag2_storage_mcap</depend>
   <depend>rosidl_generator_dds_idl</depend>
-  <!--depend>unitree_ros2_example</depend-->
   <depend>nakalab_realsense</depend>
+  <depend>nakalab_ultralytics_ros2</depend>
+  <depend>lidar_localization_ros2</depend>
+  <depend>glim_ros</depend>
+  <depend>emcl2</depend>
+  <depend>unitree_go</depend>
+  <depend>unitree_hg</depend>
+  <depend>voicevox_ros2</depend>
   <depend>amazing_hand_nodes</depend>
   <depend>erasers_g1_common</depend>
   <depend>erasers_g1_api</depend>
@@ -22,8 +28,11 @@
   <depend>erasers_g1_cartographer</depend>
   <depend>erasers_g1_navigation</depend>
   <depend>erasers_g1_moveit</depend>
-  <!--depend>g1_slam</depend-->
   <depend>erasers_g1_head_servo_controller</depend>
+  <depend>erasers_g1_obstacle_detection</depend>
+  <depend>erasers_g1_person_tracker</depend>
+  <depend>erasers_g1_machida_navigation</depend>
+  <depend>erasers_g1_machida_navigation</depend>
   <depend>erasers_g1_tasks</depend>
 
   <test_depend>ament_lint_auto</test_depend>

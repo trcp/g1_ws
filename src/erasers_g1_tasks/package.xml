@@ -15,12 +15,15 @@
   <depend>nakalab_ultralytics_ros2</depend>
   <!--depend>sam3_ros</depend-->
 
-  <depend>erasers_g1_bringup</depend>
-  <depend>erasers_g1_api</depend>
   <exec_depend>rclpy</exec_depend>
-  <depend>smach_ros</depend>
 
-  <depend>erasers_g1_machida_navigation</depend>
+  <depend>erasers_g1_api</depend>
+  <depend>smach_ros</depend>
+  <depend>erasers_g1_interfaces</depend>
+  <depend>amazing_hand_interfaces</depend>
+  <depend>nakalab_ultralytics_interfaces</depend>
+  <depend>nakalab_ultralytics_api</depend>
+  <depend>rclpy_util</depend>
 
   <export>
     <build_type>ament_python</build_type>
