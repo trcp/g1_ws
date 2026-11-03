@@ -47,3 +47,5 @@ cache/**
 onnxruntime/include/**
 onnxruntime/build/**
 !onnxruntime/build/.gitkeep
+
+.DS_Store
