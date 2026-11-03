@@ -394,7 +394,7 @@ def generate_launch_description():
         emulate_tty=True,
         remappings=person_pose_remappings,
         parameters=[
-            {'run_detect': True},
+            {'run_detect': False},
             {'model_path':'/tmp/yolo26l-pose.pt'}
         ],
     )
@@ -423,7 +423,7 @@ def generate_launch_description():
         emulate_tty=True,
         remappings=object_seg_pose_remappings,
         parameters=[{
-            'run_detect': True,
+            'run_detect': False,
             'model_path': '/tmp/yolo26l-seg.pt',
             'device': 'cuda',
             'confidence': 0.45,
@@ -442,6 +442,7 @@ def generate_launch_description():
             'use_sim_time': False,
         }],
     )
+    ld.add_action(bringup)
     ld.add_action(head_camera)
     ld.add_action(head_servo)
     ld.add_action(hand)
@@ -457,7 +458,6 @@ def generate_launch_description():
     ld.add_action(emc_joy)
     ld.add_action(odom)
     ld.add_action(scan)
-    ld.add_action(bringup)
     ld.add_action(whisper_node)
     ld.add_action(person_pose)
     ld.add_action(person_pose_3d)

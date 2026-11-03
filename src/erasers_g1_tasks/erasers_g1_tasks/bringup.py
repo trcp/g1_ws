@@ -6,6 +6,8 @@ from erasers_g1_api.robot_control import G1Control, HeadControl
 from erasers_g1_api.tts import VoicevoxTTS
 
 import time
+import traceback
+import os
 
 
 LED =[
@@ -17,6 +19,7 @@ LED =[
     [0, 130, 75],
     [143, 255, 0]
 ]
+USE_HEAD = os.environ.get('USE_HEAD_CAMERA', 'false').lower().strip('\'"') == 'true'
 
 
 def led_status_cb():
@@ -36,9 +39,12 @@ def main():
     led_status_timer = node.create_timer(0.3, led_status_cb)
 
     # init APIs
-    tts = VoicevoxTTS(node)
-    robot_control = G1Control(node)
-    head_control = HeadControl(node)
+    try:
+        tts = VoicevoxTTS(node)
+        robot_control = G1Control(node)
+        head_control = HeadControl(node)
+    except Exception:
+        node.get_logger().warn('Failure bringup API...\n%s'%traceback.format_exc())
 
     # LiDAR 再起動
     node.get_logger().info('Reboot LiDAR sensor ...')
@@ -47,7 +53,7 @@ def main():
 
     # 頭部センサーの状態を確認
     head_motor = [None, None]
-    while head_motor[0] is None and head_motor[1] is None:
+    while head_motor[0] is None and head_motor[1] is None and USE_HEAD:
         head_motor = head_control.get_current_pose()
 
     # 起動成功時に発話
