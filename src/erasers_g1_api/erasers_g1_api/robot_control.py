@@ -583,7 +583,7 @@ class HeadControl:
         Returns
         -------
         List[float]
-            現在の [pan, tilt] 角度（ラジアン）．取得失敗時は [0.0, 0.0]．
+            現在の [pan, tilt] 角度（ラジアン）．取得失敗時は [None, None]．
         """
         angles: Optional[List[float]] = None
 
@@ -617,7 +617,7 @@ class HeadControl:
                     break
                 rclpy.spin_once(self.__node, timeout_sec=0.05)
 
-        return angles if angles is not None else [0.0, 0.0]
+        return angles if angles is not None else [None, None]
 
 
     def gaze(self, target: Union[str, PoseStamped], wait: bool = True) -> bool:
