@@ -67,7 +67,7 @@ ssh unitree@192.168.123.164
     docker compose run --rm \
         --name erasers_g1_bringup \
         erasers_g1 bash -ic \
-        "ros2 launch erasers_G1_bringup bringup.launch.py"
+        "ros2 launch erasers_g1_bringup bringup.launch.py"
     ```
 
 ---
