@@ -151,7 +151,7 @@ def generate_launch_description():
     )
     declare_person_sensor_fusion = DeclareLaunchArgument(
         'person_sensor_fusion',
-        default_value='pointcloud',
+        default_value='depth',
         description='3D 人物位置算出のソース',
         choices=['depth', 'pointcloud'],
     )
