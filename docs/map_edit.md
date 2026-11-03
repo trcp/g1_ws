@@ -19,7 +19,10 @@
     ```bash
     python3 src/mapeditor.py
     ```
-    　次のようなエディタが起動したら成功です．
+    　次のようなエディタが起動したら成功です．一方，以下のエラーが発生したらディスプレイが共有されていないので，`ssh` コマンドを見直してください．
+    ```
+    _tkinter.TclError: no display name and no $DISPLAY environment variable
+    ```
     <br><img width=80% src="https://i.imgur.com/qqrrifC.png"/>
 
 1. 「Load」ボタンを押してマップを読み込みます．<br>
