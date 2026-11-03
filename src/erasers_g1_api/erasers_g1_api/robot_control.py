@@ -209,7 +209,7 @@ class G1Control:
         ロボット頭部の RGB LED の発色を変更する．
     """
 
-    def __init__(self, node: Node, timeout_sec: float = 5.0) -> None:
+    def __init__(self, node: Node, timeout_sec: float = 30.0) -> None:
         """API クラスのインスタンスを初期化する．
 
         Parameters
@@ -254,7 +254,7 @@ class G1Control:
             or not self.__service_setting_cli.wait_for_service(timeout_sec=self.__timeout_sec)
         ):
             self.__logger.error("Required services (/robot_pose, /robot_service_interface) are not available.")
-            #raise RuntimeError("Failed to connect to required ROS 2 services for G1Control.")
+            raise RuntimeError("Failed to connect to required ROS 2 services for G1Control.")
 
 
     def __send_robot_pose_req(self, req: RobotPose.Request) -> bool:
@@ -493,7 +493,7 @@ class HeadControl:
 
         while not self.__servo_cli.wait_for_service(timeout_sec=self.__timeout_sec):
             self.__logger.error("Required service /move_servo is not available.")
-            #raise RuntimeError("Failed to connect to /move_servo service for HeadControl.")
+            raise RuntimeError("Failed to connect to /move_servo service for HeadControl.")
 
 
     def __send_servo_req(self, req: MoveServo.Request) -> bool:
