@@ -19,6 +19,7 @@ ADDR_OPERATING_MODE = 11
 ADDR_CURRENT_LIMIT = 38
 ADDR_TORQUE_ENABLE = 64
 ADDR_HARDWARE_ERROR_STATUS = 70
+ADDR_GOAL_CURRENT = 102
 ADDR_PROFILE_VELOCITY = 112
 ADDR_GOAL_POSITION = 116
 ADDR_MOVING = 122
@@ -26,13 +27,21 @@ ADDR_PRESENT_CURRENT = 126
 ADDR_PRESENT_POSITION = 132
 
 OPERATING_MODE_POSITION = 3
+OPERATING_MODE_CURRENT_BASED_POSITION = 5
 TORQUE_OFF = 0
 TORQUE_ON = 1
 
+# XL330 Hardware Error Status bits (Address 70)
+# Ref: https://emanual.robotis.com/docs/en/dxl/x/xl330-m288/#hardware-error-status70
+HW_ERR_INPUT_VOLTAGE = 0x01
+HW_ERR_OVERHEATING = 0x04
+HW_ERR_ELECTRICAL_SHOCK = 0x10
+HW_ERR_OVERLOAD = 0x20
+
 PULSE_PER_REV = 4096
 RAD_PER_PULSE = 2.0 * math.pi / PULSE_PER_REV
-MIN_POSITION_PULSE = 0
-MAX_POSITION_PULSE = PULSE_PER_REV - 1
+MIN_EXTENDED_PULSE = -1048575
+MAX_EXTENDED_PULSE = 1048575
 RECONNECT_PERIOD_SEC = 1.0
 
 PAN_JOINT_NAME = 'xl330_joint'
@@ -48,23 +57,24 @@ class HeadServoNode(Node):
         self.declare_parameter('pan_id', 1)
         self.declare_parameter('tilt_id', 2)
         self.declare_parameter('publish_rate', 10.0)
+        self.declare_parameter('normal_current_limit_mA', 600)
         self.declare_parameter('auto_calibrate', True)
         self.declare_parameter('calib_velocity', 60)
         self.declare_parameter('calib_step_pulse', 8)
-        self.declare_parameter('calib_current_limit_mA', 150)
-        self.declare_parameter('calib_current_threshold_mA', 120)
+        self.declare_parameter('calib_current_limit_mA', 160)
+        self.declare_parameter('calib_current_threshold_mA', 125)
         self.declare_parameter('calib_stall_count_threshold', 3)
         self.declare_parameter('calib_backoff_pulse', 25)
-        self.declare_parameter('calib_timeout_sec', 15.0)
-        self.declare_parameter('pan_zero', 943)
-        self.declare_parameter('tilt_zero', 861)
+        self.declare_parameter('calib_timeout_sec', 10.0)
+        self.declare_parameter('pan_zero', 4021)
+        self.declare_parameter('tilt_zero', 34)
         self.declare_parameter('pan_zero_rad', -0.8727)
-        self.declare_parameter('tilt_zero_rad', -1.5708)
-        self.declare_parameter('pan_min_rad', -0.8727)
-        self.declare_parameter('pan_max_rad', 0.8727)
+        self.declare_parameter('tilt_zero_rad', -1.5010)
+        self.declare_parameter('pan_min_rad', -0.7)
+        self.declare_parameter('pan_max_rad', 0.7)
         self.declare_parameter('tilt_min_rad', -1.57)
-        self.declare_parameter('tilt_max_rad', 1.0)
-        self.declare_parameter('pan_dir', 1)
+        self.declare_parameter('tilt_max_rad', 1.1)
+        self.declare_parameter('pan_dir', -1)
         self.declare_parameter('tilt_dir', 1)
         self.declare_parameter('profile_velocity', 1000)
 
@@ -73,6 +83,8 @@ class HeadServoNode(Node):
         self.pan_id = int(self.get_parameter('pan_id').value)
         self.tilt_id = int(self.get_parameter('tilt_id').value)
         publish_rate = float(self.get_parameter('publish_rate').value)
+        self.normal_current_limit_mA = max(
+            100, int(self.get_parameter('normal_current_limit_mA').value))
         self.auto_calibrate = bool(self.get_parameter('auto_calibrate').value)
         self.calib_velocity = max(10, int(self.get_parameter('calib_velocity').value))
         self.calib_step_pulse = max(1, int(self.get_parameter('calib_step_pulse').value))
@@ -176,7 +188,18 @@ class HeadServoNode(Node):
             f'Dynamixel connected on {self.dx_path} at {self.baudrate} bps')
         return True
 
+    def _recover_hardware_error_if_needed(self, dxl_id: int, label: str) -> None:
+        hw_err = self._check_hardware_error(dxl_id)
+        if hw_err != 0:
+            self.get_logger().warn(
+                f'[{label}] Hardware error status 0x{hw_err:02X} detected on ID={dxl_id}. '
+                'Rebooting motor to clear shutdown state...')
+            self.packet_handler.reboot(self.port_handler, dxl_id)
+            time.sleep(0.5)
+
     def _setup_motor(self, dxl_id: int, label: str) -> bool:
+        self._recover_hardware_error_if_needed(dxl_id, label)
+
         if not self._write1(
             dxl_id,
             ADDR_TORQUE_ENABLE,
@@ -186,12 +209,29 @@ class HeadServoNode(Node):
             return False
         time.sleep(0.02)
 
+        # Operating Mode 5: Current-based Position Control Mode
+        # 位置制御を行いながら RAM の Goal Current (102) でリアルタイムに電流(トルク)上限を制御可能
         if not self._write1(
-            dxl_id, ADDR_OPERATING_MODE, OPERATING_MODE_POSITION,
-            f'{label} position mode'
+            dxl_id, ADDR_OPERATING_MODE, OPERATING_MODE_CURRENT_BASED_POSITION,
+            f'{label} current-based position mode'
         ):
             return False
         time.sleep(0.02)
+
+        # EEPROM のハードウェア電流上限は 1000mA に設定 (以降は TORQUE_OFF 不要で ADDR_GOAL_CURRENT にて制御)
+        if not self._write2(
+            dxl_id, ADDR_CURRENT_LIMIT, 1000,
+            f'{label} max current limit'
+        ):
+            return False
+        time.sleep(0.02)
+
+        if not self._write2(
+            dxl_id, ADDR_GOAL_CURRENT, self.normal_current_limit_mA,
+            f'{label} goal current'
+        ):
+            return False
+        time.sleep(0.01)
 
         if not self._write4(
             dxl_id, ADDR_PROFILE_VELOCITY, self.profile_velocity,
@@ -219,7 +259,7 @@ class HeadServoNode(Node):
             f'{label} torque on',
         ):
             return False
-        time.sleep(0.01)
+        time.sleep(0.02)
         return True
 
     def _write1(
@@ -230,7 +270,7 @@ class HeadServoNode(Node):
         label: str,
     ) -> bool:
         result, error = self.packet_handler.write1ByteTxRx(
-            self.port_handler, dxl_id, address, value)
+            self.port_handler, dxl_id, address, int(value) & 0xFF)
         return self._check_comm(result, error, label)
 
     def _write2(
@@ -241,7 +281,7 @@ class HeadServoNode(Node):
         label: str,
     ) -> bool:
         result, error = self.packet_handler.write2ByteTxRx(
-            self.port_handler, dxl_id, address, int(value))
+            self.port_handler, dxl_id, address, int(value) & 0xFFFF)
         return self._check_comm(result, error, label)
 
     def _write4(
@@ -252,7 +292,7 @@ class HeadServoNode(Node):
         label: str,
     ) -> bool:
         result, error = self.packet_handler.write4ByteTxRx(
-            self.port_handler, dxl_id, address, int(value))
+            self.port_handler, dxl_id, address, int(value) & 0xFFFFFFFF)
         return self._check_comm(result, error, label)
 
     def _read_current(self, dxl_id: int):
@@ -266,6 +306,28 @@ class HeadServoNode(Node):
         value, result, _ = self.packet_handler.read1ByteTxRx(
             self.port_handler, dxl_id, ADDR_HARDWARE_ERROR_STATUS)
         return value if result == COMM_SUCCESS else 0
+
+    def _wait_until_reached(
+        self,
+        dxl_id: int,
+        target_pulse: int,
+        axis_name: str,
+        tolerance_pulse: int = 20,
+        timeout_sec: float = 2.0,
+    ) -> bool:
+        start_time = time.monotonic()
+        # Time-based Profile (Drive Mode=4) の場合も考慮し最低限の整定時間を確保しつつ到達判定
+        while (time.monotonic() - start_time) < timeout_sec:
+            present_pulse = self._read_position_unchecked(dxl_id, axis_name)
+            if present_pulse is not None and abs(present_pulse - target_pulse) <= tolerance_pulse:
+                time.sleep(0.1)
+                return True
+            time.sleep(0.04)
+        present_pulse = self._read_position_unchecked(dxl_id, axis_name)
+        self.get_logger().warn(
+            f'[{axis_name}] Wait for target pulse={target_pulse} timed out '
+            f'(present={present_pulse})')
+        return False
 
     def _find_stopper_zero(
         self,
@@ -289,30 +351,21 @@ class HeadServoNode(Node):
 
         zero_pulse = None
         try:
-            # 1. 探索用電流制限と速度制限を適用
-            self._write1(
-                dxl_id, ADDR_TORQUE_ENABLE, TORQUE_OFF,
-                f'{axis_name} torque off for current limit')
-            time.sleep(0.02)
+            # 1. トルク ON を維持したまま RAM の Goal Current (102) と速度を変更 (脱力・落下防止)
             self._write2(
-                dxl_id, ADDR_CURRENT_LIMIT, cur_limit,
-                f'{axis_name} set calib current limit')
-            time.sleep(0.02)
-            self._write1(
-                dxl_id, ADDR_TORQUE_ENABLE, TORQUE_ON,
-                f'{axis_name} torque on after current limit')
-            time.sleep(0.02)
+                dxl_id, ADDR_GOAL_CURRENT, cur_limit,
+                f'{axis_name} set calib goal current')
             self._write4(
                 dxl_id, ADDR_PROFILE_VELOCITY, self.calib_velocity,
                 f'{axis_name} set calib velocity')
-            time.sleep(0.01)
+            time.sleep(0.02)
 
             start_pulse = self._read_position_unchecked(dxl_id, axis_name)
             if start_pulse is None:
                 self.get_logger().error(f'[{axis_name}] Failed to read start position')
                 return None
 
-            # インクリメンタル駆動 (20ms ごとに step_pulse 前進、デフォルト 8 pulse ≒ 35.2 deg/s)
+            # インクリメンタル駆動 (20ms ごとに step_pulse 前進)
             current_target = start_pulse
             step_pulse = self.calib_step_pulse
             start_time = time.monotonic()
@@ -322,7 +375,7 @@ class HeadServoNode(Node):
             while (time.monotonic() - start_time) < self.calib_timeout_sec:
                 current_target += search_direction * step_pulse
                 current_target = max(
-                    MIN_POSITION_PULSE, min(MAX_POSITION_PULSE, current_target))
+                    MIN_EXTENDED_PULSE, min(MAX_EXTENDED_PULSE, current_target))
                 self._write4(
                     dxl_id, ADDR_GOAL_POSITION, current_target,
                     f'{axis_name} step target')
@@ -332,22 +385,34 @@ class HeadServoNode(Node):
                 current_mA = self._read_current(dxl_id)
                 hw_err = self._check_hardware_error(dxl_id)
 
+                if hw_err != 0:
+                    self.get_logger().warn(
+                        f'[{axis_name}] Hardware error 0x{hw_err:02X} during calibration')
+                    self._setup_motor(dxl_id, axis_name)
+                    if present_pulse is not None:
+                        zero_pulse = present_pulse
+                    break
+
                 if present_pulse is None:
                     continue
 
-                # コリジョン判定: 電流閾値超過 & 位置停止、または過負荷エラー(0x40)
+                # コリジョン判定:
+                # Mode 5 により電流は cur_limit でクランプされるため軸スリップを起こさずに停止する。
+                # 電流が cur_thresh 以上、かつ移動量が微小 (<=3 pulse) または追従遅れ (>=30 pulse) で検知。
+                step_diff = abs(present_pulse - last_pulse)
+                following_err = abs(current_target - present_pulse)
                 is_current_high = (
                     current_mA is not None
                     and abs(current_mA) >= cur_thresh)
-                is_stopped = abs(present_pulse - last_pulse) <= 1
+                is_impeded = (step_diff <= 3) or (following_err >= 30)
 
-                if (is_current_high and is_stopped) or (hw_err & 0x40):
+                if is_current_high and is_impeded:
                     stall_count += 1
                     if stall_count >= self.calib_stall_count_threshold:
                         zero_pulse = present_pulse
                         self.get_logger().info(
                             f'[{axis_name}] Stopper collision detected at pulse={zero_pulse} '
-                            f'(current={current_mA} mA, hw_err=0x{hw_err:02X})')
+                            f'(current={current_mA} mA, ferr={following_err}, hw_err=0x{hw_err:02X})')
                         break
                 else:
                     stall_count = 0
@@ -363,59 +428,63 @@ class HeadServoNode(Node):
             # 2. 安全マージン後退 (ストッパーへの押し付け解除)
             backoff_target = zero_pulse - (search_direction * self.calib_backoff_pulse)
             backoff_target = max(
-                MIN_POSITION_PULSE, min(MAX_POSITION_PULSE, backoff_target))
+                MIN_EXTENDED_PULSE, min(MAX_EXTENDED_PULSE, backoff_target))
             self._write4(
                 dxl_id, ADDR_GOAL_POSITION, backoff_target,
                 f'{axis_name} backoff')
-            time.sleep(0.4)
+            time.sleep(0.15)
 
         finally:
-            # 3. 必ず通常プロファイルへ復帰 (通常電流リミット 1000mA, 通常速度)
-            self._write1(
-                dxl_id, ADDR_TORQUE_ENABLE, TORQUE_OFF,
-                f'{axis_name} torque off to restore limit')
-            time.sleep(0.02)
+            # 3. トルク ON を維持したまま通常電流上限と通常速度プロファイルへ復帰
             self._write2(
-                dxl_id, ADDR_CURRENT_LIMIT, 1000,
-                f'{axis_name} restore current limit')
-            time.sleep(0.02)
-            self._write1(
-                dxl_id, ADDR_TORQUE_ENABLE, TORQUE_ON,
-                f'{axis_name} torque on after restore')
-            time.sleep(0.02)
+                dxl_id, ADDR_GOAL_CURRENT, self.normal_current_limit_mA,
+                f'{axis_name} restore goal current')
             self._write4(
                 dxl_id, ADDR_PROFILE_VELOCITY, self.profile_velocity,
                 f'{axis_name} restore velocity')
-            time.sleep(0.01)
+            time.sleep(0.02)
 
         return zero_pulse
 
     def _run_auto_calibration(self) -> bool:
         self.get_logger().info('=== Starting Head Servo Auto Calibration Sequence ===')
 
-        # 1. PAN 軸探索: 右端ストッパー方向 (search_direction = 1: パルス増加方向 = 右回転)
-        pan_detected = self._find_stopper_zero(
-            self.pan_id, 1, 'PAN',
-            current_limit_mA=150,
-            threshold_mA=90)
-        if pan_detected is not None:
-            self.pan_zero = pan_detected
-            self.get_logger().info(f'PAN zero calibrated to pulse={self.pan_zero}')
-
-        # 2. TILT 軸探索: 上端ストッパー方向 (search_direction = -1: パルス減少方向 = 上回転, 自重考慮 350mA)
+        # 1. TILT 軸探索: 上端ストッパー方向 (search_direction = -1: パルス減少方向 = 上回転)
         tilt_detected = self._find_stopper_zero(
             self.tilt_id, -1, 'TILT',
-            current_limit_mA=350,
-            threshold_mA=180)
+            current_limit_mA=self.calib_current_limit_mA,
+            threshold_mA=self.calib_current_threshold_mA)
         if tilt_detected is not None:
             self.tilt_zero = tilt_detected
             self.get_logger().info(f'TILT zero calibrated to pulse={self.tilt_zero}')
 
-        # 3. 【必須要件】キャリブレーション成功時、必ず 0 度 (0.0 rad / 正面) へ移動
-        self.get_logger().info('Moving head to home position (0.0 rad, 0.0 rad)...')
+        # 2. TILT 軸をセンター (0.0 rad) へ移動し、完了まで待機
+        tilt_home_pulse = self._rad_to_pulse(
+            0.0, self.tilt_zero, self.tilt_zero_rad, self.tilt_dir)
+        self.get_logger().info(
+            f'Moving TILT to home position (0.0 rad, pulse={tilt_home_pulse})...')
+        self._command_tilt(0.0)
+        self._wait_until_reached(self.tilt_id, tilt_home_pulse, 'TILT', timeout_sec=2.0)
+
+        # 3. PAN 軸探索: 右端ストッパー方向 (search_direction = 1: パルス増加方向 = 右回転)
+        pan_detected = self._find_stopper_zero(
+            self.pan_id, 1, 'PAN',
+            current_limit_mA=self.calib_current_limit_mA,
+            threshold_mA=self.calib_current_threshold_mA)
+        if pan_detected is not None:
+            self.pan_zero = pan_detected
+            self.get_logger().info(f'PAN zero calibrated to pulse={self.pan_zero}')
+
+        # 4. 両軸をセンター (0.0 rad, 0.0 rad / 正面水平) へ移動し、完了まで待機
+        pan_home_pulse = self._rad_to_pulse(
+            0.0, self.pan_zero, self.pan_zero_rad, self.pan_dir)
+        self.get_logger().info(
+            f'Moving head to home position (0.0 rad, 0.0 rad -> '
+            f'pan_pulse={pan_home_pulse}, tilt_pulse={tilt_home_pulse})...')
         self._command_pan(0.0)
         self._command_tilt(0.0)
-        time.sleep(1.0)
+        self._wait_until_reached(self.pan_id, pan_home_pulse, 'PAN', timeout_sec=2.0)
+        self._wait_until_reached(self.tilt_id, tilt_home_pulse, 'TILT', timeout_sec=1.0)
         self.get_logger().info('=== Head Servo Auto Calibration Completed Successfully ===')
         return bool(pan_detected is not None and tilt_detected is not None)
 
@@ -453,7 +522,7 @@ class HeadServoNode(Node):
             return False
 
         goal_pulse = max(
-            MIN_POSITION_PULSE, min(MAX_POSITION_PULSE, int(goal_pulse)))
+            MIN_EXTENDED_PULSE, min(MAX_EXTENDED_PULSE, int(goal_pulse)))
         if not self._write4(
             dxl_id, ADDR_GOAL_POSITION, goal_pulse,
             f'write goal position id={dxl_id}'

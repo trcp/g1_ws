@@ -12,17 +12,22 @@ head_servo_node:
     # 通信設定
     publish_rate: 10.0
 
-    # 自動キャリブレーション設定 (コリジョン検知)
-    auto_calibrate: true
-    calib_velocity: 40                # 探索時のプロファイル速度 (2倍速: 約55 deg/s上限)
-    calib_step_pulse: 8               # 20msごとの前進量 (2倍速: 約35.2 deg/s, 5.8 rpm)
-    calib_current_limit_mA: 100       # 探索時の電流リミット (XL330保護用)
-    calib_current_threshold_mA: 80    # 衝突判定電流しきい値
-    calib_stall_count_threshold: 3    # 衝突確定に必要な連続検知回数 (約60ms)
-    calib_backoff_pulse: 30           # 衝突後の安全マージン後退パルス (約2.6度)
-    calib_timeout_sec: 15.0           # 1軸あたりの最大探索タイムアウト [秒]
+    # 通常駆動時の電流上限 [mA] (Operating Mode 5: Current-based Position Control)
+    normal_current_limit_mA: 600
 
-    # キャリブレーション基準角 [rad]
+    # 自動キャリブレーション設定 (Mode 5 電流制限コリジョン検知)
+    auto_calibrate: true
+    calib_velocity: 60                # 探索時のプロファイル設定値
+    calib_step_pulse: 8               # 20msごとの前進量 (約35.2 deg/s)
+    calib_current_limit_mA: 160       # 探索時の Goal Current 上限 [mA] (軸スリップ・過負荷防止)
+    calib_current_threshold_mA: 125   # 衝突判定電流しきい値 [mA] (自重89mA・ケーブル張力105mA超)
+    calib_stall_count_threshold: 3    # 衝突確定に必要な連続検知回数 (約60ms)
+    calib_backoff_pulse: 25           # 衝突後の安全マージン後退パルス (約2.2度)
+    calib_timeout_sec: 10.0           # 1軸あたりの最大探索タイムアウト [秒]
+
+    # キャリブレーション初期値 [pulse] & 基準角 [rad]
+    pan_zero: 4021
+    tilt_zero: 34
     pan_zero_rad: -0.8727
     tilt_zero_rad: -1.5010            # 実機ストッパー角 (-86.0度: 水平0度補正)
 
