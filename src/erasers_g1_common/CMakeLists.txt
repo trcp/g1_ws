@@ -226,7 +226,7 @@ install(TARGETS
   pcd_map_qos_connv
   audio_client
   arm_joint_control
-  arm_endeffector_control
+  #arm_endeffector_control
   emergency_stop
   cartesian_trajectory_planner
   mic_server
