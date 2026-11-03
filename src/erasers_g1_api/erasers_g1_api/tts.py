@@ -65,7 +65,7 @@ class VoicevoxTTS:
     wait=True の成功は、合成成功だけでなく実機の再生完了を表す。
     """
 
-    def __init__(self, node, debug=False, timeout_sec=120.0, speaker_id=26,
+    def __init__(self, node, debug=False, timeout_sec=120.0, speaker_id=24,
                  synthesis_timeout_sec=30.0):
         from voicevox_ros2_msgs.srv import Speaking
 
