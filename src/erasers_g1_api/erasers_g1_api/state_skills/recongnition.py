@@ -1,28 +1,222 @@
 #!/usr/bin/env python3
 
-import os
-import time
-import traceback
-
-from ament_index_python.packages import get_package_share_directory
-from faster_whisper import WhisperModel
-import numpy as np
+# ROS2
 import rclpy
 from rclpy import qos
 from rclpy.node import Node
-from rclpy_util.util import TemporarySubscriber
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy_util.util import TemporarySubscriber, TemporaryApproximateTimeSynchronizer
 import smach
+
+# interfaces
+from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Int16MultiArray
 from std_srvs.srv import SetBool
 
-from erasers_g1_api.tts import TTS
+# Vision
+from cv_bridge import CvBridge
+import cv2
+
+# AI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.tools import tool
+from langchain_core.messages import HumanMessage, ToolMessage
+from google.genai import types
+from google import genai
+
+# API
+from ament_index_python.packages import get_package_share_directory
+from faster_whisper import WhisperModel
+from erasers_g1_api.tts import VoicevoxTTS, VuiTTS
+from erasers_g1_api.robot_control import HeadControl
+
+import os
+import re
+import json
+import time
+import traceback
+import numpy as np
+from typing import Any, List, Optional, Union
+
+
+JA_PATTERN = re.compile(r'[\u3040-\u30ff\u4e00-\u9faf\uff00-\uffef]')
+
+
+class GeminiVLM(smach.State):
+    def __init__(
+        self,
+        node: Node,
+        tts: Union[VoicevoxTTS, VuiTTS],
+        head_control: HeadControl,
+        req_message: str = "画像を確認します．",
+        wait_message: str = "考え中です．しばらくお待ちください．",
+        success_message: str = "完了しました．",
+        failure_message: str = "申し訳ありません．問題が発生しました．",
+        model: str = "gemini-3.8-flash",
+        rgb_image_topic: str = "/head_camera/d455/color/image_raw",
+        rgb_camera_info_topic: str = "/head_camera/d455/color/camera_info",
+        depth_image_topic: str = "/head_camera/d455/aligned_depth_to_color/image_raw",
+        depth_camera_info_topic: str = "/head_camera/d455/aligned_depth_to_color/camera_info",
+        allow_head_control: bool = True,
+    ):
+        """Gemini VLM を用いた画像と言語によるマルチモーダル認識状態。
+
+        Parameters
+        ----------
+        node : Node
+            ログ出力や ROS 2 通信に使用するノードインスタンス。
+        head_control : HeadControl
+            ロボットの頭部制御を行うインスタンス。
+        req_message : str, optional
+            認識処理開始時に発話または通知するメッセージ、デフォルトは '画像を確認します．'。
+        wait_message : str, optional
+            推論待機中に発話または通知するメッセージ、デフォルトは '考え中です．しばらくお待ちください．'。
+        success_message : str, optional
+            認識処理成功時に発話または通知するメッセージ、デフォルトは '完了しました．'。
+        failure_message : str, optional
+            認識処理失敗時に発話または通知するメッセージ、デフォルトは '申し訳ありません．問題が発生しました．'。
+        model : str, optional
+            使用する Gemini のモデル名、デフォルトは 'gemini-2.5-flash'。
+        rgb_image_topic : str, optional
+            RGB 画像を取得するトピック名、デフォルトは '/head_camera/d455/color/image_raw'。
+        rgb_camera_info_topic : str, optional
+            RGB カメラ情報を取得するトピック名、デフォルトは '/head_camera/d455/color/camera_info'。
+        depth_image_topic : str, optional
+            深度画像を取得するトピック名、デフォルトは '/head_camera/d455/aligned_depth_to_color/image_raw'。
+        depth_camera_info_topic : str, optional
+            深度カメラ情報を取得するトピック名、デフォルトは '/head_camera/d455/aligned_depth_to_color/camera_info'。
+        allow_head_control : bool, optional
+            頭部制御を許可するかどうかのフラグ、デフォルトは True。
+
+        Outcomes
+        --------
+        success :
+            Gemini による認識およびレスポンス生成が成功した場合。
+        failure :
+            画像の取得失敗や API 呼び出しエラーなどが発生した場合。
+
+        Userdata
+        --------
+        prompt : str
+            Gemini に送信する指示プロンプト文字列。
+        schema : str
+            レスポンスの構造化スキーマ指定文字列。
+        output : str
+            Gemini からの応答テキストまたは構造化出力結果。
+        """
+        # init smach
+        smach.State.__init__(
+            self,
+            outcomes=["success", "failure"],
+            input_keys=["prompt", "schema"],
+            output_keys=["output"],
+        )
+
+        # init values
+        self.__node: Node = node
+        self.__tts = tts
+        self.__head_control: HeadControl = head_control
+        self.__req_message: str = req_message
+        self.__wait_message: str = wait_message
+        self.__success_message: str = success_message
+        self.__failure_message: str = failure_message
+        self.__model: str = model
+        self.__rgb_image_topic: str = rgb_image_topic
+        self.__rgb_camera_info_topic: str = rgb_camera_info_topic
+        self.__depth_image_topic: str = depth_image_topic
+        self.__depth_camera_info_topic: str = depth_camera_info_topic
+        self.__allow_head_control: bool = allow_head_control
+        self.__bridge = CvBridge()
+        self.__gemini_client = genai.Client(api_key=os.environ.get('GEMINI_API_KEY'))
+        self.__rgb_image = None
+        self.__depth_image = None
+        self.__rgb_camera_info: Optional[CameraInfo] = None
+        self.__depth_camera_info: Optional[CameraInfo] = None
+
+    def __cb_caminfo(self, rgb_info_msg: CameraInfo, depth_info_msg: CameraInfo):
+        self.__rgb_camera_info = rgb_info_msg
+        self.__depth_camera_info = depth_info_msg
+
+    def __cb_image(self, rgb_msg: Image, depth_msg: Image):
+        self.__rgb_image = self.__bridge.imgmsg_to_cv2(rgb_msg, "bgr8")
+        self.__depth_image = self.__bridge.imgmsg_to_cv2(
+            depth_msg, desired_encoding="passthrough"
+        )
+
+    def execute(self, userdata):
+        try:
+            # init values
+            output:str = ""
+            self.__rgb_image = None
+            self.__depth_image = None
+            self.__rgb_camera_info = None
+            self.__depth_camera_info = None
+            
+            # Type Check
+            if not isinstance(userdata.prompt, str) or not userdata.prompt: raise ValueError('userdata prompt type is invalid. not str or empty.')
+            if not isinstance(userdata.schema, str) or not userdata.schema: raise ValueError('userdata schema type is invalid. not str or empty.')
+
+            # get userdata
+            main_prompt:str = userdata.prompt
+            schema:str = userdata.schema
+            schema:str = json.dumps(schema)
+
+            # get image datas
+            with (TemporaryApproximateTimeSynchronizer(self.__node,
+                                                      [(CameraInfo, self.__rgb_camera_info_topic),
+                                                      (CameraInfo, self.__depth_camera_info_topic)],
+                                                      10, 0.1, self.__cb_caminfo,),
+                TemporaryApproximateTimeSynchronizer(self.__node,
+                                                     [(Image, self.__rgb_image_topic),
+                                                     (Image, self.__depth_image_topic)],
+                                                     10, 0.1, self.__cb_image)):
+                it = time.time()
+                while rclpy.ok() and (self.__rgb_image is None or self.__rgb_camera_info is None):
+                    if time.time() - it > 10.0:
+                        raise TimeoutError("Failed to receive camera images and camera info within timeout.")
+                    rclpy.spin_once(self.__node, timeout_sec=0.1)
+
+            s, e = cv2.imencode('.jpg', self.__rgb_image, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            image_content = types.Part.from_bytes(data=e.tobytes(), mime_type='image/jpeg')
+
+            # make prompt
+            self.__tts.say(self.__req_message)
+            prompt = """
+Task instruction: %s
+Output format requirement: Output must be a valid JSON adhering to the specified JSON schema.
+Expected JSON Schema: %s
+            """ % (main_prompt, schema)
+
+            # show description
+            self.__node.get_logger().info("""
+VLM PROMPT
+===================
+PROMPT:\n%s\n
+SCHEMA:\n%s\n
+            """%(main_prompt, json.dumps(schema, indent=2, ensure_ascii=False)))
+
+            # Thinking
+            self.__tts.say(self.__wait_message)
+            response = self.__gemini_client.models.generate_content(
+                model=self.__model,
+                contents=[image_content, prompt],
+                config=types.GenerateContentConfig(response_mime_type='application/json')
+            )
+            print(response)
+
+            userdata.output = output
+            return 'success'
+        except Exception:
+            self.__tts.say(self.__failure_message)
+            self.__node.get_logger().error("Gemini VLM Failure.\n%s"%traceback.format_exc())
+            return 'failure'
 
 
 class SpeechToText(smach.State):
     def __init__(
         self,
         node: Node,
-        tts: TTS,
+        tts: Union[VoicevoxTTS, VuiTTS],
         timeout_sec: float = 10.0,
         start_msg: str = "Please task for me.",
         success_msg: str = "I can hear! Please wait.",
