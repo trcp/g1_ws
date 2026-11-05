@@ -603,11 +603,17 @@ class HeadControl:
             if found_pan or found_tilt:
                 angles = [pan_val, tilt_val]
 
+        joint_state_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+
         with TemporarySubscriber(
             node=self.__node,
             msg=JointState,
             topic="/joint_states",
-            qos_profile=10,
+            qos_profile=joint_state_qos,
             cb=__cb_joint,
         ):
             start_time = time.monotonic()
@@ -1302,7 +1308,7 @@ class ArmControl:
         指定された関節を指定角度へ直接駆動する．
     get_current_joint_pose() -> Dict[str, float]
         現在の全関節名と関節角度の辞書を取得する．
-    arm_action(mode: int) -> bool
+    arm_action(mode: int, wait: bool = True) -> bool
         Unitree プリセット腕動作を実行する．
     upper_body_control(enable: bool) -> bool
         上半身の関節制御権限の有効・無効を切り替える．
@@ -1460,12 +1466,14 @@ class ArmControl:
         return states
 
 
-    def __send_arm_action_req(self, req: ArmAction.Request) -> bool:
-        """ArmAction リクエストを同期送信する内部メソッド．"""
+    def __send_arm_action_req(self, req: ArmAction.Request, wait: bool = True) -> bool:
+        """ArmAction リクエストを送信する内部メソッド．"""
         if not self.__arm_action_cli.service_is_ready():
             self.__logger.error("ArmAction service (/arm_action) is not available.")
             return False
         future = self.__arm_action_cli.call_async(req)
+        if not wait:
+            return True
         rclpy.spin_until_future_complete(self.__node, future, timeout_sec=self.__timeout_sec)
 
         if future.done():
@@ -2176,11 +2184,17 @@ class ArmControl:
             nonlocal latest_joints
             latest_joints = dict(zip(msg.name, msg.position))
 
+        joint_state_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+
         with TemporarySubscriber(
             node=self.__node,
             msg=JointState,
             topic="/joint_states",
-            qos_profile=10,
+            qos_profile=joint_state_qos,
             cb=__cb_joint,
         ):
             start_time = time.monotonic()
@@ -2235,18 +2249,20 @@ class ArmControl:
                 future.cancel()
 
 
-    def arm_action(self, mode: int) -> bool:
+    def arm_action(self, mode: int, wait: bool = True) -> bool:
         """Unitree プリセット腕動作を実行する．
 
         Parameters
         ----------
         mode : int
             動作モード番号（ArmAction.srv 定数）．
+        wait : bool, default True
+            動作完了（サービス応答）を待機するかどうか．
 
         Returns
         -------
         bool
-            動作要求が正常に受理され完了した場合は True，それ以外は False．
+            動作要求が正常に受理され完了（wait=False の場合は送信完了）した場合は True，それ以外は False．
         """
         if self.__use_sim_time and not self.__arm_action_cli.service_is_ready():
             self.__logger.warn(
@@ -2256,7 +2272,7 @@ class ArmControl:
 
         req = ArmAction.Request()
         req.mode = int(mode)
-        return self.__send_arm_action_req(req)
+        return self.__send_arm_action_req(req, wait=wait)
 
 
     def upper_body_control(

@@ -48,11 +48,11 @@ class GeminiVLM(smach.State):
         node: Node,
         tts: Union[VoicevoxTTS, VuiTTS],
         head_control: HeadControl,
-        req_message: str = "画像を確認します．",
-        wait_message: str = "考え中です．しばらくお待ちください．",
-        success_message: str = "完了しました．",
-        failure_message: str = "申し訳ありません．問題が発生しました．",
-        model: str = "gemini-3.8-flash",
+        req_message: str = "I will check it.",
+        wait_message: str = "I am thinking. Please wait",
+        success_message: str = "I found it.",
+        failure_message: str = "Sorry. some error is occured.",
+        model: str = "gemini-3.5-flash-lite",
         rgb_image_topic: str = "/head_camera/d455/color/image_raw",
         rgb_camera_info_topic: str = "/head_camera/d455/color/camera_info",
         depth_image_topic: str = "/head_camera/d455/aligned_depth_to_color/image_raw",
@@ -127,11 +127,86 @@ class GeminiVLM(smach.State):
         self.__depth_camera_info_topic: str = depth_camera_info_topic
         self.__allow_head_control: bool = allow_head_control
         self.__bridge = CvBridge()
+
+        # LLM
         self.__gemini_client = genai.Client(api_key=os.environ.get('GEMINI_API_KEY'))
+        self.__gemini_llm = ChatGoogleGenerativeAI(model=model, google_api_key=os.environ.get('GEMINI_API_KEY'))
+
+        @tool
+        def tool_get_head_pose() -> List[float]:
+            """Get the current head camera servo angles [pan, tilt] in radians.
+
+            Returns
+            -------
+            List[float]
+                Current servo angles [pan, tilt] in radians.
+            """
+            return self.__head_control.get_current_pose()
+
+        @tool
+        def tool_head_control(pan: float, tilt: float) -> bool:
+            """Rotate the robot head camera to the specified pan and tilt angles in radians.
+
+            Parameters
+            ----------
+            pan : float
+                Horizontal pan angle in radians.
+                Positive values turn right, negative values turn left, and 0.0 faces center.
+                Valid range is approximately -1.57 to 1.57.
+            tilt : float
+                Vertical tilt angle in radians.
+                Positive values tilt up, negative values tilt down (e.g., toward tables or floor), and 0.0 is horizontal.
+                Valid range is approximately -1.57 to 1.57.
+
+            Returns
+            -------
+            bool
+                True if the movement request succeeded, False otherwise.
+            """
+            return self.__head_control.move_to_pose(pan=pan, tilt=tilt, wait=True)
+
+        self.__tool_get_head_pose = tool_get_head_pose
+        self.__tool_head_control = tool_head_control
+        self.__llm_tools = self.__gemini_llm.bind_tools([self.__tool_get_head_pose, self.__tool_head_control])
+
+        # images
         self.__rgb_image = None
         self.__depth_image = None
         self.__rgb_camera_info: Optional[CameraInfo] = None
         self.__depth_camera_info: Optional[CameraInfo] = None
+
+    def __execute_langchain_task(self, prompt: str) -> None:
+        """Analyze the user's task instruction via LangChain and adjust the head camera direction.
+
+        Parameters
+        ----------
+        prompt : str
+            The user task instruction.
+        """
+        head_prompt = """
+You are an intelligent assistant controlling the head camera of a humanoid robot.
+Analyze the user's task instruction and decide whether to adjust the head camera direction:
+1. If the instruction specifies a direction, object, or location to look at (e.g., "table", "floor", "left", "right", "up", "down", "look at the person on the left"), call tool_head_control with appropriate pan and tilt angles in radians.
+2. If the instruction explicitly requests to look forward/front/straight (e.g., "look straight", "正面を向いて", "前を見て", "face forward"), call tool_head_control(pan=0.0, tilt=0.0).
+3. If no specific viewing direction or location is requested in the user instruction, do nothing (do not call any tool).
+
+User task instruction: %s
+        """ % prompt
+
+        ai_msg = self.__llm_tools.invoke([HumanMessage(content=head_prompt)])
+        if hasattr(ai_msg, "tool_calls") and ai_msg.tool_calls:
+            for tool_call in ai_msg.tool_calls:
+                name = tool_call.get("name")
+                args = tool_call.get("args", {})
+                self.__node.get_logger().info(
+                    "HeadControl Tool Call: %s with args %s" % (name, args)
+                )
+                if name in ("tool_head_control", "__tool_head_control"):
+                    pan = float(args.get("pan", 0.0))
+                    tilt = float(args.get("tilt", 0.0))
+                    self.__head_control.move_to_pose(pan=pan, tilt=tilt, wait=True)
+                elif name in ("tool_get_head_pose", "__tool_get_head_pose"):
+                    self.__head_control.get_current_pose()
 
     def __cb_caminfo(self, rgb_info_msg: CameraInfo, depth_info_msg: CameraInfo):
         self.__rgb_camera_info = rgb_info_msg
@@ -146,7 +221,6 @@ class GeminiVLM(smach.State):
     def execute(self, userdata):
         try:
             # init values
-            output:str = ""
             self.__rgb_image = None
             self.__depth_image = None
             self.__rgb_camera_info = None
@@ -160,6 +234,11 @@ class GeminiVLM(smach.State):
             main_prompt:str = userdata.prompt
             schema:str = userdata.schema
             schema:str = json.dumps(schema)
+
+            # langchain tasks
+            self.__tts.say(self.__req_message)
+            if self.__allow_head_control:
+                self.__execute_langchain_task(main_prompt)
 
             # get image datas
             with (TemporaryApproximateTimeSynchronizer(self.__node,
@@ -180,7 +259,6 @@ class GeminiVLM(smach.State):
             image_content = types.Part.from_bytes(data=e.tobytes(), mime_type='image/jpeg')
 
             # make prompt
-            self.__tts.say(self.__req_message)
             prompt = """
 Task instruction: %s
 Output format requirement: Output must be a valid JSON adhering to the specified JSON schema.
@@ -202,9 +280,10 @@ SCHEMA:\n%s\n
                 contents=[image_content, prompt],
                 config=types.GenerateContentConfig(response_mime_type='application/json')
             )
-            print(response)
+            self.__node.get_logger().info("RECONG RESULT... \n%s"%response.text)
 
-            userdata.output = output
+            userdata.output = json.loads(response.text)
+            self.__tts.say(self.__success_message)
             return 'success'
         except Exception:
             self.__tts.say(self.__failure_message)
@@ -218,10 +297,10 @@ class SpeechToText(smach.State):
         node: Node,
         tts: Union[VoicevoxTTS, VuiTTS],
         timeout_sec: float = 10.0,
-        start_msg: str = "Please task for me.",
-        success_msg: str = "I can hear! Please wait.",
-        timeout_msg: str = "Sorry. I can not hear.",
-        device: str = "cpu",
+        req_message: str = "Please task for me.",
+        success_message: str = "I can hear! Please wait.",
+        timeout_message: str = "Sorry. I can not hear.",
+        device: str = "cuda",
         model_size: str = os.path.join(
             get_package_share_directory("erasers_g1_api"),
             "config",
@@ -246,11 +325,11 @@ class SpeechToText(smach.State):
             音声応答に使うテキスト読み上げ関数。
         timeout_sec : float, optional
             マイクサービスの待機や状態遷移のタイムアウト時間（秒）、デフォルトは 10.0。
-        start_msg : str, optional
+        req_message : str, optional
             認識開始時に読み上げるメッセージ、デフォルトは 'Please task for me.'。
-        success_msg : str, optional
+        success_message : str, optional
             認識成功時に読み上げるメッセージ、デフォルトは 'I can hear! Please wait.'。
-        timeout_msg : str, optional
+        timeout_message : str, optional
             認識タイムアウト時に読み上げるメッセージ、デフォルトは 'Sorry. I can not hear.'。
         device : str, optional
             Whisper の実行デバイス、デフォルトは 'cpu'。
@@ -300,9 +379,9 @@ class SpeechToText(smach.State):
         self.__tts: TTS = tts
         self.__timeout_sec = timeout_sec
         self.__beep_sound_path = beep_sound_path
-        self.__start_msg = start_msg
-        self.__success_msg = success_msg
-        self.__timeout_msg = timeout_msg
+        self.__req_message = req_message
+        self.__success_message = success_message
+        self.__timeout_message = timeout_message
         self.__lang: str = lang
         self.__whisper_model = WhisperModel(model_size, device=device)  # init whisper
         # VAD parameters
@@ -362,7 +441,7 @@ class SpeechToText(smach.State):
             return "failure"
 
         self.__node.get_logger().warn(message)
-        self.__tts.say(self.__timeout_msg)
+        self.__tts.say(self.__timeout_message)
         return "timeout"
 
     def execute(self, userdata):
@@ -389,7 +468,7 @@ class SpeechToText(smach.State):
                 )
 
             # bringup mic
-            self.__tts.say(text=self.__start_msg)
+            self.__tts.say(text=self.__req_message)
             request = SetBool.Request()
             request.data = True
             if not self.__send_mic_req(request):
@@ -458,7 +537,7 @@ class SpeechToText(smach.State):
 
             userdata.stt_text = text_result
             self.__num_challenge = 0
-            self.__tts.say(self.__success_msg)
+            self.__tts.say(self.__success_message)
             return "success"
 
         except:

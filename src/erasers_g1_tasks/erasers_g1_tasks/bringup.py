@@ -41,14 +41,16 @@ def main():
     # init APIs
     try:
         tts = VoicevoxTTS(node)
-        #tts.audio(os.path.join(get_package_share_directory('erasers_g1_common'), 'audio', 'bringup_sound.wav'), wait=False)
         robot_control = G1Control(node)
         head_control = HeadControl(node)
     except Exception:
         node.get_logger().warn('Failure bringup API...\n%s'%traceback.format_exc())
 
-    # LiDAR 再起動
+    # start illmunation
     led_status_timer = node.create_timer(0.3, led_status_cb)
+    tts.audio(os.path.join(get_package_share_directory('erasers_g1_common'), 'audio', 'bringup_sound.wav'), wait=True)
+
+    # LiDAR 再起動
     node.get_logger().info('Reboot LiDAR sensor ...')
     robot_control.robot_service_interface_setting('lidar_driver', False)
     robot_control.robot_service_interface_setting('lidar_driver', True)

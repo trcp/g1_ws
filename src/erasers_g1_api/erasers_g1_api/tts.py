@@ -34,7 +34,7 @@ class VuiTTS:
         if isinstance(logger, bool):
             wait, logger = logger, "info"
         if not isinstance(text, str) or not text.strip():
-            raise ValueError("読み上げテキストを指定してください")
+            return False
         if logger in ("info", "warn", "error", "debug"):
             getattr(self._node.get_logger(), logger)(text)
         goal = VuiTTSAction.Goal()
@@ -89,7 +89,8 @@ class VoicevoxTTS:
         if isinstance(logger, bool):
             wait, logger = logger, "info"
         if not isinstance(text, str) or not text.strip():
-            raise ValueError("読み上げテキストを指定してください")
+            self._node.get_logger().warn("The text is empty")
+            return False
         if logger in ("info", "warn", "error", "debug"):
             getattr(self._node.get_logger(), logger)(text)
         if not self._synthesis.wait_for_service(timeout_sec=2.0):

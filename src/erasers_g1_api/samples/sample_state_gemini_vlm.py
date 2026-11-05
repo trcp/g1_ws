@@ -4,8 +4,8 @@ import smach
 
 # API
 from erasers_g1_api.robot_control import HeadControl
-from erasers_g1_api.tts import VoicevoxTTS
-from erasers_g1_api.state_skills.recongnition import GeminiVLM
+from erasers_g1_api.tts import VoicevoxTTS, VuiTTS
+from erasers_g1_api.state_skills.recongnition import GeminiVLM, SpeechToText
 
 
 def main():
@@ -15,20 +15,41 @@ def main():
 
     # API 初期化
     head_control = HeadControl(node)
-    tts = VoicevoxTTS(node)
+    head_control.move_to_pose()
+    tts = VoicevoxTTS(node) # 日本語にするにはこれをコメントアウトしてすべての message 引数に日本語を代入すること．
+    #tts = VuiTTS(node)
 
     # SMACH ステートマシンの初期化
     sm = smach.StateMachine(outcomes=["success", "failure"])
 
-    # userdata の設定（prompt と schema は必須）
-    sm.userdata.prompt = "画像に写っている人物の特徴（服装や持っている物）を説明してください。"
-    sm.userdata.schema = "{'description': 'str', 'holding_items': 'list[str]'}"
+    # userdata
+    sm.userdata.prompt = "床にエビフライはいくつありますか？"
+    sm.userdata.success_keywards = []
+    sm.userdata.schema = "{'description': 'str'}"
 
     with sm:
+        # 音声認識
+        '''
+        smach.StateMachine.add('VOICE_RECONG', SpeechToText(node=node,
+                                                            tts=tts,
+                                                            req_message="Please say anything after beep sound.",
+                                                            success_message="",
+                                                            device='cuda',
+                                                            lang='en',
+                                                            silence_duration=5.0),
+                                transitions={'success': 'GEMINI_VLM',
+                                             'timeout': 'VOICE_RECONG',
+                                             'failure':'failure'},
+                                remapping={'stt_text': 'prompt'})
+        '''
         # GeminiVLM ステート
         smach.StateMachine.add("GEMINI_VLM",GeminiVLM(node=node,
                                                       tts=tts,
-                                                      head_control=head_control),
+                                                      head_control=head_control,
+                                                      req_message="わかりました．",
+                                                      wait_message="考え中です．",
+                                                      failure_message="エラー．",
+                                                      success_message=""),
                                 transitions={
                                     "success": "success",
                                     "failure": "failure",
@@ -37,7 +58,7 @@ def main():
 
     # ステートマシンの実行
     outcome = sm.execute()
-    node.get_logger().info(f"Result: {sm.userdata.output}")
+    tts.say(sm.userdata.output['description'])
 
     node.destroy_node()
     rclpy.shutdown()

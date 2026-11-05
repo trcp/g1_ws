@@ -47,6 +47,7 @@ setup(
         'console_scripts': [
             'bringup = erasers_g1_tasks.bringup:main',
             'demo_ceatec = erasers_g1_tasks.demo_ceatec:main',
+            'technofesta_demo = erasers_g1_tasks.technofesta_demo:main',
             'robot_inspection = erasers_g1_tasks.robot_inspection:main',
             'restaurant_task = erasers_g1_tasks.restaurant:main',
             'test = erasers_g1_tasks.test:main'
