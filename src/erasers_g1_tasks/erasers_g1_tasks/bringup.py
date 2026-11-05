@@ -5,6 +5,7 @@ import rclpy
 from erasers_g1_api.robot_control import G1Control, HeadControl
 from erasers_g1_api.tts import VoicevoxTTS
 
+from ament_index_python.packages import get_package_share_directory
 import time
 import traceback
 import os
@@ -36,17 +37,18 @@ def main():
     # init ROS2
     rclpy.init()
     node = Node('system_bringup')
-    led_status_timer = node.create_timer(0.3, led_status_cb)
 
     # init APIs
     try:
         tts = VoicevoxTTS(node)
+        #tts.audio(os.path.join(get_package_share_directory('erasers_g1_common'), 'audio', 'bringup_sound.wav'), wait=False)
         robot_control = G1Control(node)
         head_control = HeadControl(node)
     except Exception:
         node.get_logger().warn('Failure bringup API...\n%s'%traceback.format_exc())
 
     # LiDAR 再起動
+    led_status_timer = node.create_timer(0.3, led_status_cb)
     node.get_logger().info('Reboot LiDAR sensor ...')
     robot_control.robot_service_interface_setting('lidar_driver', False)
     robot_control.robot_service_interface_setting('lidar_driver', True)
